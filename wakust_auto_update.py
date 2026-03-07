@@ -31,8 +31,8 @@ from collections import defaultdict
 # ============================================================
 # ★ 設定（必要に応じて変更してください）
 # ============================================================
-WAKUST_EMAIL    = "jesuisallerajapon@yahoo.co.jp"
-WAKUST_PASSWORD = "motosue4"
+WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
+WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
 
 MAX_REPOST_PER_CATEGORY = 4
 

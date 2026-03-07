@@ -1,0 +1,31 @@
+name: Wakust Auto Update
+
+on:
+  schedule:
+    # 毎日 0:00 JST (= UTC 15:00)
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+    # 手動実行も可能
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run wakust auto update
+        env:
+          WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
+          WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
+        run: python wakust_auto_update.py --once
