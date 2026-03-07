@@ -12,27 +12,61 @@
 6. 当日出勤がある記事はカテゴリーごとに最大4件まで再投稿
 
 使い方:
-  pip install requests beautifulsoup4 schedule
-  python wakust_auto_update.py          # 常駐モード（毎日0:00）
+  pip install requests beautifulsoup4
   python wakust_auto_update.py --once   # 1回だけ実行して終了
 """
 
 import requests
 from bs4 import BeautifulSoup
-import schedule
 import time
 import re
 import json
 import os
 import sys
+import logging
 from datetime import datetime
 from collections import defaultdict
+
+
+# ============================================================
+# ログ設定
+# ============================================================
+def setup_logging():
+    os.makedirs("logs", exist_ok=True)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter("%(message)s")
+
+    # stdout → logs/wakust.log
+    file_handler = logging.FileHandler("logs/wakust.log", encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+
+    # stderr → logs/wakust_error.log
+    error_handler = logging.FileHandler("logs/wakust_error.log", encoding="utf-8")
+    error_handler.setLevel(logging.WARNING)
+    error_handler.setFormatter(formatter)
+
+    # コンソールにも出力
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(error_handler)
+    root_logger.addHandler(console_handler)
+
+
+setup_logging()
+log = logging.getLogger(__name__)
 
 # ============================================================
 # ★ 設定（必要に応じて変更してください）
 # ============================================================
-WAKUST_EMAIL    = "jesuisallerajapon@yahoo.co.jp"
-WAKUST_PASSWORD = "motosue4"
+WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
+WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
 
 MAX_REPOST_PER_CATEGORY = 4
 
@@ -78,10 +112,10 @@ def login_wakust():
     })
 
     if res.status_code == 200 and "loginok" in res.text:
-        print("✅ ログイン成功")
+        log.info("✅ ログイン成功")
         return session
 
-    print(f"❌ ログイン失敗: {res.text[:100]}")
+    log.error(f"❌ ログイン失敗: {res.text[:100]}")
     return None
 
 
@@ -111,7 +145,7 @@ def fetch_post_list(session):
             "category": "未分類",
         })
 
-    print(f"📋 取得記事数: {len(posts)}")
+    log.info(f"📋 取得記事数: {len(posts)}")
     return posts
 
 
@@ -220,7 +254,7 @@ def fetch_next_date_from_schedule(schedule_url):
         res.encoding = res.apparent_encoding
         soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
-        print(f"    ❌ スケジュール取得失敗: {e}")
+        log.error(f"    ❌ スケジュール取得失敗: {e}")
         return None, False
 
     today        = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -484,21 +518,21 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         today_count  = len([p for p in all_others if p["is_today"]])
         future_count = len([p for p in all_others if not p["is_today"]])
         if all_others:
-            print(f"    📎 回遊リスト: 本日{today_count}件 / 明日以降{future_count}件")
+            log.info(f"    📎 回遊リスト: 本日{today_count}件 / 明日以降{future_count}件")
         else:
-            print(f"    📎 回遊リストなし")
+            log.info(f"    📎 回遊リストなし")
 
     if do_repost:
         payload[REPOST_FIELD] = "on"
-        print(f"    🔄 再投稿チェックON")
+        log.info(f"    🔄 再投稿チェックON")
 
     res = session.post(EDIT_FORM_ACTION, data=payload)
     if res.status_code == 200:
         action_str = "再投稿＋タイトル更新" if do_repost else "タイトル更新（編集のみ）"
-        print(f"    ✅ {action_str}: {new_title}")
+        log.info(f"    ✅ {action_str}: {new_title}")
         return True
 
-    print(f"    ❌ 更新失敗 (status: {res.status_code})")
+    log.error(f"    ❌ 更新失敗 (status: {res.status_code})")
     return False
 
 
@@ -506,9 +540,9 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 # メイン処理
 # ============================================================
 def run_update():
-    print(f"\n{'='*55}")
-    print(f"🔍 更新チェック開始 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
-    print(f"{'='*55}")
+    log.info(f"\n{'='*55}")
+    log.info(f"🔍 更新チェック開始 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
 
     session = login_wakust()
     if not session:
@@ -516,7 +550,7 @@ def run_update():
 
     posts = fetch_post_list(session)
     if not posts:
-        print("⚠️  記事が見つかりませんでした")
+        log.warning("⚠️  記事が見つかりませんでした")
         session.close()
         return
 
@@ -525,20 +559,20 @@ def run_update():
     # 各記事の情報を収集
     post_infos = []
     for post in posts:
-        print(f"\n📄 [{post['id']}] {post['title']}")
+        log.info(f"\n📄 [{post['id']}] {post['title']}")
 
         details = fetch_post_details(session, post)
         post["category"] = details["category"]
 
         if not details["schedule_url"]:
-            print(f"    ⚠️  スケジュールURLなし。スキップ")
+            log.warning(f"    ⚠️  スケジュールURLなし。スキップ")
             continue
 
-        print(f"    🔗 {details['schedule_url']}")
+        log.info(f"    🔗 {details['schedule_url']}")
 
         next_date, is_today = fetch_next_date_from_schedule(details["schedule_url"])
         if not next_date:
-            print(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
+            log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
             # 出勤日不明でもタイトル更新・回遊リスト対象として追加
             post_infos.append({
                 "post":      post,
@@ -549,7 +583,7 @@ def run_update():
             })
             continue
 
-        print(f"    📅 直近の出勤日: {next_date} {'【本日出勤！】' if is_today else ''}")
+        log.info(f"    📅 直近の出勤日: {next_date} {'【本日出勤！】' if is_today else ''}")
 
         new_title = build_new_title(post["title"], next_date)
         post_infos.append({
@@ -568,8 +602,8 @@ def run_update():
             today_posts_by_category[info["post"]["category"]].append(info)
 
     repost_ids = set()
-    print(f"\n{'─'*55}")
-    print("📊 再投稿対象の選定")
+    log.info(f"\n{'─'*55}")
+    log.info("📊 再投稿対象の選定")
     for category, infos in today_posts_by_category.items():
         # カテゴリーが上限4/4の記事は再投稿しない
         eligible = [i for i in infos if not i["details"].get("at_limit", False)]
@@ -578,7 +612,7 @@ def run_update():
             repost_ids.add(info["post"]["id"])
         skipped = len(infos) - len(eligible)
         skip_str = f"（上限超え{skipped}件スキップ）" if skipped else ""
-        print(f"  🏷️  カテゴリー「{category}」: 本日出勤{len(infos)}件 → 再投稿{len(selected)}件{skip_str}")
+        log.info(f"  🏷️  カテゴリー「{category}」: 本日出勤{len(infos)}件 → 再投稿{len(selected)}件{skip_str}")
 
     today_post_infos = [i for i in post_infos if i["is_today"]]
 
@@ -591,9 +625,9 @@ def run_update():
             next_date_groups[info["next_date"]].append(info)
 
     # 更新実行
-    print(f"\n{'─'*55}")
-    print("🚀 更新処理開始")
-    print(f"{'─'*55}")
+    log.info(f"\n{'─'*55}")
+    log.info("🚀 更新処理開始")
+    log.info(f"{'─'*55}")
 
     # 本日出勤記事のIDセット（回遊リスト比較用）
     today_ids_str = ",".join(sorted(i["post"]["id"] for i in today_post_infos))
@@ -613,15 +647,15 @@ def run_update():
         if info["next_date"] is None:
             do_repost = False
             if not related_changed:
-                print(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
+                log.info(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
                 continue
 
         if not title_changed and not date_changed and not do_repost and not related_changed:
-            print(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
+            log.info(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
             continue
 
-        print(f"\n📝 [{post_id}] {info['post']['title']}")
-        print(f"    → {new_title}")
+        log.info(f"\n📝 [{post_id}] {info['post']['title']}")
+        log.info(f"    → {new_title}")
 
         if update_post(session, info["post"], info["details"], new_title, do_repost, post_infos):
             state[post_id] = {
@@ -636,23 +670,14 @@ def run_update():
         time.sleep(2)
 
     session.close()
-    print(f"\n✅ 全処理完了 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"\n✅ 全処理完了 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
 
 
 # ============================================================
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
-    once_mode = "--once" in sys.argv
-
-    print("🚀 ワクスト自動更新スクリプト起動")
-    print(f"   モード: {'1回実行して終了' if once_mode else '常駐（毎日 0:00 に実行）'}")
-    print(f"   カテゴリー別再投稿上限: {MAX_REPOST_PER_CATEGORY}件\n")
+    log.info("🚀 ワクスト自動更新スクリプト起動")
+    log.info(f"   カテゴリー別再投稿上限: {MAX_REPOST_PER_CATEGORY}件\n")
 
     run_update()
-
-    if not once_mode:
-        schedule.every().day.at("00:00").do(run_update)
-        while True:
-            schedule.run_pending()
-            time.sleep(30)
