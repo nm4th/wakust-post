@@ -366,11 +366,15 @@ def fetch_post_details(session, post):
         if schedule_url:
             break
 
+    # スケジュールURLが無料部分(edit_text_1)由来かどうか
+    schedule_from_free = (schedule_url is not None and field_name == "edit_text_1")
+
     return {
-        "category":        category,
-        "schedule_url":    schedule_url,
-        "payload":         payload,
-        "at_limit":        category_at_limit,
+        "category":           category,
+        "schedule_url":       schedule_url,
+        "schedule_from_free": schedule_from_free,
+        "payload":            payload,
+        "at_limit":           category_at_limit,
     }
 
 
@@ -772,8 +776,10 @@ def run_update(slot=0):
     log.info(f"\n{'─'*55}")
     log.info(f"📊 再投稿スロット割り当て（現在スロット{slot}: {SLOT_TIMES[slot]}）")
     for category, infos in today_posts_by_category.items():
-        # カテゴリーが上限4/4の記事は再投稿しない
-        eligible = [i for i in infos if not i["details"].get("at_limit", False)]
+        # カテゴリー上限4/4 or 無料部分URLの記事は再投稿しない
+        eligible = [i for i in infos
+                    if not i["details"].get("at_limit", False)
+                    and not i["details"].get("schedule_from_free", False)]
         selected = sorted(eligible, key=lambda x: int(x["post"]["id"]), reverse=True)[:MAX_REPOST_PER_CATEGORY]
         for idx, info in enumerate(selected):
             marker = " ← 今回再投稿" if idx == slot else ""
