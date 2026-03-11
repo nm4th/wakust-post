@@ -2,10 +2,16 @@ name: Wakust Auto Update
 
 on:
   schedule:
-    # 毎日 0:00 JST (= UTC 15:00)
-    - cron: '0 15 * * *'
+    # 毎日4回実行（JST = UTC+9）
+    - cron: '0 15 * * *'   # 0:00 JST → スロット0（全記事更新＋再投稿）
+    - cron: '0 11 * * *'   # 20:00 JST → スロット1（再投稿のみ）
+    - cron: '0 3 * * *'    # 12:00 JST → スロット2（再投稿のみ）
+    - cron: '0 23 * * *'   # 8:00 JST → スロット3（再投稿のみ）
   workflow_dispatch:
-    # 手動実行も可能
+    inputs:
+      slot:
+        description: 'スロット番号 (0=0:00, 1=20:00, 2=12:00, 3=8:00, auto=自動判定)'
+        default: 'auto'
 
 jobs:
   update:
@@ -28,7 +34,7 @@ jobs:
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
-        run: python wakust_auto_update.py --once
+        run: python wakust_auto_update.py --slot ${{ github.event.inputs.slot || 'auto' }}
 
       - name: Upload logs
         if: always()

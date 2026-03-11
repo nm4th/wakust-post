@@ -1,19 +1,31 @@
 """
-ワクスト 記事タイトル自動更新 ＋ カテゴリー別再投稿スクリプト
-================================================================
-毎日 0:00 に以下を実行します:
+ワクスト 記事タイトル自動更新 ＋ カテゴリー別時間分散再投稿スクリプト
+====================================================================
+1日4回（0:00 / 8:00 / 12:00 / 20:00 JST）に実行し、
+カテゴリーごとに最大4件の再投稿を時間帯ごとに1件ずつ分散します。
 
-1. 記事一覧から全記事のURLとタイトルを取得
-2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
-3. スケジュールページから当日以降で最も近い出勤日を取得
-4. タイトルの【日付出勤】部分を更新
-5. 無料部分(edit_text_1)の末尾に本日出勤中の他記事リンクを追記
-   ※ 元の本文は絶対に変更しない
-6. 当日出勤がある記事はカテゴリーごとに最大4件まで再投稿
+スロット割り当て（優先順位）:
+  スロット0 = 0:00 JST  → 最優先（全記事更新＋再投稿）
+  スロット1 = 20:00 JST → 2番目（再投稿のみ）
+  スロット2 = 12:00 JST → 3番目（再投稿のみ）
+  スロット3 = 8:00 JST  → 4番目（再投稿のみ）
+
+0:00 の処理:
+  1. 記事一覧から全記事のURLとタイトルを取得
+  2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
+  3. スケジュールページから当日以降で最も近い出勤日を取得
+  4. タイトルの【日付出勤】部分を更新
+  5. 無料部分(edit_text_1)の末尾に本日出勤中の他記事リンクを追記
+  6. スロット0に割り当てられた記事を再投稿
+
+8:00 / 12:00 / 20:00 の処理:
+  該当スロットに割り当てられた記事のみ再投稿（内容は変更しない）
 
 使い方:
   pip install requests beautifulsoup4
-  python wakust_auto_update.py --once   # 1回だけ実行して終了
+  python wakust_auto_update.py --slot auto   # JST時刻から自動判定
+  python wakust_auto_update.py --slot 0      # スロット0を明示指定
+  python wakust_auto_update.py --once        # スロット0（後方互換）
 """
 
 import requests
@@ -83,6 +95,14 @@ RELATED_BLOCK_START       = "<!-- related_posts_start -->"
 RELATED_BLOCK_END         = "<!-- related_posts_end -->"
 RELATED_NEXT_BLOCK_START  = "<!-- related_next_posts_start -->"
 RELATED_NEXT_BLOCK_END    = "<!-- related_next_posts_end -->"
+
+# スロット定義: 優先順位順（0:00 → 20:00 → 12:00 → 8:00）
+SLOT_TIMES = {
+    0: "0:00",
+    1: "20:00",
+    2: "12:00",
+    3: "8:00",
+}
 
 
 # ============================================================
@@ -539,9 +559,9 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 # ============================================================
 # メイン処理
 # ============================================================
-def run_update():
+def run_update(slot=0):
     log.info(f"\n{'='*55}")
-    log.info(f"🔍 更新チェック開始 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"🔍 更新チェック開始 スロット{slot}({SLOT_TIMES[slot]} JST) ({time.strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
 
     session = login_wakust()
@@ -603,18 +623,47 @@ def run_update():
 
     repost_ids = set()
     log.info(f"\n{'─'*55}")
-    log.info("📊 再投稿対象の選定")
+    log.info(f"📊 再投稿スロット割り当て（現在スロット{slot}: {SLOT_TIMES[slot]}）")
     for category, infos in today_posts_by_category.items():
         # カテゴリーが上限4/4の記事は再投稿しない
         eligible = [i for i in infos if not i["details"].get("at_limit", False)]
         selected = sorted(eligible, key=lambda x: int(x["post"]["id"]), reverse=True)[:MAX_REPOST_PER_CATEGORY]
-        for info in selected:
-            repost_ids.add(info["post"]["id"])
+        for idx, info in enumerate(selected):
+            marker = " ← 今回再投稿" if idx == slot else ""
+            log.info(f"    [{info['post']['id']}] → スロット{idx} ({SLOT_TIMES[idx]}){marker}")
+            if idx == slot:
+                repost_ids.add(info["post"]["id"])
         skipped = len(infos) - len(eligible)
         skip_str = f"（上限超え{skipped}件スキップ）" if skipped else ""
-        log.info(f"  🏷️  カテゴリー「{category}」: 本日出勤{len(infos)}件 → 再投稿{len(selected)}件{skip_str}")
+        log.info(f"  🏷️  カテゴリー「{category}」: 本日出勤{len(infos)}件 → 対象{len(selected)}件{skip_str}")
 
     today_post_infos = [i for i in post_infos if i["is_today"]]
+
+    # スロット1-3: 再投稿のみ実行して終了
+    if slot > 0:
+        log.info(f"\n{'─'*55}")
+        log.info(f"🔄 スロット{slot}（{SLOT_TIMES[slot]}）: 再投稿処理")
+        log.info(f"{'─'*55}")
+        if not repost_ids:
+            log.info("ℹ️  このスロットに再投稿対象なし")
+        else:
+            for info in post_infos:
+                if info["post"]["id"] not in repost_ids:
+                    continue
+                post = info["post"]
+                details = info["details"]
+                payload = dict(details["payload"])
+                payload[REPOST_FIELD] = "on"
+                log.info(f"\n📝 [{post['id']}] {info['new_title']}")
+                res = session.post(EDIT_FORM_ACTION, data=payload)
+                if res.status_code == 200:
+                    log.info(f"    ✅ 再投稿完了")
+                else:
+                    log.error(f"    ❌ 再投稿失敗 (status: {res.status_code})")
+                time.sleep(2)
+        session.close()
+        log.info(f"\n✅ スロット{slot}の処理完了 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
+        return
 
     # 直近出勤グループ: 本日以外で直近出勤日ごとにグルーピング
     # 各記事の「直近出勤日」が同じ記事をまとめる（本日出勤は除く）
@@ -624,9 +673,9 @@ def run_update():
         if not info["is_today"]:
             next_date_groups[info["next_date"]].append(info)
 
-    # 更新実行
+    # スロット0: 全記事更新＋再投稿
     log.info(f"\n{'─'*55}")
-    log.info("🚀 更新処理開始")
+    log.info("🚀 更新処理開始（スロット0: 全記事更新＋再投稿）")
     log.info(f"{'─'*55}")
 
     # 本日出勤記事のIDセット（回遊リスト比較用）
@@ -674,10 +723,45 @@ def run_update():
 
 
 # ============================================================
+# スロット自動判定
+# ============================================================
+def detect_slot():
+    """現在のJST時刻からスロット番号を自動判定"""
+    from datetime import timezone, timedelta
+    jst = timezone(timedelta(hours=9))
+    hour = datetime.now(jst).hour
+    if 23 <= hour or hour < 2:
+        return 0  # 0:00 JST
+    elif 19 <= hour < 22:
+        return 1  # 20:00 JST
+    elif 11 <= hour < 14:
+        return 2  # 12:00 JST
+    elif 7 <= hour < 10:
+        return 3  # 8:00 JST
+    else:
+        log.warning(f"⚠️  想定外の時刻(JST {hour}時)。スロット0として実行")
+        return 0
+
+
+# ============================================================
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
     log.info("🚀 ワクスト自動更新スクリプト起動")
+
+    # 引数解析
+    slot = 0
+    if "--slot" in sys.argv:
+        idx = sys.argv.index("--slot")
+        if idx + 1 < len(sys.argv):
+            slot_arg = sys.argv[idx + 1]
+            if slot_arg == "auto":
+                slot = detect_slot()
+            else:
+                slot = int(slot_arg)
+    # --once は後方互換: スロット0として実行
+
+    log.info(f"   スロット: {slot} ({SLOT_TIMES[slot]} JST)")
     log.info(f"   カテゴリー別再投稿上限: {MAX_REPOST_PER_CATEGORY}件\n")
 
-    run_update()
+    run_update(slot)
