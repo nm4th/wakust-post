@@ -35,6 +35,7 @@ import re
 import json
 import os
 import sys
+import csv
 import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -86,7 +87,9 @@ MAX_REPOST_PER_CATEGORY = 4
 # 定数
 # ============================================================
 STATE_FILE          = "wakust_state.json"
-PV_LOG_FILE         = "logs/pv_log.csv"
+PV_LOG_DIR          = "logs"
+PV_DAILY_FILE       = "logs/pv_daily.csv"
+POSTS_MASTER_FILE   = "logs/posts_master.csv"
 BASE_URL            = "https://wakust.com"
 LOGIN_AJAX_URL      = "https://wakust.com/wp-content/themes/wakust/user_edit/login_mypage.php"
 POST_LIST_URL       = f"{BASE_URL}/mypage/?post_list"
@@ -113,26 +116,63 @@ SLOT_TIMES = {
 # ============================================================
 def log_pv(posts):
     """記事ごとのPV数をCSVに記録（スロット0実行時に1日1回）
-    「前日」PVなので、記録日付は前日の日付を使用する"""
-    os.makedirs("logs", exist_ok=True)
-    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    write_header = not os.path.exists(PV_LOG_FILE)
 
-    with open(PV_LOG_FILE, "a", encoding="utf-8") as f:
+    2つのファイルを管理:
+      - pv_daily.csv   : 日付×記事のPV数（分析用、1行=1記事1日）
+      - posts_master.csv: 記事マスタ（ID・タイトル・URL、毎回最新に更新）
+    """
+    os.makedirs(PV_LOG_DIR, exist_ok=True)
+    yesterday = datetime.now() - timedelta(days=1)
+    yesterday_str = yesterday.strftime("%Y-%m-%d")
+
+    # --- 記事マスタ更新 ---
+    # 既存マスタを読み込み
+    master = {}
+    if os.path.exists(POSTS_MASTER_FILE):
+        with open(POSTS_MASTER_FILE, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                master[row["post_id"]] = row
+
+    # 最新情報でマスタを更新
+    for post in posts:
+        pid = post["id"]
+        title = post["title"]
+        url = post["url"]
+        if pid in master:
+            master[pid]["title"] = title
+            master[pid]["url"] = url
+        else:
+            master[pid] = {
+                "post_id": pid,
+                "title": title,
+                "url": url,
+                "first_seen": yesterday_str,
+            }
+
+    # マスタ書き出し
+    with open(POSTS_MASTER_FILE, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["post_id", "title", "url", "first_seen"])
+        writer.writeheader()
+        for row in sorted(master.values(), key=lambda r: r["post_id"]):
+            writer.writerow(row)
+
+    # --- PVデイリーログ追記 ---
+    write_header = not os.path.exists(PV_DAILY_FILE)
+    with open(PV_DAILY_FILE, "a", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
         if write_header:
-            f.write("date,post_id,title,pv_daily,pv_weekly,pv_monthly,pv_total\n")
+            writer.writerow(["date", "post_id", "pv"])
         for post in posts:
-            title = post["title"].replace('"', '""')
-            d = post.get("pv_daily", "")
-            w = post.get("pv_weekly", "")
-            m = post.get("pv_monthly", "")
-            t = post.get("pv_total", "")
-            f.write(f'{yesterday_str},{post["id"]},"{title}",{d},{w},{m},{t}\n')
+            pv = post.get("pv_daily")
+            if pv is not None:
+                writer.writerow([yesterday_str, post["id"], pv])
 
     pv_posts = [p for p in posts if p.get("pv_daily") is not None]
-    log.info(f"📊 PVログ記録: {len(pv_posts)}件 → {PV_LOG_FILE}")
-    for p in pv_posts:
-        log.info(f"    [{p['id']}] 前日:{p['pv_daily']} 前週:{p['pv_weekly']} 前月:{p['pv_monthly']} 全期間:{p['pv_total']}  {p['title']}")
+    total_pv = sum(p["pv_daily"] for p in pv_posts)
+    log.info(f"📊 PVログ記録({yesterday_str}): {len(pv_posts)}件 合計{total_pv}PV → {PV_DAILY_FILE}")
+    for p in sorted(pv_posts, key=lambda x: x["pv_daily"], reverse=True)[:10]:
+        log.info(f"    [{p['id']}] {p['pv_daily']:>4}PV  {p['title']}")
 
 
 # ============================================================
