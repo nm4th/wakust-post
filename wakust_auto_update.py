@@ -95,6 +95,8 @@ RELATED_BLOCK_START       = "<!-- related_posts_start -->"
 RELATED_BLOCK_END         = "<!-- related_posts_end -->"
 RELATED_NEXT_BLOCK_START  = "<!-- related_next_posts_start -->"
 RELATED_NEXT_BLOCK_END    = "<!-- related_next_posts_end -->"
+UPDATED_DATE_START        = "<!-- updated_date_start -->"
+UPDATED_DATE_END          = "<!-- updated_date_end -->"
 
 # スロット定義: 優先順位順（0:00 → 20:00 → 12:00 → 8:00）
 SLOT_TIMES = {
@@ -538,6 +540,24 @@ def inject_related_html(original_html, related_html):
 
 
 # ============================================================
+# 更新日の注入
+# ============================================================
+def inject_updated_date(html):
+    """edit_text_1の冒頭に「〇月〇日更新」を注入（既存があれば置換）"""
+    now = datetime.now()
+    date_html = f'{UPDATED_DATE_START}<p><strong>{now.month}月{now.day}日更新</strong></p><br/>{UPDATED_DATE_END}'
+
+    if UPDATED_DATE_START in html:
+        return re.sub(
+            rf"{re.escape(UPDATED_DATE_START)}.*?{re.escape(UPDATED_DATE_END)}",
+            date_html,
+            html,
+            flags=re.DOTALL,
+        )
+    return date_html + "\n" + html
+
+
+# ============================================================
 # 記事の更新
 # ============================================================
 def update_post(session, post, details, new_title, do_repost=False, all_post_infos=None):
@@ -546,6 +566,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     if "edit_text_1" in payload:
+        payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         related_html = build_related_html(all_post_infos or [], post["id"])
         payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
         all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
