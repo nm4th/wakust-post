@@ -340,24 +340,31 @@ def fetch_post_details(session, post):
 
     # post_stはHTMLのselected属性から取得済み（上記selectループで処理）
 
-    # edit_text_2（有料部分）からスケジュールURLを抽出
+    # スケジュールURLを抽出
+    # edit_text_2（有料部分）を優先し、なければ edit_text_1（無料部分）からも探す
     # URLは <a href="..."> タグ内またはプレーンテキストで記載されている
     schedule_url = None
-    edit_text_2  = payload.get("edit_text_2", "")
+    for field_name in ("edit_text_2", "edit_text_1"):
+        text = payload.get(field_name, "")
+        if not text:
+            continue
 
-    soup_t2 = BeautifulSoup(edit_text_2, "html.parser")
-    for a in reversed(soup_t2.find_all("a", href=True)):
-        href = a["href"].strip()
-        if re.match(r"https?://", href) and "wakust.com" not in href:
-            schedule_url = href
-            break
-
-    if not schedule_url:
-        for line in reversed(edit_text_2.splitlines()):
-            clean = re.sub(r"<[^>]+>", "", line).strip()
-            if re.match(r"https?://", clean) and "wakust.com" not in clean:
-                schedule_url = clean
+        soup_field = BeautifulSoup(text, "html.parser")
+        for a in reversed(soup_field.find_all("a", href=True)):
+            href = a["href"].strip()
+            if re.match(r"https?://", href) and "wakust.com" not in href:
+                schedule_url = href
                 break
+
+        if not schedule_url:
+            for line in reversed(text.splitlines()):
+                clean = re.sub(r"<[^>]+>", "", line).strip()
+                if re.match(r"https?://", clean) and "wakust.com" not in clean:
+                    schedule_url = clean
+                    break
+
+        if schedule_url:
+            break
 
     return {
         "category":        category,
