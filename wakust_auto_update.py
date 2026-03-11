@@ -410,21 +410,33 @@ def fetch_next_date_from_schedule(schedule_url):
                 candidates.append((d, f"{month}/{day}"))
 
     if not candidates:
-        return None, False
+        return [], False
 
     candidates.sort(key=lambda x: x[0])
-    nearest_date, nearest_str = candidates[0]
-    is_today = (nearest_date.date() == today.date())
-    return nearest_str, is_today
+    # 重複除去しつつ直近2件まで取得
+    seen = set()
+    unique = []
+    for dt, s in candidates:
+        if s not in seen:
+            seen.add(s)
+            unique.append((dt, s))
+        if len(unique) >= 2:
+            break
+
+    dates = [s for _, s in unique]
+    is_today = (unique[0][0].date() == today.date())
+    return dates, is_today
 
 
 # ============================================================
 # タイトルの【日付出勤】部分を置換
 # ============================================================
-def build_new_title(current_title, new_date):
+def build_new_title(current_title, dates):
+    # dates: リスト（例: ["3/5", "3/7"]）
     # 【】内に日付+出勤パターンがあれば置換（カップ数等は保持）
     # 重複（【3/5出勤3/5出勤Iカップ】等）も同時に修正する
     # replacedフラグで「置換が実際に起きたか」を管理し、二重追加を防ぐ
+    date_str = ",".join(dates)
     replaced = [False]
 
     def replace_bracket(m):
@@ -433,12 +445,12 @@ def build_new_title(current_title, new_date):
             return m.group(0)  # 日付+出勤がなければそのまま
         inner_clean = re.sub(r"[\d/,\s]+出勤", "", inner)
         replaced[0] = True
-        return f"【{new_date}出勤{inner_clean}】"
+        return f"【{date_str}出勤{inner_clean}】"
 
     new_title = re.sub(r"【([^】]*)】", replace_bracket, current_title, count=1)
 
     if not replaced[0]:
-        new_title = f"【{new_date}出勤】" + current_title
+        new_title = f"【{date_str}出勤】" + current_title
     return new_title
 
 
@@ -457,7 +469,9 @@ def build_related_html(all_post_infos, current_post_id):
         if info["is_today"] or info["next_date"] is None:
             return False
         try:
-            m, d = info["next_date"].split("/")
+            # next_date は "3/5" or "3/5,3/7" 形式。先頭の日付で判定
+            first_date = info["next_date"].split(",")[0]
+            m, d = first_date.split("/")
             dt = datetime(today_dt.year, int(m), int(d))
             return dt > today_dt
         except Exception:
@@ -485,8 +499,8 @@ def build_related_html(all_post_infos, current_post_id):
     # 明日以降出勤セクション（日付昇順）
     if future_others:
         future_others = sorted(future_others, key=lambda p: (
-            int(p["next_date"].split("/")[0]),
-            int(p["next_date"].split("/")[1])
+            int(p["next_date"].split(",")[0].split("/")[0]),
+            int(p["next_date"].split(",")[0].split("/")[1])
         ))
         items_html = ""
         for info in future_others:
@@ -590,8 +604,8 @@ def run_update(slot=0):
 
         log.info(f"    🔗 {details['schedule_url']}")
 
-        next_date, is_today = fetch_next_date_from_schedule(details["schedule_url"])
-        if not next_date:
+        dates, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+        if not dates:
             log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
             # 出勤日不明でもタイトル更新・回遊リスト対象として追加
             post_infos.append({
@@ -603,13 +617,14 @@ def run_update(slot=0):
             })
             continue
 
-        log.info(f"    📅 直近の出勤日: {next_date} {'【本日出勤！】' if is_today else ''}")
+        dates_str = ",".join(dates)
+        log.info(f"    📅 直近の出勤日: {dates_str} {'【本日出勤！】' if is_today else ''}")
 
-        new_title = build_new_title(post["title"], next_date)
+        new_title = build_new_title(post["title"], dates)
         post_infos.append({
             "post":      post,
             "details":   details,
-            "next_date": next_date,
+            "next_date": dates_str,
             "is_today":  is_today,
             "new_title": new_title,
         })
