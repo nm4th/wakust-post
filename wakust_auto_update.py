@@ -36,7 +36,7 @@ import json
 import os
 import sys
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 
@@ -112,9 +112,10 @@ SLOT_TIMES = {
 # PVログ記録
 # ============================================================
 def log_pv(posts):
-    """記事ごとのPV数をCSVに記録（スロット0実行時に1日1回）"""
+    """記事ごとのPV数をCSVに記録（スロット0実行時に1日1回）
+    「前日」PVなので、記録日付は前日の日付を使用する"""
     os.makedirs("logs", exist_ok=True)
-    today_str = time.strftime("%Y-%m-%d")
+    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     write_header = not os.path.exists(PV_LOG_FILE)
 
     with open(PV_LOG_FILE, "a", encoding="utf-8") as f:
@@ -126,7 +127,7 @@ def log_pv(posts):
             w = post.get("pv_weekly", "")
             m = post.get("pv_monthly", "")
             t = post.get("pv_total", "")
-            f.write(f'{today_str},{post["id"]},"{title}",{d},{w},{m},{t}\n')
+            f.write(f'{yesterday_str},{post["id"]},"{title}",{d},{w},{m},{t}\n')
 
     pv_posts = [p for p in posts if p.get("pv_daily") is not None]
     log.info(f"📊 PVログ記録: {len(pv_posts)}件 → {PV_LOG_FILE}")
