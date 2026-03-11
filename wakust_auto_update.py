@@ -86,6 +86,7 @@ MAX_REPOST_PER_CATEGORY = 4
 # 定数
 # ============================================================
 STATE_FILE          = "wakust_state.json"
+PV_LOG_FILE         = "logs/pv_log.csv"
 BASE_URL            = "https://wakust.com"
 LOGIN_AJAX_URL      = "https://wakust.com/wp-content/themes/wakust/user_edit/login_mypage.php"
 POST_LIST_URL       = f"{BASE_URL}/mypage/?post_list"
@@ -105,6 +106,32 @@ SLOT_TIMES = {
     2: "12:00",
     3: "8:00",
 }
+
+
+# ============================================================
+# PVログ記録
+# ============================================================
+def log_pv(posts):
+    """記事ごとのPV数をCSVに記録（スロット0実行時に1日1回）"""
+    os.makedirs("logs", exist_ok=True)
+    today_str = time.strftime("%Y-%m-%d")
+    write_header = not os.path.exists(PV_LOG_FILE)
+
+    with open(PV_LOG_FILE, "a", encoding="utf-8") as f:
+        if write_header:
+            f.write("date,post_id,title,pv_daily,pv_weekly,pv_monthly,pv_total\n")
+        for post in posts:
+            title = post["title"].replace('"', '""')
+            d = post.get("pv_daily", "")
+            w = post.get("pv_weekly", "")
+            m = post.get("pv_monthly", "")
+            t = post.get("pv_total", "")
+            f.write(f'{today_str},{post["id"]},"{title}",{d},{w},{m},{t}\n')
+
+    pv_posts = [p for p in posts if p.get("pv_daily") is not None]
+    log.info(f"📊 PVログ記録: {len(pv_posts)}件 → {PV_LOG_FILE}")
+    for p in pv_posts:
+        log.info(f"    [{p['id']}] 前日:{p['pv_daily']} 前週:{p['pv_weekly']} 前月:{p['pv_monthly']} 全期間:{p['pv_total']}  {p['title']}")
 
 
 # ============================================================
@@ -159,12 +186,44 @@ def fetch_post_list(session):
         if not m:
             continue
         post_id = m.group(1)
+
+        # PV数を同じ行(tr)から取得
+        # 形式: 「前 日：0  前 週：0  前 月：0  全期間：1」
+        pv_daily = None
+        pv_weekly = None
+        pv_monthly = None
+        pv_total = None
+        tr = td.find_parent("tr")
+        if tr:
+            for sib_td in tr.find_all("td"):
+                if sib_td == td:
+                    continue
+                text = sib_td.get_text(" ", strip=True)
+                if "前" in text and "日" in text:
+                    m_d = re.search(r"前\s*日\s*[：:]\s*(\d+)", text)
+                    m_w = re.search(r"前\s*週\s*[：:]\s*(\d+)", text)
+                    m_m = re.search(r"前\s*月\s*[：:]\s*(\d+)", text)
+                    m_t = re.search(r"全\s*期\s*間\s*[：:]\s*(\d+)", text)
+                    if m_d:
+                        pv_daily = int(m_d.group(1))
+                    if m_w:
+                        pv_weekly = int(m_w.group(1))
+                    if m_m:
+                        pv_monthly = int(m_m.group(1))
+                    if m_t:
+                        pv_total = int(m_t.group(1))
+                    break
+
         posts.append({
             "id":       post_id,
             "title":    title,
             "url":      url,
             "edit_url": f"{BASE_URL}/mypage/?post_edit={post_id}",
             "category": "未分類",
+            "pv_daily":   pv_daily,
+            "pv_weekly":  pv_weekly,
+            "pv_monthly": pv_monthly,
+            "pv_total":   pv_total,
         })
 
     log.info(f"📋 取得記事数: {len(posts)}")
@@ -608,6 +667,10 @@ def run_update(slot=0):
         log.warning("⚠️  記事が見つかりませんでした")
         session.close()
         return
+
+    # スロット0（0:00）: 前日のPVを記録
+    if slot == 0:
+        log_pv(posts)
 
     state = load_state()
 
