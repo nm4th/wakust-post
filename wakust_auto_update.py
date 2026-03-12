@@ -511,14 +511,14 @@ def fetch_next_date_from_schedule(schedule_url):
         return [], False
 
     candidates.sort(key=lambda x: x[0])
-    # 重複除去しつつ直近2件まで取得
+    # 重複除去しつつ直近3件まで取得
     seen = set()
     unique = []
     for dt, s in candidates:
         if s not in seen:
             seen.add(s)
             unique.append((dt, s))
-        if len(unique) >= 2:
+        if len(unique) >= 3:
             break
 
     dates = [s for _, s in unique]
