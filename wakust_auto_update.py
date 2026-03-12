@@ -530,19 +530,39 @@ def fetch_next_date_from_schedule(schedule_url):
 # ============================================================
 # タイトルの【日付出勤】部分を置換
 # ============================================================
+def format_dates(dates):
+    """日付リストを短縮表記にフォーマット
+    同月: "3/13,14,15"  月またぎ: "3/13,14｜4/4"
+    """
+    if not dates:
+        return ""
+    # dates: ["3/13", "3/14", "4/4"] 形式
+    groups = []  # [(month, [day, day, ...]), ...]
+    for d in dates:
+        m, day = d.split("/")
+        if groups and groups[-1][0] == m:
+            groups[-1][1].append(day)
+        else:
+            groups.append((m, [day]))
+    parts = []
+    for m, days in groups:
+        parts.append(f"{m}/{','.join(days)}")
+    return "｜".join(parts)
+
+
 def build_new_title(current_title, dates):
-    # dates: リスト（例: ["3/5", "3/7"]）
+    # dates: リスト（例: ["3/13", "3/14", "3/15"]）
     # 【】内に日付+出勤パターンがあれば置換（カップ数等は保持）
     # 重複（【3/5出勤3/5出勤Iカップ】等）も同時に修正する
     # replacedフラグで「置換が実際に起きたか」を管理し、二重追加を防ぐ
-    date_str = ",".join(dates)
+    date_str = format_dates(dates)
     replaced = [False]
 
     def replace_bracket(m):
         inner = m.group(1)
-        if not re.search(r"[\d/,]+出勤", inner):
+        if not re.search(r"[\d/,｜]+出勤", inner):
             return m.group(0)  # 日付+出勤がなければそのまま
-        inner_clean = re.sub(r"[\d/,\s]+出勤", "", inner)
+        inner_clean = re.sub(r"[\d/,｜\s]+出勤", "", inner)
         replaced[0] = True
         return f"【{date_str}出勤{inner_clean}】"
 
