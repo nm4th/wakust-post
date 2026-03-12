@@ -363,12 +363,17 @@ def fetch_post_details(session, post):
 # ============================================================
 def fetch_next_date_from_schedule(schedule_url):
     try:
-        res = requests.get(schedule_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        res = requests.get(schedule_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        }, timeout=10)
+        if res.status_code != 200:
+            log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
+            return [], False
         res.encoding = res.apparent_encoding
         soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
         log.error(f"    ❌ スケジュール取得失敗: {e}")
-        return None, False
+        return [], False
 
     today        = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     current_year = today.year
