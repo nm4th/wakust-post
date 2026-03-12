@@ -1,31 +1,19 @@
 """
-ワクスト 記事タイトル自動更新 ＋ カテゴリー別時間分散再投稿スクリプト
+ワクスト 記事タイトル自動更新 ＋ 翌日出勤記事再投稿スクリプト
 ====================================================================
-1日4回（0:00 / 8:00 / 12:00 / 20:00 JST）に実行し、
-カテゴリーごとに最大4件の再投稿を時間帯ごとに1件ずつ分散します。
+毎日16:00 JSTに1回実行し、以下を行います。
 
-スロット割り当て（優先順位）:
-  スロット0 = 0:00 JST  → 最優先（全記事更新＋再投稿）
-  スロット1 = 20:00 JST → 2番目（再投稿のみ）
-  スロット2 = 12:00 JST → 3番目（再投稿のみ）
-  スロット3 = 8:00 JST  → 4番目（再投稿のみ）
-
-0:00 の処理:
+処理内容:
   1. 記事一覧から全記事のURLとタイトルを取得
   2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
-  3. スケジュールページから当日以降で最も近い出勤日を取得
+  3. スケジュールページから翌日以降で最も近い出勤日を取得
   4. タイトルの【日付出勤】部分を更新
-  5. 無料部分(edit_text_1)の末尾に本日出勤中の他記事リンクを追記
-  6. スロット0に割り当てられた記事を再投稿
-
-8:00 / 12:00 / 20:00 の処理:
-  該当スロットに割り当てられた記事のみ再投稿（内容は変更しない）
+  5. 無料部分(edit_text_1)の末尾に明日出勤・明後日以降出勤の他記事リンクを追記
+  6. 翌日出勤の記事を再投稿
 
 使い方:
   pip install requests beautifulsoup4
-  python wakust_auto_update.py --slot auto   # JST時刻から自動判定
-  python wakust_auto_update.py --slot 0      # スロット0を明示指定
-  python wakust_auto_update.py --once        # スロット0（後方互換）
+  python wakust_auto_update.py
 """
 
 import requests
@@ -81,7 +69,6 @@ log = logging.getLogger(__name__)
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
 
-MAX_REPOST_PER_CATEGORY = 4
 
 # ============================================================
 # 定数
@@ -102,13 +89,6 @@ RELATED_NEXT_BLOCK_END    = "<!-- related_next_posts_end -->"
 UPDATED_DATE_START        = "<!-- updated_date_start -->"
 UPDATED_DATE_END          = "<!-- updated_date_end -->"
 
-# スロット定義: 優先順位順（0:00 → 20:00 → 12:00 → 8:00）
-SLOT_TIMES = {
-    0: "0:00",
-    1: "20:00",
-    2: "12:00",
-    3: "8:00",
-}
 
 
 # ============================================================
@@ -537,8 +517,9 @@ def fetch_next_date_from_schedule(schedule_url):
             break
 
     dates = [s for _, s in unique]
-    is_today = (unique[0][0].date() == today.date())
-    return dates, is_today
+    tomorrow = today + timedelta(days=1)
+    is_tomorrow = (unique[0][0].date() == tomorrow.date())
+    return dates, is_tomorrow
 
 
 # ============================================================
@@ -571,45 +552,46 @@ def build_new_title(current_title, dates):
 # 回遊リスト（本日・直近出勤の他記事リンク）の生成・注入
 # ============================================================
 def build_related_html(all_post_infos, current_post_id):
-    """本日出勤・明日以降出勤を1ブロック内にまとめて生成（更新した全記事対象）"""
+    """明日出勤・明後日以降出勤を1ブロック内にまとめて生成（更新した全記事対象）"""
     others = [p for p in all_post_infos if p["post"]["id"] != current_post_id]
-    today_others  = [p for p in others if p["is_today"]]
-    # next_date=Noneや今日以前の日付は除外
+    tomorrow_others = [p for p in others if p["is_tomorrow"]]
+
+    # 明後日以降: is_tomorrow=Falseで、next_dateが明後日以降の記事
     from datetime import datetime
     today_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    day_after_tomorrow = today_dt + timedelta(days=2)
 
-    def is_future(info):
-        if info["is_today"] or info["next_date"] is None:
+    def is_after_tomorrow(info):
+        if info["is_tomorrow"] or info["next_date"] is None:
             return False
         try:
-            # next_date は "3/5" or "3/5,3/7" 形式。先頭の日付で判定
             first_date = info["next_date"].split(",")[0]
             m, d = first_date.split("/")
             dt = datetime(today_dt.year, int(m), int(d))
-            return dt > today_dt
+            return dt >= day_after_tomorrow
         except Exception:
             return False
 
-    future_others = [p for p in others if is_future(p)]
+    future_others = [p for p in others if is_after_tomorrow(p)]
 
-    if not today_others and not future_others:
+    if not tomorrow_others and not future_others:
         return ""
 
     inner = "<hr/>\n"
 
-    # 本日出勤セクション
-    if today_others:
+    # 明日出勤セクション
+    if tomorrow_others:
         items_html = ""
-        for info in today_others:
+        for info in tomorrow_others:
             title = info["new_title"] or info["post"]["title"]
             url   = info["post"]["url"]
             items_html += f'<li><a href="{url}">{title}</a></li>\n'
         inner += (
-            f'<p><strong>📅 本日出勤中の他の記事もチェック！</strong></p>\n'
+            f'<p><strong>📅 明日出勤の他の記事もチェック！</strong></p>\n'
             f'<ul>\n{items_html}</ul>\n'
         )
 
-    # 明日以降出勤セクション（日付昇順）
+    # 明後日以降出勤セクション（日付昇順）
     if future_others:
         future_others = sorted(future_others, key=lambda p: (
             int(p["next_date"].split(",")[0].split("/")[0]),
@@ -621,7 +603,7 @@ def build_related_html(all_post_infos, current_post_id):
             url   = info["post"]["url"]
             items_html += f'<li><a href="{url}">{title}</a></li>\n'
         inner += (
-            f'<p><strong>📆 明日以降出勤予定の他の記事もチェック！</strong></p>\n'
+            f'<p><strong>📆 明後日以降出勤予定の他の記事もチェック！</strong></p>\n'
             f'<ul>\n{items_html}</ul>\n'
         )
 
@@ -681,10 +663,10 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         related_html = build_related_html(all_post_infos or [], post["id"])
         payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
         all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
-        today_count  = len([p for p in all_others if p["is_today"]])
-        future_count = len([p for p in all_others if not p["is_today"]])
+        tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
+        future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
         if all_others:
-            log.info(f"    📎 回遊リスト: 本日{today_count}件 / 明日以降{future_count}件")
+            log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
         else:
             log.info(f"    📎 回遊リストなし")
 
@@ -705,9 +687,9 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 # ============================================================
 # メイン処理
 # ============================================================
-def run_update(slot=0):
+def run_update():
     log.info(f"\n{'='*55}")
-    log.info(f"🔍 更新チェック開始 スロット{slot}({SLOT_TIMES[slot]} JST) ({time.strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"🔍 更新チェック開始 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
 
     session = login_wakust()
@@ -720,9 +702,8 @@ def run_update(slot=0):
         session.close()
         return
 
-    # スロット0（0:00）: 前日のPVを記録
-    if slot == 0:
-        log_pv(posts)
+    # PVを記録
+    log_pv(posts)
 
     state = load_state()
 
@@ -740,7 +721,7 @@ def run_update(slot=0):
 
         log.info(f"    🔗 {details['schedule_url']}")
 
-        dates, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+        dates, is_tomorrow = fetch_next_date_from_schedule(details["schedule_url"])
         if not dates:
             log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
             # 出勤日不明でもタイトル更新・回遊リスト対象として追加
@@ -748,91 +729,49 @@ def run_update(slot=0):
                 "post":      post,
                 "details":   details,
                 "next_date": None,
-                "is_today":  False,
+                "is_tomorrow":  False,
                 "new_title": post["title"],  # タイトルは変えない
             })
             continue
 
         dates_str = ",".join(dates)
-        log.info(f"    📅 直近の出勤日: {dates_str} {'【本日出勤！】' if is_today else ''}")
+        log.info(f"    📅 直近の出勤日: {dates_str} {'【明日出勤！】' if is_tomorrow else ''}")
 
         new_title = build_new_title(post["title"], dates)
         post_infos.append({
             "post":      post,
             "details":   details,
             "next_date": dates_str,
-            "is_today":  is_today,
+            "is_tomorrow":  is_tomorrow,
             "new_title": new_title,
         })
         time.sleep(1)
 
-    # カテゴリー別に再投稿対象を決定（IDが大きい＝新しい順に最大4件）
-    today_posts_by_category = defaultdict(list)
-    for info in post_infos:
-        if info["is_today"]:
-            today_posts_by_category[info["post"]["category"]].append(info)
-
+    # 翌日出勤の記事を再投稿対象に決定
     repost_ids = set()
     log.info(f"\n{'─'*55}")
-    log.info(f"📊 再投稿スロット割り当て（現在スロット{slot}: {SLOT_TIMES[slot]}）")
-    for category, infos in today_posts_by_category.items():
+    log.info(f"📊 再投稿対象（翌日出勤）")
+    tomorrow_posts_by_category = defaultdict(list)
+    for info in post_infos:
+        if info["is_tomorrow"]:
+            tomorrow_posts_by_category[info["post"]["category"]].append(info)
+
+    for category, infos in tomorrow_posts_by_category.items():
         # カテゴリー上限4/4 or 無料部分URLの記事は再投稿しない
         eligible = [i for i in infos
                     if not i["details"].get("at_limit", False)
                     and not i["details"].get("schedule_from_free", False)]
-        selected = sorted(eligible, key=lambda x: int(x["post"]["id"]), reverse=True)[:MAX_REPOST_PER_CATEGORY]
-        for idx, info in enumerate(selected):
-            marker = " ← 今回再投稿" if idx == slot else ""
-            log.info(f"    [{info['post']['id']}] → スロット{idx} ({SLOT_TIMES[idx]}){marker}")
-            if idx == slot:
-                repost_ids.add(info["post"]["id"])
+        for info in eligible:
+            repost_ids.add(info["post"]["id"])
+            log.info(f"    [{info['post']['id']}] 再投稿対象")
         skipped = len(infos) - len(eligible)
-        skip_str = f"（上限超え{skipped}件スキップ）" if skipped else ""
-        log.info(f"  🏷️  カテゴリー「{category}」: 本日出勤{len(infos)}件 → 対象{len(selected)}件{skip_str}")
+        skip_str = f"（上限超え/無料部分{skipped}件スキップ）" if skipped else ""
+        log.info(f"  🏷️  カテゴリー「{category}」: 明日出勤{len(infos)}件 → 対象{len(eligible)}件{skip_str}")
 
-    today_post_infos = [i for i in post_infos if i["is_today"]]
-
-    # スロット1-3: 再投稿のみ実行して終了
-    if slot > 0:
-        log.info(f"\n{'─'*55}")
-        log.info(f"🔄 スロット{slot}（{SLOT_TIMES[slot]}）: 再投稿処理")
-        log.info(f"{'─'*55}")
-        if not repost_ids:
-            log.info("ℹ️  このスロットに再投稿対象なし")
-        else:
-            for info in post_infos:
-                if info["post"]["id"] not in repost_ids:
-                    continue
-                post = info["post"]
-                details = info["details"]
-                payload = dict(details["payload"])
-                payload[REPOST_FIELD] = "on"
-                log.info(f"\n📝 [{post['id']}] {info['new_title']}")
-                res = session.post(EDIT_FORM_ACTION, data=payload)
-                if res.status_code == 200:
-                    log.info(f"    ✅ 再投稿完了")
-                else:
-                    log.error(f"    ❌ 再投稿失敗 (status: {res.status_code})")
-                time.sleep(2)
-        session.close()
-        log.info(f"\n✅ スロット{slot}の処理完了 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
-        return
-
-    # 直近出勤グループ: 本日以外で直近出勤日ごとにグルーピング
-    # 各記事の「直近出勤日」が同じ記事をまとめる（本日出勤は除く）
-    from collections import defaultdict as _dd
-    next_date_groups = _dd(list)
-    for info in post_infos:
-        if not info["is_today"]:
-            next_date_groups[info["next_date"]].append(info)
-
-    # スロット0: 全記事更新＋再投稿
+    # 全記事更新＋再投稿
     log.info(f"\n{'─'*55}")
-    log.info("🚀 更新処理開始（スロット0: 全記事更新＋再投稿）")
+    log.info("🚀 更新処理開始（全記事更新＋再投稿）")
     log.info(f"{'─'*55}")
-
-    # 本日出勤記事のIDセット（回遊リスト比較用）
-    today_ids_str = ",".join(sorted(i["post"]["id"] for i in today_post_infos))
 
     for info in post_infos:
         post_id       = info["post"]["id"]
@@ -876,45 +815,8 @@ def run_update(slot=0):
 
 
 # ============================================================
-# スロット自動判定
-# ============================================================
-def detect_slot():
-    """現在のJST時刻からスロット番号を自動判定"""
-    from datetime import timezone, timedelta
-    jst = timezone(timedelta(hours=9))
-    hour = datetime.now(jst).hour
-    if 23 <= hour or hour < 2:
-        return 0  # 0:00 JST
-    elif 19 <= hour < 22:
-        return 1  # 20:00 JST
-    elif 11 <= hour < 14:
-        return 2  # 12:00 JST
-    elif 7 <= hour < 10:
-        return 3  # 8:00 JST
-    else:
-        log.warning(f"⚠️  想定外の時刻(JST {hour}時)。スロット0として実行")
-        return 0
-
-
-# ============================================================
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
     log.info("🚀 ワクスト自動更新スクリプト起動")
-
-    # 引数解析
-    slot = 0
-    if "--slot" in sys.argv:
-        idx = sys.argv.index("--slot")
-        if idx + 1 < len(sys.argv):
-            slot_arg = sys.argv[idx + 1]
-            if slot_arg == "auto":
-                slot = detect_slot()
-            else:
-                slot = int(slot_arg)
-    # --once は後方互換: スロット0として実行
-
-    log.info(f"   スロット: {slot} ({SLOT_TIMES[slot]} JST)")
-    log.info(f"   カテゴリー別再投稿上限: {MAX_REPOST_PER_CATEGORY}件\n")
-
-    run_update(slot)
+    run_update()
