@@ -2,9 +2,16 @@ name: Wakust Auto Update
 
 on:
   schedule:
-    # 毎日16:00 JSTに1回実行（UTC 7:00 = JST 16:00）
+    # 毎日16:00 JSTに実行（UTC 7:00 = JST 16:00）
     - cron: '0 7 * * *'
+    # 毎日0:00 JSTに実行（UTC 15:00 = JST 0:00）
+    - cron: '0 15 * * *'
   workflow_dispatch:
+    inputs:
+      midnight_mode:
+        description: '0時モードで実行する'
+        type: boolean
+        default: false
 
 jobs:
   update:
@@ -27,6 +34,7 @@ jobs:
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
+          MIDNIGHT_RUN: ${{ (github.event.schedule == '0 15 * * *' || github.event.inputs.midnight_mode == 'true') && '1' || '0' }}
         run: python wakust_auto_update.py
 
       - name: Upload logs
