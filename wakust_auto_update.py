@@ -374,12 +374,12 @@ def fetch_next_date_from_schedule(schedule_url):
         }, timeout=10)
         if res.status_code != 200:
             log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
-            return [], False
+            return [], False, False
         res.encoding = res.apparent_encoding
         soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
         log.error(f"    ❌ スケジュール取得失敗: {e}")
-        return [], False
+        return [], False, False
 
     today        = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     current_year = today.year
