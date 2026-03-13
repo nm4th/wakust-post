@@ -1,19 +1,24 @@
 """
-ワクスト 記事タイトル自動更新 ＋ カテゴリー別再投稿スクリプト
-================================================================
-毎日 0:00 に以下を実行します:
+ワクスト 記事タイトル自動更新 ＋ 翌日出勤記事再投稿スクリプト
+====================================================================
+毎日16:00 JSTと0:00 JSTに実行し、以下を行います。
 
-1. 記事一覧から全記事のURLとタイトルを取得
-2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
-3. スケジュールページから当日以降で最も近い出勤日を取得
-4. タイトルの【日付出勤】部分を更新
-5. 無料部分(edit_text_1)の末尾に本日出勤中の他記事リンクを追記
-   ※ 元の本文は絶対に変更しない
-6. 当日出勤がある記事はカテゴリーごとに最大4件まで再投稿
+■ 16:00モード（通常）:
+  1. 記事一覧から全記事のURLとタイトルを取得
+  2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
+  3. スケジュールページから翌日以降で最も近い出勤日を取得
+  4. タイトルの【日付出勤】部分を更新
+  5. 無料部分の回遊リスト: 明日出勤(グループ1)・明後日以降出勤(グループ2)
+  6. 翌日出勤の記事を再投稿
+
+■ 0:00モード（MIDNIGHT_RUN=1）:
+  - 日付が変わったので回遊ラベルを切替: 今日出勤(グループ1)・明日以降出勤(グループ2)
+  - 再投稿チェックはスキップ
 
 使い方:
   pip install requests beautifulsoup4
-  python wakust_auto_update.py --once   # 1回だけ実行して終了
+  python wakust_auto_update.py                # 16:00モード
+  MIDNIGHT_RUN=1 python wakust_auto_update.py # 0:00モード
 """
 
 import requests
@@ -23,8 +28,9 @@ import re
 import json
 import os
 import sys
+import csv
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 
@@ -67,13 +73,16 @@ log = logging.getLogger(__name__)
 # ============================================================
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
+MIDNIGHT_RUN    = os.environ.get("MIDNIGHT_RUN", "0") == "1"
 
-MAX_REPOST_PER_CATEGORY = 4
 
 # ============================================================
 # 定数
 # ============================================================
 STATE_FILE          = "wakust_state.json"
+PV_LOG_DIR          = "logs"
+PV_DAILY_FILE       = "logs/pv_daily.csv"
+POSTS_MASTER_FILE   = "logs/posts_master.csv"
 BASE_URL            = "https://wakust.com"
 LOGIN_AJAX_URL      = "https://wakust.com/wp-content/themes/wakust/user_edit/login_mypage.php"
 POST_LIST_URL       = f"{BASE_URL}/mypage/?post_list"
@@ -83,6 +92,73 @@ RELATED_BLOCK_START       = "<!-- related_posts_start -->"
 RELATED_BLOCK_END         = "<!-- related_posts_end -->"
 RELATED_NEXT_BLOCK_START  = "<!-- related_next_posts_start -->"
 RELATED_NEXT_BLOCK_END    = "<!-- related_next_posts_end -->"
+UPDATED_DATE_START        = "<!-- updated_date_start -->"
+UPDATED_DATE_END          = "<!-- updated_date_end -->"
+
+
+
+# ============================================================
+# PVログ記録
+# ============================================================
+def log_pv(posts):
+    """記事ごとのPV数をCSVに記録（スロット0実行時に1日1回）
+
+    2つのファイルを管理:
+      - pv_daily.csv   : 日付×記事のPV数（分析用、1行=1記事1日）
+      - posts_master.csv: 記事マスタ（ID・タイトル・URL、毎回最新に更新）
+    """
+    os.makedirs(PV_LOG_DIR, exist_ok=True)
+    yesterday = datetime.now() - timedelta(days=1)
+    yesterday_str = yesterday.strftime("%Y-%m-%d")
+
+    # --- 記事マスタ更新 ---
+    # 既存マスタを読み込み
+    master = {}
+    if os.path.exists(POSTS_MASTER_FILE):
+        with open(POSTS_MASTER_FILE, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                master[row["post_id"]] = row
+
+    # 最新情報でマスタを更新
+    for post in posts:
+        pid = post["id"]
+        title = post["title"]
+        url = post["url"]
+        if pid in master:
+            master[pid]["title"] = title
+            master[pid]["url"] = url
+        else:
+            master[pid] = {
+                "post_id": pid,
+                "title": title,
+                "url": url,
+                "first_seen": yesterday_str,
+            }
+
+    # マスタ書き出し
+    with open(POSTS_MASTER_FILE, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["post_id", "title", "url", "first_seen"])
+        writer.writeheader()
+        for row in sorted(master.values(), key=lambda r: r["post_id"]):
+            writer.writerow(row)
+
+    # --- PVデイリーログ追記 ---
+    write_header = not os.path.exists(PV_DAILY_FILE)
+    with open(PV_DAILY_FILE, "a", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["date", "post_id", "pv"])
+        for post in posts:
+            pv = post.get("pv_daily")
+            if pv is not None:
+                writer.writerow([yesterday_str, post["id"], pv])
+
+    pv_posts = [p for p in posts if p.get("pv_daily") is not None]
+    total_pv = sum(p["pv_daily"] for p in pv_posts)
+    log.info(f"📊 PVログ記録({yesterday_str}): {len(pv_posts)}件 合計{total_pv}PV → {PV_DAILY_FILE}")
+    for p in sorted(pv_posts, key=lambda x: x["pv_daily"], reverse=True)[:10]:
+        log.info(f"    [{p['id']}] {p['pv_daily']:>4}PV  {p['title']}")
 
 
 # ============================================================
@@ -137,12 +213,44 @@ def fetch_post_list(session):
         if not m:
             continue
         post_id = m.group(1)
+
+        # PV数を同じ行(tr)から取得
+        # 形式: 「前 日：0  前 週：0  前 月：0  全期間：1」
+        pv_daily = None
+        pv_weekly = None
+        pv_monthly = None
+        pv_total = None
+        tr = td.find_parent("tr")
+        if tr:
+            for sib_td in tr.find_all("td"):
+                if sib_td == td:
+                    continue
+                text = sib_td.get_text(" ", strip=True)
+                if "前" in text and "日" in text:
+                    m_d = re.search(r"前\s*日\s*[：:]\s*(\d+)", text)
+                    m_w = re.search(r"前\s*週\s*[：:]\s*(\d+)", text)
+                    m_m = re.search(r"前\s*月\s*[：:]\s*(\d+)", text)
+                    m_t = re.search(r"全\s*期\s*間\s*[：:]\s*(\d+)", text)
+                    if m_d:
+                        pv_daily = int(m_d.group(1))
+                    if m_w:
+                        pv_weekly = int(m_w.group(1))
+                    if m_m:
+                        pv_monthly = int(m_m.group(1))
+                    if m_t:
+                        pv_total = int(m_t.group(1))
+                    break
+
         posts.append({
             "id":       post_id,
             "title":    title,
             "url":      url,
             "edit_url": f"{BASE_URL}/mypage/?post_edit={post_id}",
             "category": "未分類",
+            "pv_daily":   pv_daily,
+            "pv_weekly":  pv_weekly,
+            "pv_monthly": pv_monthly,
+            "pv_total":   pv_total,
         })
 
     log.info(f"📋 取得記事数: {len(posts)}")
@@ -218,30 +326,41 @@ def fetch_post_details(session, post):
 
     # post_stはHTMLのselected属性から取得済み（上記selectループで処理）
 
-    # edit_text_2（有料部分）からスケジュールURLを抽出
+    # スケジュールURLを抽出
+    # edit_text_2（有料部分）を優先し、なければ edit_text_1（無料部分）からも探す
     # URLは <a href="..."> タグ内またはプレーンテキストで記載されている
     schedule_url = None
-    edit_text_2  = payload.get("edit_text_2", "")
+    for field_name in ("edit_text_2", "edit_text_1"):
+        text = payload.get(field_name, "")
+        if not text:
+            continue
 
-    soup_t2 = BeautifulSoup(edit_text_2, "html.parser")
-    for a in reversed(soup_t2.find_all("a", href=True)):
-        href = a["href"].strip()
-        if re.match(r"https?://", href) and "wakust.com" not in href:
-            schedule_url = href
-            break
-
-    if not schedule_url:
-        for line in reversed(edit_text_2.splitlines()):
-            clean = re.sub(r"<[^>]+>", "", line).strip()
-            if re.match(r"https?://", clean) and "wakust.com" not in clean:
-                schedule_url = clean
+        soup_field = BeautifulSoup(text, "html.parser")
+        for a in reversed(soup_field.find_all("a", href=True)):
+            href = a["href"].strip()
+            if re.match(r"https?://", href) and "wakust.com" not in href:
+                schedule_url = href
                 break
 
+        if not schedule_url:
+            for line in reversed(text.splitlines()):
+                clean = re.sub(r"<[^>]+>", "", line).strip()
+                if re.match(r"https?://", clean) and "wakust.com" not in clean:
+                    schedule_url = clean
+                    break
+
+        if schedule_url:
+            break
+
+    # スケジュールURLが無料部分(edit_text_1)由来かどうか
+    schedule_from_free = (schedule_url is not None and field_name == "edit_text_1")
+
     return {
-        "category":        category,
-        "schedule_url":    schedule_url,
-        "payload":         payload,
-        "at_limit":        category_at_limit,
+        "category":           category,
+        "schedule_url":       schedule_url,
+        "schedule_from_free": schedule_from_free,
+        "payload":            payload,
+        "at_limit":           category_at_limit,
     }
 
 
@@ -250,12 +369,17 @@ def fetch_post_details(session, post):
 # ============================================================
 def fetch_next_date_from_schedule(schedule_url):
     try:
-        res = requests.get(schedule_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        res = requests.get(schedule_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        }, timeout=10)
+        if res.status_code != 200:
+            log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
+            return [], False, False
         res.encoding = res.apparent_encoding
         soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
         log.error(f"    ❌ スケジュール取得失敗: {e}")
-        return None, False
+        return [], False, False
 
     today        = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     current_year = today.year
@@ -390,35 +514,69 @@ def fetch_next_date_from_schedule(schedule_url):
                 candidates.append((d, f"{month}/{day}"))
 
     if not candidates:
-        return None, False
+        return [], False, False
 
     candidates.sort(key=lambda x: x[0])
-    nearest_date, nearest_str = candidates[0]
-    is_today = (nearest_date.date() == today.date())
-    return nearest_str, is_today
+    # 重複除去しつつ直近3件まで取得
+    seen = set()
+    unique = []
+    for dt, s in candidates:
+        if s not in seen:
+            seen.add(s)
+            unique.append((dt, s))
+        if len(unique) >= 3:
+            break
+
+    dates = [s for _, s in unique]
+    tomorrow = today + timedelta(days=1)
+    is_tomorrow = (unique[0][0].date() == tomorrow.date())
+    is_today = (unique[0][0].date() == today.date())
+    return dates, is_tomorrow, is_today
 
 
 # ============================================================
 # タイトルの【日付出勤】部分を置換
 # ============================================================
-def build_new_title(current_title, new_date):
+def format_dates(dates):
+    """日付リストを短縮表記にフォーマット
+    同月: "3/13,14,15"  月またぎ: "3/13,14｜4/4"
+    """
+    if not dates:
+        return ""
+    # dates: ["3/13", "3/14", "4/4"] 形式
+    groups = []  # [(month, [day, day, ...]), ...]
+    for d in dates:
+        m, day = d.split("/")
+        if groups and groups[-1][0] == m:
+            groups[-1][1].append(day)
+        else:
+            groups.append((m, [day]))
+    parts = []
+    for m, days in groups:
+        parts.append(f"{m}/{','.join(days)}")
+    return "｜".join(parts)
+
+
+def build_new_title(current_title, dates):
+    # dates: リスト（例: ["3/13", "3/14", "3/15"]）
     # 【】内に日付+出勤パターンがあれば置換（カップ数等は保持）
     # 重複（【3/5出勤3/5出勤Iカップ】等）も同時に修正する
     # replacedフラグで「置換が実際に起きたか」を管理し、二重追加を防ぐ
+    date_str = format_dates(dates)
     replaced = [False]
 
     def replace_bracket(m):
         inner = m.group(1)
-        if not re.search(r"[\d/,]+出勤", inner):
+        if not re.search(r"[\d/,｜]+出勤", inner):
             return m.group(0)  # 日付+出勤がなければそのまま
-        inner_clean = re.sub(r"[\d/,\s]+出勤", "", inner)
+        inner_clean = re.sub(r"[\d/,｜\s]+出勤", "", inner)
         replaced[0] = True
-        return f"【{new_date}出勤{inner_clean}】"
+        return f"【{date_str}出勤{inner_clean}】"
 
     new_title = re.sub(r"【([^】]*)】", replace_bracket, current_title, count=1)
 
     if not replaced[0]:
-        new_title = f"【{new_date}出勤】" + current_title
+        new_title = f"【{date_str}出勤】" + current_title
     return new_title
 
 
@@ -426,55 +584,83 @@ def build_new_title(current_title, new_date):
 # 回遊リスト（本日・直近出勤の他記事リンク）の生成・注入
 # ============================================================
 def build_related_html(all_post_infos, current_post_id):
-    """本日出勤・明日以降出勤を1ブロック内にまとめて生成（更新した全記事対象）"""
+    """出勤グループ別の回遊リストを生成（更新した全記事対象）
+
+    16:00モード: グループ1=明日出勤、グループ2=明後日以降出勤
+    0:00モード:  グループ1=今日出勤、グループ2=明日以降出勤
+    """
     others = [p for p in all_post_infos if p["post"]["id"] != current_post_id]
-    today_others  = [p for p in others if p["is_today"]]
-    # next_date=Noneや今日以前の日付は除外
+
     from datetime import datetime
     today_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    def is_future(info):
-        if info["is_today"] or info["next_date"] is None:
-            return False
-        try:
-            m, d = info["next_date"].split("/")
-            dt = datetime(today_dt.year, int(m), int(d))
-            return dt > today_dt
-        except Exception:
-            return False
+    if MIDNIGHT_RUN:
+        # 0時モード: グループ1=今日出勤(is_today)、グループ2=明日以降
+        group1 = [p for p in others if p.get("is_today")]
+        tomorrow_dt = today_dt + timedelta(days=1)
 
-    future_others = [p for p in others if is_future(p)]
+        def is_tomorrow_or_later(info):
+            if info.get("is_today") or info["next_date"] is None:
+                return False
+            try:
+                first_date = info["next_date"].split(",")[0]
+                m, d = first_date.split("/")
+                dt = datetime(today_dt.year, int(m), int(d))
+                return dt >= tomorrow_dt
+            except Exception:
+                return False
 
-    if not today_others and not future_others:
+        group2 = [p for p in others if is_tomorrow_or_later(p)]
+        label1 = "📅 今日出勤の他の記事もチェック！"
+        label2 = "📆 明日以降出勤予定の他の記事もチェック！"
+    else:
+        # 16時モード: グループ1=明日出勤(is_tomorrow)、グループ2=明後日以降
+        group1 = [p for p in others if p["is_tomorrow"]]
+        day_after_tomorrow = today_dt + timedelta(days=2)
+
+        def is_after_tomorrow(info):
+            if info["is_tomorrow"] or info["next_date"] is None:
+                return False
+            try:
+                first_date = info["next_date"].split(",")[0]
+                m, d = first_date.split("/")
+                dt = datetime(today_dt.year, int(m), int(d))
+                return dt >= day_after_tomorrow
+            except Exception:
+                return False
+
+        group2 = [p for p in others if is_after_tomorrow(p)]
+        label1 = "📅 明日出勤の他の記事もチェック！"
+        label2 = "📆 明後日以降出勤予定の他の記事もチェック！"
+
+    if not group1 and not group2:
         return ""
 
     inner = "<hr/>\n"
 
-    # 本日出勤セクション
-    if today_others:
+    if group1:
         items_html = ""
-        for info in today_others:
+        for info in group1:
             title = info["new_title"] or info["post"]["title"]
             url   = info["post"]["url"]
             items_html += f'<li><a href="{url}">{title}</a></li>\n'
         inner += (
-            f'<p><strong>📅 本日出勤中の他の記事もチェック！</strong></p>\n'
+            f'<p><strong>{label1}</strong></p>\n'
             f'<ul>\n{items_html}</ul>\n'
         )
 
-    # 明日以降出勤セクション（日付昇順）
-    if future_others:
-        future_others = sorted(future_others, key=lambda p: (
-            int(p["next_date"].split("/")[0]),
-            int(p["next_date"].split("/")[1])
+    if group2:
+        group2 = sorted(group2, key=lambda p: (
+            int(p["next_date"].split(",")[0].split("/")[0]),
+            int(p["next_date"].split(",")[0].split("/")[1])
         ))
         items_html = ""
-        for info in future_others:
+        for info in group2:
             title = info["new_title"] or info["post"]["title"]
             url   = info["post"]["url"]
             items_html += f'<li><a href="{url}">{title}</a></li>\n'
         inner += (
-            f'<p><strong>📆 明日以降出勤予定の他の記事もチェック！</strong></p>\n'
+            f'<p><strong>{label2}</strong></p>\n'
             f'<ul>\n{items_html}</ul>\n'
         )
 
@@ -504,6 +690,24 @@ def inject_related_html(original_html, related_html):
 
 
 # ============================================================
+# 更新日の注入
+# ============================================================
+def inject_updated_date(html):
+    """edit_text_1の冒頭に「〇月〇日更新」を注入（既存があれば置換）"""
+    now = datetime.now()
+    date_html = f'{UPDATED_DATE_START}<p><strong>{now.month}月{now.day}日更新</strong></p><br/>{UPDATED_DATE_END}'
+
+    if UPDATED_DATE_START in html:
+        return re.sub(
+            rf"{re.escape(UPDATED_DATE_START)}.*?{re.escape(UPDATED_DATE_END)}",
+            date_html,
+            html,
+            flags=re.DOTALL,
+        )
+    return date_html + "\n" + html
+
+
+# ============================================================
 # 記事の更新
 # ============================================================
 def update_post(session, post, details, new_title, do_repost=False, all_post_infos=None):
@@ -512,13 +716,14 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     if "edit_text_1" in payload:
+        payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         related_html = build_related_html(all_post_infos or [], post["id"])
         payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
         all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
-        today_count  = len([p for p in all_others if p["is_today"]])
-        future_count = len([p for p in all_others if not p["is_today"]])
+        tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
+        future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
         if all_others:
-            log.info(f"    📎 回遊リスト: 本日{today_count}件 / 明日以降{future_count}件")
+            log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
         else:
             log.info(f"    📎 回遊リストなし")
 
@@ -554,6 +759,9 @@ def run_update():
         session.close()
         return
 
+    # PVを記録
+    log_pv(posts)
+
     state = load_state()
 
     # 各記事の情報を収集
@@ -570,67 +778,63 @@ def run_update():
 
         log.info(f"    🔗 {details['schedule_url']}")
 
-        next_date, is_today = fetch_next_date_from_schedule(details["schedule_url"])
-        if not next_date:
+        dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+        if not dates:
             log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
             # 出勤日不明でもタイトル更新・回遊リスト対象として追加
             post_infos.append({
                 "post":      post,
                 "details":   details,
                 "next_date": None,
-                "is_today":  False,
+                "is_tomorrow":  False,
+                "is_today":    False,
                 "new_title": post["title"],  # タイトルは変えない
             })
             continue
 
-        log.info(f"    📅 直近の出勤日: {next_date} {'【本日出勤！】' if is_today else ''}")
+        dates_str = ",".join(dates)
+        log.info(f"    📅 直近の出勤日: {dates_str} {'【明日出勤！】' if is_tomorrow else ''}")
 
-        new_title = build_new_title(post["title"], next_date)
+        new_title = build_new_title(post["title"], dates)
         post_infos.append({
             "post":      post,
             "details":   details,
-            "next_date": next_date,
-            "is_today":  is_today,
+            "next_date": dates_str,
+            "is_tomorrow":  is_tomorrow,
+            "is_today":    is_today,
             "new_title": new_title,
         })
         time.sleep(1)
 
-    # カテゴリー別に再投稿対象を決定（IDが大きい＝新しい順に最大4件）
-    today_posts_by_category = defaultdict(list)
-    for info in post_infos:
-        if info["is_today"]:
-            today_posts_by_category[info["post"]["category"]].append(info)
-
+    # 翌日出勤の記事を再投稿対象に決定（0時モードでは再投稿しない）
     repost_ids = set()
+    if MIDNIGHT_RUN:
+        log.info(f"\n{'─'*55}")
+        log.info(f"🌙 0時モード: 再投稿チェックをスキップ")
+    else:
+        log.info(f"\n{'─'*55}")
+        log.info(f"📊 再投稿対象（翌日出勤）")
+        tomorrow_posts_by_category = defaultdict(list)
+        for info in post_infos:
+            if info["is_tomorrow"]:
+                tomorrow_posts_by_category[info["post"]["category"]].append(info)
+
+        for category, infos in tomorrow_posts_by_category.items():
+            # カテゴリー上限4/4 or 無料部分URLの記事は再投稿しない
+            eligible = [i for i in infos
+                        if not i["details"].get("at_limit", False)
+                        and not i["details"].get("schedule_from_free", False)]
+            for info in eligible:
+                repost_ids.add(info["post"]["id"])
+                log.info(f"    [{info['post']['id']}] 再投稿対象")
+            skipped = len(infos) - len(eligible)
+            skip_str = f"（上限超え/無料部分{skipped}件スキップ）" if skipped else ""
+            log.info(f"  🏷️  カテゴリー「{category}」: 明日出勤{len(infos)}件 → 対象{len(eligible)}件{skip_str}")
+
+    # 全記事更新＋再投稿
     log.info(f"\n{'─'*55}")
-    log.info("📊 再投稿対象の選定")
-    for category, infos in today_posts_by_category.items():
-        # カテゴリーが上限4/4の記事は再投稿しない
-        eligible = [i for i in infos if not i["details"].get("at_limit", False)]
-        selected = sorted(eligible, key=lambda x: int(x["post"]["id"]), reverse=True)[:MAX_REPOST_PER_CATEGORY]
-        for info in selected:
-            repost_ids.add(info["post"]["id"])
-        skipped = len(infos) - len(eligible)
-        skip_str = f"（上限超え{skipped}件スキップ）" if skipped else ""
-        log.info(f"  🏷️  カテゴリー「{category}」: 本日出勤{len(infos)}件 → 再投稿{len(selected)}件{skip_str}")
-
-    today_post_infos = [i for i in post_infos if i["is_today"]]
-
-    # 直近出勤グループ: 本日以外で直近出勤日ごとにグルーピング
-    # 各記事の「直近出勤日」が同じ記事をまとめる（本日出勤は除く）
-    from collections import defaultdict as _dd
-    next_date_groups = _dd(list)
-    for info in post_infos:
-        if not info["is_today"]:
-            next_date_groups[info["next_date"]].append(info)
-
-    # 更新実行
-    log.info(f"\n{'─'*55}")
-    log.info("🚀 更新処理開始")
+    log.info("🚀 更新処理開始（全記事更新＋再投稿）")
     log.info(f"{'─'*55}")
-
-    # 本日出勤記事のIDセット（回遊リスト比較用）
-    today_ids_str = ",".join(sorted(i["post"]["id"] for i in today_post_infos))
 
     for info in post_infos:
         post_id       = info["post"]["id"]
@@ -677,7 +881,6 @@ def run_update():
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
-    log.info("🚀 ワクスト自動更新スクリプト起動")
-    log.info(f"   カテゴリー別再投稿上限: {MAX_REPOST_PER_CATEGORY}件\n")
-
+    mode = "0時モード（回遊ラベル切替・再投稿なし）" if MIDNIGHT_RUN else "16時モード（通常）"
+    log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
     run_update()
