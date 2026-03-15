@@ -716,7 +716,8 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     if "edit_text_1" in payload:
-        payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
+        if not MIDNIGHT_RUN:
+            payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         related_html = build_related_html(all_post_infos or [], post["id"])
         payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
         all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
@@ -727,6 +728,8 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         else:
             log.info(f"    📎 回遊リストなし")
 
+    # repostフィールドを明示的に制御（フォームHTMLから紛れ込み防止）
+    payload.pop(REPOST_FIELD, None)
     if do_repost:
         payload[REPOST_FIELD] = "on"
         log.info(f"    🔄 再投稿チェックON")
@@ -883,4 +886,5 @@ def run_update():
 if __name__ == "__main__":
     mode = "0時モード（回遊ラベル切替・再投稿なし）" if MIDNIGHT_RUN else "16時モード（通常）"
     log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
+    log.info(f"   MIDNIGHT_RUN={os.environ.get('MIDNIGHT_RUN', '(未設定)')}")
     run_update()
