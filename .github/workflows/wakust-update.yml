@@ -34,7 +34,7 @@ jobs:
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
-          MIDNIGHT_RUN: ${{ (github.event.schedule == '0 15 * * *' || github.event.inputs.midnight_mode == 'true') && '1' || '0' }}
+          MIDNIGHT_RUN: ${{ github.event.inputs.midnight_mode == 'true' && '1' || '' }}
         run: python wakust_auto_update.py
 
       - name: Upload logs

@@ -77,7 +77,16 @@ log = logging.getLogger(__name__)
 # ============================================================
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
-MIDNIGHT_RUN    = os.environ.get("MIDNIGHT_RUN", "0") == "1"
+
+# MIDNIGHT_RUN: 実際のJST時刻で自動判定（22:00-05:59 → 0時モード）
+# 環境変数での明示指定も可能（"1"=強制0時モード, "0"=強制通常モード）
+_midnight_env = os.environ.get("MIDNIGHT_RUN", "")
+if _midnight_env in ("0", "1"):
+    MIDNIGHT_RUN = _midnight_env == "1"
+else:
+    from datetime import timezone
+    _jst_hour = datetime.now(timezone(timedelta(hours=9))).hour
+    MIDNIGHT_RUN = _jst_hour >= 22 or _jst_hour < 6
 
 
 # ============================================================
