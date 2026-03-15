@@ -271,7 +271,14 @@ def fetch_post_details(session, post):
     cat_sel = soup.find("select", {"name": "categorys"})
 
     # デバッグ: 編集ページの取得状況
-    log.info(f"    🔧 edit_url={post['edit_url']} status={res.status_code} form={'あり' if form else 'なし'} cat_sel={'あり' if cat_sel else 'なし'}")
+    log.info(f"    🔧 status={res.status_code} url={res.url} form={'あり' if form else 'なし'} cat_sel={'あり' if cat_sel else 'なし'}")
+    if not form:
+        # formが見つからない場合、HTMLの先頭を出力して原因特定
+        html_snippet = res.text[:500].replace("\n", "\\n")
+        log.warning(f"    🔧 HTML先頭: {html_snippet}")
+        # formタグを全探索
+        all_forms = soup.find_all("form")
+        log.warning(f"    🔧 全form数={len(all_forms)} actions={[f.get('action','') for f in all_forms]}")
 
     # カテゴリーIDをHTMLから直接取得
     # selected属性は値なし属性（selected のみ）なのでhas_attr()で判定する
@@ -337,9 +344,10 @@ def fetch_post_details(session, post):
     text_fields = {k: len(v) for k, v in payload.items() if k.startswith("edit_text")}
     log.info(f"    🔧 payload keys={list(payload.keys())}")
     log.info(f"    🔧 text fields: {text_fields}")
-    if payload.get("edit_text_2"):
-        snippet = payload["edit_text_2"][:200].replace("\n", "\\n")
-        log.info(f"    🔧 edit_text_2 先頭: {snippet}")
+    for fn in ("edit_text_1", "edit_text_2"):
+        if payload.get(fn):
+            snippet = payload[fn][:300].replace("\n", "\\n")
+            log.info(f"    🔧 {fn} ({len(payload[fn])}字) 先頭: {snippet}")
 
     # スケジュールURLを抽出
     # edit_text_2（有料部分）を優先し、なければ edit_text_1（無料部分）からも探す
