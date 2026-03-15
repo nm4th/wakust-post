@@ -270,6 +270,9 @@ def fetch_post_details(session, post):
     form    = soup.find("form", action=lambda a: a and "useredit" in a)
     cat_sel = soup.find("select", {"name": "categorys"})
 
+    # デバッグ: 編集ページの取得状況
+    log.info(f"    🔧 edit_url={post['edit_url']} status={res.status_code} form={'あり' if form else 'なし'} cat_sel={'あり' if cat_sel else 'なし'}")
+
     # カテゴリーIDをHTMLから直接取得
     # selected属性は値なし属性（selected のみ）なのでhas_attr()で判定する
     # X/4 のカウントを読み取り、4/4なら再投稿不可フラグを立てる
@@ -329,6 +332,14 @@ def fetch_post_details(session, post):
                 payload[name] = inp.get("value", "")
 
     # post_stはHTMLのselected属性から取得済み（上記selectループで処理）
+
+    # デバッグ: payloadのキーとテキストフィールドの内容量
+    text_fields = {k: len(v) for k, v in payload.items() if k.startswith("edit_text")}
+    log.info(f"    🔧 payload keys={list(payload.keys())}")
+    log.info(f"    🔧 text fields: {text_fields}")
+    if payload.get("edit_text_2"):
+        snippet = payload["edit_text_2"][:200].replace("\n", "\\n")
+        log.info(f"    🔧 edit_text_2 先頭: {snippet}")
 
     # スケジュールURLを抽出
     # edit_text_2（有料部分）を優先し、なければ edit_text_1（無料部分）からも探す
