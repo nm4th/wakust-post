@@ -77,7 +77,16 @@ log = logging.getLogger(__name__)
 # ============================================================
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
-MIDNIGHT_RUN    = os.environ.get("MIDNIGHT_RUN", "0") == "1"
+
+# MIDNIGHT_RUN: 実際のJST時刻で自動判定（22:00-05:59 → 0時モード）
+# 環境変数での明示指定も可能（"1"=強制0時モード, "0"=強制通常モード）
+_midnight_env = os.environ.get("MIDNIGHT_RUN", "")
+if _midnight_env in ("0", "1"):
+    MIDNIGHT_RUN = _midnight_env == "1"
+else:
+    from datetime import timezone
+    _jst_hour = datetime.now(timezone(timedelta(hours=9))).hour
+    MIDNIGHT_RUN = _jst_hour >= 22 or _jst_hour < 6
 
 
 # ============================================================
@@ -271,7 +280,14 @@ def fetch_post_details(session, post):
     cat_sel = soup.find("select", {"name": "categorys"})
 
     # デバッグ: 編集ページの取得状況
-    log.info(f"    🔧 edit_url={post['edit_url']} status={res.status_code} form={'あり' if form else 'なし'} cat_sel={'あり' if cat_sel else 'なし'}")
+    log.info(f"    🔧 status={res.status_code} url={res.url} form={'あり' if form else 'なし'} cat_sel={'あり' if cat_sel else 'なし'}")
+    if not form:
+        # formが見つからない場合、HTMLの先頭を出力して原因特定
+        html_snippet = res.text[:500].replace("\n", "\\n")
+        log.warning(f"    🔧 HTML先頭: {html_snippet}")
+        # formタグを全探索
+        all_forms = soup.find_all("form")
+        log.warning(f"    🔧 全form数={len(all_forms)} actions={[f.get('action','') for f in all_forms]}")
 
     # カテゴリーIDをHTMLから直接取得
     # selected属性は値なし属性（selected のみ）なのでhas_attr()で判定する
@@ -337,9 +353,10 @@ def fetch_post_details(session, post):
     text_fields = {k: len(v) for k, v in payload.items() if k.startswith("edit_text")}
     log.info(f"    🔧 payload keys={list(payload.keys())}")
     log.info(f"    🔧 text fields: {text_fields}")
-    if payload.get("edit_text_2"):
-        snippet = payload["edit_text_2"][:200].replace("\n", "\\n")
-        log.info(f"    🔧 edit_text_2 先頭: {snippet}")
+    for fn in ("edit_text_1", "edit_text_2"):
+        if payload.get(fn):
+            snippet = payload[fn][:300].replace("\n", "\\n")
+            log.info(f"    🔧 {fn} ({len(payload[fn])}字) 先頭: {snippet}")
 
     # スケジュールURLを抽出
     # edit_text_2（有料部分）を優先し、なければ edit_text_1（無料部分）からも探す
