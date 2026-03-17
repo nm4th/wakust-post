@@ -33,6 +33,7 @@ import json
 import os
 import sys
 import csv
+import html as html_module
 import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -363,9 +364,12 @@ def fetch_post_details(session, post):
     # URLは <a href="..."> タグ内またはプレーンテキストで記載されている
     schedule_url = None
     for field_name in ("edit_text_2", "edit_text_1"):
-        text = payload.get(field_name, "")
-        if not text:
+        raw_text = payload.get(field_name, "")
+        if not raw_text:
             continue
+        # フォームデータはHTMLエンティティエンコードされている場合がある
+        # （&lt;p&gt; → <p>）ので、デコードしてからパースする
+        text = html_module.unescape(raw_text)
 
         soup_field = BeautifulSoup(text, "html.parser")
         for a in reversed(soup_field.find_all("a", href=True)):
