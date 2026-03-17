@@ -367,25 +367,38 @@ def fetch_post_details(session, post):
         raw_text = payload.get(field_name, "")
         if not raw_text:
             continue
+
         # フォームデータはHTMLエンティティエンコードされている場合がある
         # （&lt;p&gt; → <p>）ので、デコードしてからパースする
         text = html_module.unescape(raw_text)
 
+        # デバッグ: unescape前後の比較
+        changed = text != raw_text
+        log.info(f"    🔧 URL抽出[{field_name}] unescape変化={changed} raw先頭={repr(raw_text[:80])} unescaped先頭={repr(text[:80])}")
+
         soup_field = BeautifulSoup(text, "html.parser")
-        for a in reversed(soup_field.find_all("a", href=True)):
+        a_tags = soup_field.find_all("a", href=True)
+        log.info(f"    🔧 URL抽出[{field_name}] aタグ数={len(a_tags)} hrefs={[a['href'][:60] for a in a_tags[-3:]]}")
+
+        for a in reversed(a_tags):
             href = a["href"].strip()
             if re.match(r"https?://", href) and "wakust.com" not in href:
                 schedule_url = href
                 break
 
         if not schedule_url:
-            for line in reversed(text.splitlines()):
+            # フォールバック: プレーンテキストURLを探す
+            last_lines = list(reversed(text.splitlines()))[:5]
+            for line in last_lines:
                 clean = re.sub(r"<[^>]+>", "", line).strip()
                 if re.match(r"https?://", clean) and "wakust.com" not in clean:
                     schedule_url = clean
                     break
+            if not schedule_url:
+                log.info(f"    🔧 URL抽出[{field_name}] フォールバックも失敗 最終行={[re.sub(r'<[^>]+>', '', l).strip()[:60] for l in last_lines[:3]]}")
 
         if schedule_url:
+            log.info(f"    🔧 URL抽出成功: {schedule_url}")
             break
 
     # スケジュールURLが無料部分(edit_text_1)由来かどうか
