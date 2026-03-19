@@ -610,6 +610,26 @@ def fetch_next_date_from_schedule(schedule_url):
             if candidates:
                 break
 
+    # パターンM: men-este形式（tokyo-fairy-land等）
+    # div.sch-date 内の dt に日付、div.sch-work 内の dd に出勤情報
+    if not candidates:
+        sch_date = soup.find("div", class_=re.compile(r"sch-date"))
+        sch_work = soup.find("div", class_=re.compile(r"sch-work"))
+        if sch_date and sch_work:
+            dts = sch_date.find_all("dt")
+            dds = sch_work.find_all("dd")
+            for dt, dd in zip(dts, dds):
+                info = dd.get_text(strip=True)
+                if "休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                    continue
+                m = re.search(r"(\d{1,2})/(\d{1,2})", dt.get_text())
+                if not m:
+                    continue
+                month, day = int(m.group(1)), int(m.group(2))
+                d = datetime(current_year, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
+
     # パターン3: div構造の日付+出勤情報（tennesu等）
     if not candidates:
         date_divs = soup.find_all("div", class_=re.compile(r"date"))
