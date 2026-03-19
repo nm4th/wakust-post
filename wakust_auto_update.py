@@ -95,8 +95,7 @@ else:
 # ============================================================
 STATE_FILE          = "wakust_state.json"
 PV_LOG_DIR          = "logs"
-PV_DAILY_FILE       = "logs/pv_daily.csv"
-POSTS_MASTER_FILE   = "logs/posts_master.csv"
+PV_LOG_FILE         = "logs/wakust_pv_log.csv"
 BASE_URL            = "https://wakust.com"
 LOGIN_AJAX_URL      = "https://wakust.com/wp-content/themes/wakust/user_edit/login_mypage.php"
 POST_LIST_URL       = f"{BASE_URL}/mypage/?post_list"
@@ -114,63 +113,65 @@ UPDATED_DATE_END          = "<!-- updated_date_end -->"
 # ============================================================
 # PVログ記録
 # ============================================================
-def log_pv(posts):
-    """記事ごとのPV数をCSVに記録（スロット0実行時に1日1回）
+PV_LOG_COLUMNS = [
+    "記録日時", "曜日", "記事ID", "タイトル", "URL", "カテゴリー",
+    "投稿日時", "最終編集日時", "最終再投稿日時", "直近出勤日",
+    "前日PV", "前週PV", "前月PV", "全期間PV", "販売回数", "売上pt",
+]
+WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
 
-    2つのファイルを管理:
-      - pv_daily.csv   : 日付×記事のPV数（分析用、1行=1記事1日）
-      - posts_master.csv: 記事マスタ（ID・タイトル・URL、毎回最新に更新）
+
+def log_pv(posts, post_infos=None, state=None):
+    """記事ごとのPV・売上データをCSVに記録（0時モードのみ呼ばれる）
+
+    出力: wakust_pv_log.csv（追記形式、17列）
     """
     os.makedirs(PV_LOG_DIR, exist_ok=True)
-    yesterday = datetime.now() - timedelta(days=1)
-    yesterday_str = yesterday.strftime("%Y-%m-%d")
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    weekday = WEEKDAY_JP[now.weekday()]
 
-    # --- 記事マスタ更新 ---
-    # 既存マスタを読み込み
-    master = {}
-    if os.path.exists(POSTS_MASTER_FILE):
-        with open(POSTS_MASTER_FILE, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                master[row["post_id"]] = row
+    # post_infosから直近出勤日を引くためのマップ
+    info_map = {}
+    if post_infos:
+        for info in post_infos:
+            info_map[info["post"]["id"]] = info
 
-    # 最新情報でマスタを更新
-    for post in posts:
-        pid = post["id"]
-        title = post["title"]
-        url = post["url"]
-        if pid in master:
-            master[pid]["title"] = title
-            master[pid]["url"] = url
-        else:
-            master[pid] = {
-                "post_id": pid,
-                "title": title,
-                "url": url,
-                "first_seen": yesterday_str,
-            }
+    # stateから最終再投稿日時を引くためのマップ
+    state = state or {}
 
-    # マスタ書き出し
-    with open(POSTS_MASTER_FILE, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["post_id", "title", "url", "first_seen"])
-        writer.writeheader()
-        for row in sorted(master.values(), key=lambda r: r["post_id"]):
-            writer.writerow(row)
-
-    # --- PVデイリーログ追記 ---
-    write_header = not os.path.exists(PV_DAILY_FILE)
-    with open(PV_DAILY_FILE, "a", encoding="utf-8", newline="") as f:
+    write_header = not os.path.exists(PV_LOG_FILE)
+    with open(PV_LOG_FILE, "a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         if write_header:
-            writer.writerow(["date", "post_id", "pv"])
+            writer.writerow(PV_LOG_COLUMNS)
         for post in posts:
-            pv = post.get("pv_daily")
-            if pv is not None:
-                writer.writerow([yesterday_str, post["id"], pv])
+            info = info_map.get(post["id"], {})
+            post_state = state.get(post["id"], {})
+            reposted_at = post_state.get("reposted_at", "")
+            next_date = info.get("next_date", "")
+            writer.writerow([
+                now_str,
+                weekday,
+                post["id"],
+                post["title"],
+                post["url"],
+                post.get("category", "未分類"),
+                post.get("posted_at", ""),
+                post.get("edited_at", ""),
+                reposted_at,
+                next_date or "",
+                post.get("pv_daily") or "",
+                post.get("pv_weekly") or "",
+                post.get("pv_monthly") or "",
+                post.get("pv_total") or "",
+                post.get("sales_count") or "",
+                post.get("sales_pt") or "",
+            ])
 
     pv_posts = [p for p in posts if p.get("pv_daily") is not None]
     total_pv = sum(p["pv_daily"] for p in pv_posts)
-    log.info(f"📊 PVログ記録({yesterday_str}): {len(pv_posts)}件 合計{total_pv}PV → {PV_DAILY_FILE}")
+    log.info(f"📊 PVログ記録: {len(posts)}件 合計{total_pv}PV → {PV_LOG_FILE}")
     for p in sorted(pv_posts, key=lambda x: x["pv_daily"], reverse=True)[:10]:
         log.info(f"    [{p['id']}] {p['pv_daily']:>4}PV  {p['title']}")
 
@@ -212,10 +213,8 @@ def login_wakust():
 # ============================================================
 # 記事一覧の取得
 # ============================================================
-def fetch_post_list(session):
-    res  = session.get(POST_LIST_URL)
-    soup = BeautifulSoup(res.text, "html.parser")
-
+def _parse_post_list_page(soup):
+    """1ページ分の記事一覧をパースする"""
     posts = []
     for td in soup.find_all(class_="td_2"):
         a = td.find("a", href=True)
@@ -228,12 +227,15 @@ def fetch_post_list(session):
             continue
         post_id = m.group(1)
 
-        # PV数を同じ行(tr)から取得
-        # 形式: 「前 日：0  前 週：0  前 月：0  全期間：1」
+        # PV数・売上を同じ行(tr)から取得
         pv_daily = None
         pv_weekly = None
         pv_monthly = None
         pv_total = None
+        sales_count = None
+        sales_pt = None
+        posted_at = None
+        edited_at = None
         tr = td.find_parent("tr")
         if tr:
             for sib_td in tr.find_all("td"):
@@ -253,22 +255,61 @@ def fetch_post_list(session):
                         pv_monthly = int(m_m.group(1))
                     if m_t:
                         pv_total = int(m_t.group(1))
-                    break
+                # 売上・販売回数
+                if "販売" in text or "売上" in text:
+                    m_sc = re.search(r"販売\s*[：:]\s*(\d+)", text)
+                    m_sp = re.search(r"売上\s*[：:]\s*(\d+)", text)
+                    if m_sc:
+                        sales_count = int(m_sc.group(1))
+                    if m_sp:
+                        sales_pt = int(m_sp.group(1))
+                # 投稿日時・最終編集日時
+                dt_m = re.search(r"(\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2})", text)
+                if dt_m:
+                    if posted_at is None:
+                        posted_at = dt_m.group(1)
+                    else:
+                        edited_at = dt_m.group(1)
 
         posts.append({
-            "id":       post_id,
-            "title":    title,
-            "url":      url,
-            "edit_url": f"{BASE_URL}/mypage/?post_edit={post_id}",
-            "category": "未分類",
-            "pv_daily":   pv_daily,
-            "pv_weekly":  pv_weekly,
-            "pv_monthly": pv_monthly,
-            "pv_total":   pv_total,
+            "id":          post_id,
+            "title":       title,
+            "url":         url,
+            "edit_url":    f"{BASE_URL}/mypage/?post_edit={post_id}",
+            "category":    "未分類",
+            "pv_daily":    pv_daily,
+            "pv_weekly":   pv_weekly,
+            "pv_monthly":  pv_monthly,
+            "pv_total":    pv_total,
+            "sales_count": sales_count,
+            "sales_pt":    sales_pt,
+            "posted_at":   posted_at,
+            "edited_at":   edited_at,
         })
-
-    log.info(f"📋 取得記事数: {len(posts)}")
     return posts
+
+
+def fetch_post_list(session):
+    """全ページの記事一覧を取得"""
+    all_posts = []
+    page = 1
+    while True:
+        url = f"{POST_LIST_URL}&paged={page}" if page > 1 else POST_LIST_URL
+        res = session.get(url)
+        soup = BeautifulSoup(res.text, "html.parser")
+        posts = _parse_post_list_page(soup)
+        if not posts:
+            break
+        all_posts.extend(posts)
+        # 次ページがあるか確認
+        next_link = soup.find("a", href=re.compile(r"paged=\d+"), string=re.compile(r"次|›|>"))
+        if not next_link:
+            break
+        page += 1
+        time.sleep(0.5)
+
+    log.info(f"📋 取得記事数: {len(all_posts)}（{page}ページ）")
+    return all_posts
 
 
 # ============================================================
@@ -295,15 +336,20 @@ def fetch_post_details(session, post):
     # X/4 のカウントを読み取り、4/4なら再投稿不可フラグを立てる
     category_id       = None
     category          = "未分類"
-    category_at_limit = False  # True=上限4/4に達している
+    category_at_limit = False  # True=上限に達している
+    category_current  = 0      # 現在の投稿数
+    category_max      = 4      # カテゴリ上限数（デフォルト4）
     if cat_sel:
         for opt in cat_sel.find_all("option"):
             if opt.has_attr("selected"):
                 category_id = opt.get("value")
                 category    = opt.get_text(strip=True)
                 m = re.search(r"\((\d+)/(\d+)\)", category)
-                if m and int(m.group(1)) >= int(m.group(2)):
-                    category_at_limit = True
+                if m:
+                    category_current = int(m.group(1))
+                    category_max     = int(m.group(2))
+                    if category_current >= category_max:
+                        category_at_limit = True
                 break
 
     # フォームのペイロードを構築
@@ -410,6 +456,8 @@ def fetch_post_details(session, post):
         "schedule_from_free": schedule_from_free,
         "payload":            payload,
         "at_limit":           category_at_limit,
+        "category_current":   category_current,
+        "category_max":       category_max,
     }
 
 
@@ -424,13 +472,22 @@ def fetch_next_date_from_schedule(schedule_url):
         if res.status_code != 200:
             log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
             return [], False, False
-        res.encoding = res.apparent_encoding
+        # content-typeのcharsetを優先（apparent_encodingは誤判定があるため）
+        if res.encoding is None or res.encoding == "ISO-8859-1":
+            ctype = res.headers.get("content-type", "")
+            m_charset = re.search(r"charset=([^\s;]+)", ctype, re.I)
+            if m_charset:
+                res.encoding = m_charset.group(1)
+            else:
+                res.encoding = "utf-8"
         soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
         log.error(f"    ❌ スケジュール取得失敗: {e}")
         return [], False, False
 
     today        = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 16時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
+    start_date   = today if MIDNIGHT_RUN else today + timedelta(days=1)
     current_year = today.year
     candidates   = []
 
@@ -450,7 +507,7 @@ def fetch_next_date_from_schedule(schedule_url):
                 if m:
                     month, day = int(m.group(1)), int(m.group(2))
                     d = datetime(current_year, month, day)
-                    if d >= today:
+                    if d >= start_date:
                         candidates.append((d, f"{month}/{day}"))
 
         # 形式B: 1行目tdが日付、2行目tdが出勤情報（tennesu等）
@@ -470,7 +527,7 @@ def fetch_next_date_from_schedule(schedule_url):
                             continue
                         month, day = int(m.group(1)), int(m.group(2))
                         d = datetime(current_year, month, day)
-                        if d < today:
+                        if d < start_date:
                             continue
                         info = info_cells[i].get_text(" ", strip=True) if i < len(info_cells) else ""
                         if "未定" in info or "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
@@ -489,7 +546,7 @@ def fetch_next_date_from_schedule(schedule_url):
         ):
             month, day = int(m.group(1)), int(m.group(2))
             d = datetime(current_year, month, day)
-            if d >= today:
+            if d >= start_date:
                 candidates.append((d, f"{month}/{day}"))
 
     # パターン2: 「3/7 土 10:00〜」形式のテーブル（namexspa・bellee等）
@@ -507,7 +564,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     continue
                 month, day = int(m.group(1)), int(m.group(2))
                 d = datetime(current_year, month, day)
-                if d < today:
+                if d < start_date:
                     continue
                 if re.search(r"\d{2}:\d{2}", info_text) and "お休み" not in info_text:
                     candidates.append((d, f"{month}/{day}"))
@@ -525,7 +582,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     continue
                 month, day = int(m.group(1)), int(m.group(2))
                 d = datetime(current_year, month, day)
-                if d < today:
+                if d < start_date:
                     continue
                 if i < len(sche_divs):
                     info = sche_divs[i].get_text(" ", strip=True)
@@ -538,7 +595,7 @@ def fetch_next_date_from_schedule(schedule_url):
         for m in re.finditer(r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)[^\n]{0,5}(\d{2}:\d{2})", soup.get_text()):
             month, day = int(m.group(1)), int(m.group(2))
             d = datetime(current_year, month, day)
-            if d >= today:
+            if d >= start_date:
                 candidates.append((d, f"{month}/{day}"))
 
     # パターン4: 「03/05\n(木)\n武蔵小杉出勤 13:00」形式（tennesu等・日付と時刻が別行）
@@ -551,7 +608,7 @@ def fetch_next_date_from_schedule(schedule_url):
             if "未定" in between and re.search(r"\d{2}:\d{2}", between) is None:
                 continue
             d = datetime(current_year, month, day)
-            if d >= today:
+            if d >= start_date:
                 candidates.append((d, f"{month}/{day}"))
 
     # パターン5: 「3月7日」テキスト形式
@@ -559,7 +616,7 @@ def fetch_next_date_from_schedule(schedule_url):
         for m in re.finditer(r"(\d{1,2})月(\d{1,2})日[^\n]*?(\d{2}:\d{2})", soup.get_text()):
             month, day = int(m.group(1)), int(m.group(2))
             d = datetime(current_year, month, day)
-            if d >= today:
+            if d >= start_date:
                 candidates.append((d, f"{month}/{day}"))
 
     if not candidates:
@@ -674,7 +731,7 @@ def build_related_html(all_post_infos, current_post_id):
                 return False
 
         group2 = [p for p in others if is_tomorrow_or_later(p)]
-        label1 = "📅 今日出勤の他の記事もチェック！"
+        label1 = "📅 本日出勤中の他の記事もチェック！"
         label2 = "📆 明日以降出勤予定の他の記事もチェック！"
     else:
         # 16時モード: グループ1=明日出勤(is_tomorrow)、グループ2=明後日以降
@@ -693,7 +750,7 @@ def build_related_html(all_post_infos, current_post_id):
                 return False
 
         group2 = [p for p in others if is_after_tomorrow(p)]
-        label1 = "📅 明日出勤の他の記事もチェック！"
+        label1 = "📅 明日出勤予定の他の記事もチェック！"
         label2 = "📆 明後日以降出勤予定の他の記事もチェック！"
 
     if not group1 and not group2:
@@ -825,8 +882,7 @@ def run_update():
         session.close()
         return
 
-    # PVを記録
-    log_pv(posts)
+    # PV記録は記事情報収集後に実行（0時モードのみ）
 
     state = load_state()
 
@@ -839,7 +895,15 @@ def run_update():
         post["category"] = details["category"]
 
         if not details["schedule_url"]:
-            log.warning(f"    ⚠️  スケジュールURLなし。スキップ")
+            log.warning(f"    ⚠️  スケジュールURLなし。回遊リストのみ対象")
+            post_infos.append({
+                "post":      post,
+                "details":   details,
+                "next_date": None,
+                "is_tomorrow":  False,
+                "is_today":    False,
+                "new_title": post["title"],
+            })
             continue
 
         log.info(f"    🔗 {details['schedule_url']}")
@@ -872,30 +936,71 @@ def run_update():
         })
         time.sleep(1)
 
-    # 翌日出勤の記事を再投稿対象に決定（0時モードでは再投稿しない）
+    # PVを記録（0時モードのみ）
+    if MIDNIGHT_RUN:
+        log_pv(posts, post_infos=post_infos, state=state)
+
+    # 再投稿対象を決定（0時モードでは再投稿しない）
+    # カテゴリーごとに上限まで: 明日出勤(ID降順) → 明後日以降(PV降順) で補充
     repost_ids = set()
     if MIDNIGHT_RUN:
         log.info(f"\n{'─'*55}")
         log.info(f"🌙 0時モード: 再投稿チェックをスキップ")
     else:
         log.info(f"\n{'─'*55}")
-        log.info(f"📊 再投稿対象（翌日出勤）")
-        tomorrow_posts_by_category = defaultdict(list)
-        for info in post_infos:
-            if info["is_tomorrow"]:
-                tomorrow_posts_by_category[info["post"]["category"]].append(info)
+        log.info(f"📊 再投稿対象選定")
 
-        for category, infos in tomorrow_posts_by_category.items():
-            # カテゴリー上限4/4 or 無料部分URLの記事は再投稿しない
+        # カテゴリーごとに記事を分類
+        posts_by_category = defaultdict(list)
+        for info in post_infos:
+            posts_by_category[info["post"]["category"]].append(info)
+
+        for category, infos in posts_by_category.items():
+            # 再投稿の基本条件: 上限未達 & 有料セクションURL由来
             eligible = [i for i in infos
                         if not i["details"].get("at_limit", False)
-                        and not i["details"].get("schedule_from_free", False)]
-            for info in eligible:
+                        and not i["details"].get("schedule_from_free", False)
+                        and i["next_date"] is not None]
+
+            if not eligible:
+                continue
+
+            # カテゴリの空き枠を計算（全記事で同じカテゴリの最初の1件から取得）
+            cat_current = infos[0]["details"].get("category_current", 0)
+            cat_max     = infos[0]["details"].get("category_max", 4)
+            slots = max(0, cat_max - cat_current)
+
+            if slots == 0:
+                log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
+                continue
+
+            # 1) 明日出勤の記事をID降順で選定
+            tomorrow = [i for i in eligible if i["is_tomorrow"]]
+            tomorrow.sort(key=lambda x: x["post"]["id"], reverse=True)
+
+            # 2) 明後日以降の記事をPV降順で選定
+            future = [i for i in eligible if not i["is_tomorrow"]]
+            future.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+
+            # 上限まで埋める
+            selected = []
+            for info in tomorrow:
+                if len(selected) >= slots:
+                    break
+                selected.append(info)
+
+            for info in future:
+                if len(selected) >= slots:
+                    break
+                selected.append(info)
+
+            for info in selected:
                 repost_ids.add(info["post"]["id"])
-                log.info(f"    [{info['post']['id']}] 再投稿対象")
-            skipped = len(infos) - len(eligible)
-            skip_str = f"（上限超え/無料部分{skipped}件スキップ）" if skipped else ""
-            log.info(f"  🏷️  カテゴリー「{category}」: 明日出勤{len(infos)}件 → 対象{len(eligible)}件{skip_str}")
+                is_tmr = "明日" if info["is_tomorrow"] else "明後日以降"
+                pv = info["post"].get("pv_total") or 0
+                log.info(f"    [{info['post']['id']}] 再投稿対象（{is_tmr}, PV={pv}）")
+
+            log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → 明日{len(tomorrow)}件+明後日以降{len(future)}件 → 選定{len(selected)}件")
 
     # 全記事更新＋再投稿
     log.info(f"\n{'─'*55}")
@@ -908,7 +1013,7 @@ def run_update():
         do_repost     = post_id in repost_ids
         post_state    = state.get(post_id, {})
         title_changed = (new_title != info["post"]["title"])
-        date_changed  = (post_state.get("date") != info["next_date"])
+        date_changed  = (post_state.get("dates") != info["next_date"])
         # 更新記事の顔ぶれが変わっていたら回遊リストも更新が必要
         all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
         related_changed = post_state.get("all_ids") != all_ids_str
@@ -929,9 +1034,10 @@ def run_update():
 
         if update_post(session, info["post"], info["details"], new_title, do_repost, post_infos):
             state[post_id] = {
-                "date":       info["next_date"],
+                "dates":       info["next_date"],
                 "title":      new_title,
                 "reposted":   do_repost,
+                "reposted_at": time.strftime("%Y-%m-%d %H:%M:%S") if do_repost else state.get(post_id, {}).get("reposted_at", ""),
                 "all_ids":    all_ids_str,
                 "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }
