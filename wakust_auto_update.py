@@ -563,6 +563,20 @@ def fetch_next_date_from_schedule(schedule_url):
                 candidates.append((d, f"{month}/{day}"))
 
     if not candidates:
+        # デバッグ: どのパターンにもマッチしなかった場合、HTML構造をダンプ
+        text_snippet = soup.get_text()[:500].replace("\n", "\\n")
+        log.warning(f"    🔧 スケジュール解析失敗 URL={schedule_url}")
+        log.warning(f"    🔧 テキスト先頭500字: {text_snippet}")
+        # テーブル構造のダンプ
+        tables = soup.find_all("table")
+        log.warning(f"    🔧 table数={len(tables)}")
+        for i, t in enumerate(tables[:3]):
+            log.warning(f"    🔧 table[{i}] HTML先頭300字: {str(t)[:300]}")
+        # div構造のダンプ（スケジュール関連クラス）
+        for cls in ("schedule", "sche", "date", "shift", "calendar", "week"):
+            divs = soup.find_all(["div", "dl", "ul", "li", "span"], class_=re.compile(cls, re.I))
+            if divs:
+                log.warning(f"    🔧 class~'{cls}' 要素数={len(divs)} 先頭: {str(divs[0])[:200]}")
         return [], False, False
 
     candidates.sort(key=lambda x: x[0])
