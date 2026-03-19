@@ -510,6 +510,27 @@ def fetch_next_date_from_schedule(schedule_url):
     candidates   = []
 
     for table in soup.find_all("table"):
+        # 形式W: weekSchedule形式（friend-menes等）
+        # th/tdが交互に並ぶ: <th>03/19(木)</th><td>21:00～06:00</td>
+        if "weekSchedule" in " ".join(table.get("class", [])):
+            for th in table.find_all("th"):
+                m = re.search(r"(\d{1,2})/(\d{1,2})", th.get_text())
+                if not m:
+                    continue
+                # thの直後のtd兄弟を探す
+                td = th.find_next_sibling("td")
+                if not td:
+                    continue
+                info = td.get_text(" ", strip=True)
+                if "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                    continue
+                month, day = int(m.group(1)), int(m.group(2))
+                d = datetime(current_year, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                break
+
         # 形式A: thに月日、tdに出勤情報（zexterior・rex-luxury等）
         headers = table.find_all("th")
         cells   = table.find_all("td")
