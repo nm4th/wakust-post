@@ -35,8 +35,9 @@ import sys
 import csv
 import html as html_module
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
+from urllib.parse import urlparse, parse_qs, unquote
 
 
 # ============================================================
@@ -312,6 +313,21 @@ def fetch_post_list(session):
     return all_posts
 
 
+def _unwrap_redirect_url(url):
+    """リダイレクトラッパーURL（link.php?url=... 等）から実際のURLを展開する"""
+    parsed = urlparse(url)
+    # link.php?url=... / redirect?url=... / go?url=... パターン
+    if parsed.path.rstrip("/").split("/")[-1] in ("link.php", "redirect", "go", "jump", "out"):
+        qs = parse_qs(parsed.query)
+        for key in ("url", "to", "redirect", "dest", "link"):
+            if key in qs:
+                inner = unquote(qs[key][0])
+                if re.match(r"https?://", inner):
+                    log.info(f"    🔧 リダイレクトURL展開: {url} → {inner}")
+                    return inner
+    return url
+
+
 # ============================================================
 # 編集画面の詳細取得
 # ============================================================
@@ -444,6 +460,8 @@ def fetch_post_details(session, post):
                 log.info(f"    🔧 URL抽出[{field_name}] フォールバックも失敗 最終行={[re.sub(r'<[^>]+>', '', l).strip()[:60] for l in last_lines[:3]]}")
 
         if schedule_url:
+            # リダイレクトラッパーURL（link.php?url=... 等）から実際のURLを展開
+            schedule_url = _unwrap_redirect_url(schedule_url)
             log.info(f"    🔧 URL抽出成功: {schedule_url}")
             break
 
