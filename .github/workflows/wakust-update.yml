@@ -4,6 +4,8 @@ on:
   schedule:
     # 毎日16:00 JSTに実行（UTC 7:00 = JST 16:00）
     - cron: '0 7 * * *'
+    # 毎日0:00 JSTに実行（UTC 15:00 = JST 0:00）回遊ラベル切替
+    - cron: '0 15 * * *'
   workflow_dispatch:
     inputs:
       midnight_mode:
@@ -32,6 +34,7 @@ jobs:
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
+          MIDNIGHT_RUN: ${{ inputs.midnight_mode == true && '1' || '' }}
         run: python wakust_auto_update.py
 
       - name: Upload logs
