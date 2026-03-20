@@ -15,7 +15,8 @@
   8. PVデータをCSVに記録
 
 ■ 0:00モード（MIDNIGHT_RUN=1）:
-  - 日付が変わったので回遊ラベルを切替: 今日出勤(グループ1)・明日以降出勤(グループ2)
+  - 16時に作成済みの回遊リストのラベルを文字置換:
+    明日出勤予定→本日出勤中、明後日以降出勤予定→明日以降出勤予定
   - 再投稿しない
   - 「〇月〇日更新」の書き換えもしない
 
@@ -509,72 +510,79 @@ def fetch_next_date_from_schedule(schedule_url):
     current_year = today.year
     candidates   = []
 
-    for table in soup.find_all("table"):
-        # 形式W: weekSchedule形式（friend-menes等）
-        # th/tdが交互に並ぶ: <th>03/19(木)</th><td>21:00～06:00</td>
-        if "weekSchedule" in " ".join(table.get("class", [])):
-            for th in table.find_all("th"):
-                m = re.search(r"(\d{1,2})/(\d{1,2})", th.get_text())
-                if not m:
-                    continue
-                # thの直後のtd兄弟を探す
-                td = th.find_next_sibling("td")
-                if not td:
-                    continue
-                info = td.get_text(" ", strip=True)
-                if "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
-                    continue
-                month, day = int(m.group(1)), int(m.group(2))
-                d = datetime(current_year, month, day)
-                if d >= start_date:
-                    candidates.append((d, f"{month}/{day}"))
-            if candidates:
-                break
+    # 形式W: weekSchedule形式（friend-menes等）
+    # クラス名が table 自体 or 親 div にある場合の両方に対応
+    week_tables = []
+    for el in soup.find_all(class_=re.compile(r"weekSchedule|week_schedule|week-schedule", re.I)):
+        if el.name == "table":
+            week_tables.append(el)
+        else:
+            week_tables.extend(el.find_all("table"))
+    for wt in week_tables:
+        for row in wt.find_all("tr"):
+            th = row.find("th")
+            td = row.find("td")
+            if not th or not td:
+                continue
+            m = re.search(r"(\d{1,2})/(\d{1,2})", th.get_text())
+            if not m:
+                continue
+            info = td.get_text(" ", strip=True)
+            if "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                continue
+            month, day = int(m.group(1)), int(m.group(2))
+            d = datetime(current_year, month, day)
+            if d >= start_date:
+                candidates.append((d, f"{month}/{day}"))
+    if candidates:
+        log.info(f"    📅 形式W(weekSchedule)でマッチ")
 
-        # 形式A: thに月日、tdに出勤情報（zexterior・rex-luxury等）
-        headers = table.find_all("th")
-        cells   = table.find_all("td")
-        if headers and cells:
-            for header, cell in zip(headers, cells):
-                info = cell.get_text(strip=True)
-                if not info or "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
-                    continue
-                # 「3月5日」または「3/5(木)」形式どちらも対応
-                m = re.search(r"(\d+)月\s*(\d+)日", header.get_text())
-                if not m:
-                    m = re.search(r"(\d{1,2})/(\d{1,2})", header.get_text())
-                if m:
-                    month, day = int(m.group(1)), int(m.group(2))
-                    d = datetime(current_year, month, day)
-                    if d >= start_date:
-                        candidates.append((d, f"{month}/{day}"))
-
-        # 形式B: 1行目tdが日付、2行目tdが出勤情報（tennesu等）
-        # ※各行に複数列ある場合のみ（namexspaのような縦1列テーブルと区別）
-        if not candidates:
-            rows = table.find_all("tr")
-            if len(rows) >= 2:
-                date_cells = rows[0].find_all("td")
-                info_cells = rows[1].find_all("td")
-                # 日付セルが複数あり、かつ日付パターンを含む場合のみ適用
-                date_matches = [re.search(r"(\d{1,2})/(\d{1,2})", dc.get_text()) for dc in date_cells]
-                valid_dates = [m for m in date_matches if m]
-                if len(valid_dates) >= 2:  # 複数日付=週間スケジュール形式
-                    for i, dcell in enumerate(date_cells):
-                        m = date_matches[i]
-                        if not m:
-                            continue
+    if not candidates:
+        for table in soup.find_all("table"):
+            # 形式A: thに月日、tdに出勤情報（zexterior・rex-luxury等）
+            headers = table.find_all("th")
+            cells   = table.find_all("td")
+            if headers and cells:
+                for header, cell in zip(headers, cells):
+                    info = cell.get_text(strip=True)
+                    if not info or "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                        continue
+                    # 「3月5日」または「3/5(木)」形式どちらも対応
+                    m = re.search(r"(\d+)月\s*(\d+)日", header.get_text())
+                    if not m:
+                        m = re.search(r"(\d{1,2})/(\d{1,2})", header.get_text())
+                    if m:
                         month, day = int(m.group(1)), int(m.group(2))
                         d = datetime(current_year, month, day)
-                        if d < start_date:
-                            continue
-                        info = info_cells[i].get_text(" ", strip=True) if i < len(info_cells) else ""
-                        if "未定" in info or "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
-                            continue
-                        candidates.append((d, f"{month}/{day}"))
+                        if d >= start_date:
+                            candidates.append((d, f"{month}/{day}"))
 
-        if candidates:
-            break
+            # 形式B: 1行目tdが日付、2行目tdが出勤情報（tennesu等）
+            # ※各行に複数列ある場合のみ（namexspaのような縦1列テーブルと区別）
+            if not candidates:
+                rows = table.find_all("tr")
+                if len(rows) >= 2:
+                    date_cells = rows[0].find_all("td")
+                    info_cells = rows[1].find_all("td")
+                    # 日付セルが複数あり、かつ日付パターンを含む場合のみ適用
+                    date_matches = [re.search(r"(\d{1,2})/(\d{1,2})", dc.get_text()) for dc in date_cells]
+                    valid_dates = [m for m in date_matches if m]
+                    if len(valid_dates) >= 2:  # 複数日付=週間スケジュール形式
+                        for i, dcell in enumerate(date_cells):
+                            m = date_matches[i]
+                            if not m:
+                                continue
+                            month, day = int(m.group(1)), int(m.group(2))
+                            d = datetime(current_year, month, day)
+                            if d < start_date:
+                                continue
+                            info = info_cells[i].get_text(" ", strip=True) if i < len(info_cells) else ""
+                            if "未定" in info or "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                                continue
+                            candidates.append((d, f"{month}/{day}"))
+
+            if candidates:
+                break
 
     # パターン定義リスト: 「3/5(木)\n:   15:00」形式（aromaresort等）
     # 日付の直後の行に時刻がある場合のみマッチ（離れた行の時刻は拾わない）
@@ -902,15 +910,29 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     if "edit_text_1" in payload:
         if not MIDNIGHT_RUN:
             payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
-        related_html = build_related_html(all_post_infos or [], post["id"])
-        payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
-        all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
-        tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
-        future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
-        if all_others:
-            log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
+        if MIDNIGHT_RUN:
+            # 0時モード: 回遊リストが既にあればラベル文字置換、なければ新規追加
+            if RELATED_BLOCK_START in payload["edit_text_1"]:
+                payload["edit_text_1"] = payload["edit_text_1"].replace(
+                    "明日出勤予定", "本日出勤中"
+                ).replace(
+                    "明後日以降出勤予定", "明日以降出勤予定"
+                )
+                log.info(f"    📎 回遊リスト: ラベル切替（明日→本日、明後日→明日）")
+            else:
+                related_html = build_related_html(all_post_infos or [], post["id"])
+                payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
+                log.info(f"    📎 回遊リスト: 新規追加（0時モード）")
         else:
-            log.info(f"    📎 回遊リストなし")
+            related_html = build_related_html(all_post_infos or [], post["id"])
+            payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
+            all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
+            tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
+            future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
+            if all_others:
+                log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
+            else:
+                log.info(f"    📎 回遊リストなし")
 
     # repostフィールドを明示的に制御（フォームHTMLから紛れ込み防止）
     payload.pop(REPOST_FIELD, None)
@@ -1082,14 +1104,17 @@ def run_update():
         all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
         related_changed = post_state.get("all_ids") != all_ids_str
 
+        # 0時モード: ラベル切替が未実施なら常に更新
+        midnight_needs_swap = MIDNIGHT_RUN and post_state.get("labels_swapped_date") != time.strftime("%Y-%m-%d")
+
         # next_date=Noneの記事はタイトル更新・再投稿しない（回遊リストのみ）
         if info["next_date"] is None:
             do_repost = False
-            if not related_changed:
+            if not related_changed and not midnight_needs_swap:
                 log.info(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
                 continue
 
-        if not title_changed and not date_changed and not do_repost and not related_changed:
+        if not title_changed and not date_changed and not do_repost and not related_changed and not midnight_needs_swap:
             log.info(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
             continue
 
@@ -1104,6 +1129,7 @@ def run_update():
                 "reposted_at": time.strftime("%Y-%m-%d %H:%M:%S") if do_repost else state.get(post_id, {}).get("reposted_at", ""),
                 "all_ids":    all_ids_str,
                 "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "labels_swapped_date": time.strftime("%Y-%m-%d") if MIDNIGHT_RUN else "",
             }
             save_state(state)
 
