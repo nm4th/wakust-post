@@ -15,7 +15,8 @@
   8. PVデータをCSVに記録
 
 ■ 0:00モード（MIDNIGHT_RUN=1）:
-  - 日付が変わったので回遊ラベルを切替: 今日出勤(グループ1)・明日以降出勤(グループ2)
+  - 16時に作成済みの回遊リストのラベルを文字置換:
+    明日出勤予定→本日出勤中、明後日以降出勤予定→明日以降出勤予定
   - 再投稿しない
   - 「〇月〇日更新」の書き換えもしない
 
@@ -909,15 +910,27 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     if "edit_text_1" in payload:
         if not MIDNIGHT_RUN:
             payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
-        related_html = build_related_html(all_post_infos or [], post["id"])
-        payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
-        all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
-        tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
-        future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
-        if all_others:
-            log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
+        if MIDNIGHT_RUN:
+            # 0時モード: 16時に作成済みの回遊リストのラベルを文字置換するだけ
+            # 明日→本日、明後日→明日
+            payload["edit_text_1"] = payload["edit_text_1"].replace(
+                "明日出勤予定", "本日出勤中"
+            ).replace(
+                "明後日以降出勤予定", "明日以降出勤予定"
+            )
         else:
-            log.info(f"    📎 回遊リストなし")
+            related_html = build_related_html(all_post_infos or [], post["id"])
+            payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
+        if MIDNIGHT_RUN:
+            log.info(f"    📎 回遊リスト: ラベル切替（明日→本日、明後日→明日）")
+        else:
+            all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
+            tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
+            future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
+            if all_others:
+                log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
+            else:
+                log.info(f"    📎 回遊リストなし")
 
     # repostフィールドを明示的に制御（フォームHTMLから紛れ込み防止）
     payload.pop(REPOST_FIELD, None)
@@ -1089,14 +1102,17 @@ def run_update():
         all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
         related_changed = post_state.get("all_ids") != all_ids_str
 
+        # 0時モード: ラベル切替が未実施なら常に更新
+        midnight_needs_swap = MIDNIGHT_RUN and post_state.get("labels_swapped_date") != time.strftime("%Y-%m-%d")
+
         # next_date=Noneの記事はタイトル更新・再投稿しない（回遊リストのみ）
         if info["next_date"] is None:
             do_repost = False
-            if not related_changed:
+            if not related_changed and not midnight_needs_swap:
                 log.info(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
                 continue
 
-        if not title_changed and not date_changed and not do_repost and not related_changed:
+        if not title_changed and not date_changed and not do_repost and not related_changed and not midnight_needs_swap:
             log.info(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
             continue
 
@@ -1111,6 +1127,7 @@ def run_update():
                 "reposted_at": time.strftime("%Y-%m-%d %H:%M:%S") if do_repost else state.get(post_id, {}).get("reposted_at", ""),
                 "all_ids":    all_ids_str,
                 "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "labels_swapped_date": time.strftime("%Y-%m-%d") if MIDNIGHT_RUN else "",
             }
             save_state(state)
 
