@@ -876,6 +876,7 @@ def inject_updated_date(html):
     now = datetime.now()
     date_html = f'{UPDATED_DATE_START}<p><strong>{now.month}月{now.day}日更新</strong></p><br/>{UPDATED_DATE_END}'
 
+    # マーカー付きの既存テキストがあれば置換
     if UPDATED_DATE_START in html:
         return re.sub(
             rf"{re.escape(UPDATED_DATE_START)}.*?{re.escape(UPDATED_DATE_END)}",
@@ -883,6 +884,10 @@ def inject_updated_date(html):
             html,
             flags=re.DOTALL,
         )
+    # マーカー無しの既存「〇月〇日更新」テキストがあれば置換
+    bare_pattern = r'<p>\s*<strong>\s*\d{1,2}月\d{1,2}日更新\s*</strong>\s*</p>\s*(?:<br\s*/?>)?'
+    if re.search(bare_pattern, html):
+        return re.sub(bare_pattern, date_html, html, count=1)
     return date_html + "\n" + html
 
 
