@@ -295,7 +295,7 @@ def fetch_post_list(session):
     all_posts = []
     page = 1
     while True:
-        url = f"{POST_LIST_URL}&paged={page}" if page > 1 else POST_LIST_URL
+        url = f"{POST_LIST_URL}&cp={page}" if page > 1 else POST_LIST_URL
         res = session.get(url)
         soup = BeautifulSoup(res.text, "html.parser")
         posts = _parse_post_list_page(soup)
@@ -303,7 +303,7 @@ def fetch_post_list(session):
             break
         all_posts.extend(posts)
         # 次ページがあるか確認
-        next_link = soup.find("a", href=re.compile(r"paged=\d+"), string=re.compile(r"次|›|>"))
+        next_link = soup.find("a", href=re.compile(r"cp=\d+"), string=re.compile(r"次|›|>"))
         if not next_link:
             break
         page += 1
