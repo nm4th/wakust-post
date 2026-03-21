@@ -867,22 +867,26 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
 
 
 def inject_related_html(original_html, related_html):
-    # 旧形式の直近ブロックが残っていれば削除
+    # 旧形式の直近ブロックが残っていれば全て削除
     if RELATED_NEXT_BLOCK_START in original_html:
         original_html = re.sub(
-            rf"{re.escape(RELATED_NEXT_BLOCK_START)}.*?{re.escape(RELATED_NEXT_BLOCK_END)}",
+            rf"{re.escape(RELATED_NEXT_BLOCK_START)}.*?{re.escape(RELATED_NEXT_BLOCK_END)}\s*",
             "",
             original_html,
             flags=re.DOTALL,
         )
-    # メインブロックを置換または末尾追記
+    # メインブロックをすべて除去してから新しいものを追加
     if RELATED_BLOCK_START in original_html:
-        return re.sub(
-            rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}",
-            related_html.strip() if related_html else "",
+        # 複数マーカーブロックが存在する場合もすべて除去
+        cleaned = re.sub(
+            rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}\s*",
+            "",
             original_html,
             flags=re.DOTALL,
         )
+        if related_html:
+            return cleaned.rstrip() + "\n" + related_html
+        return cleaned
     if related_html:
         return original_html.rstrip() + "\n" + related_html
     return original_html
