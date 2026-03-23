@@ -969,9 +969,18 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     if "edit_text_1" in payload:
-        # decode_contents()がHTMLエンティティ(&lt;!-- → <!--)を返す場合があるので
-        # inject前にunescapeしてコメントマーカーのregexが確実に一致するようにする
-        payload["edit_text_1"] = html_module.unescape(payload["edit_text_1"])
+        # decode_contents()がHTMLエンティティを返し、さらにWordPress側で
+        # 多重エンコードされる場合がある（&lt; → &amp;lt; 等）。
+        # 変化がなくなるまで繰り返しunescapeしてコメントマーカーを確実にデコードする。
+        text = payload["edit_text_1"]
+        for _round in range(5):
+            decoded = html_module.unescape(text)
+            if decoded == text:
+                break
+            text = decoded
+        else:
+            log.warning(f"    ⚠️  unescape 5回でも安定しません")
+        payload["edit_text_1"] = text
         if not MIDNIGHT_RUN:
             payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         if MIDNIGHT_RUN:
