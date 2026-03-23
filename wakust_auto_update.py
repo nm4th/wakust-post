@@ -927,18 +927,10 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         if not MIDNIGHT_RUN:
             payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         if MIDNIGHT_RUN:
-            # 0時モード: 回遊リストが既にあればラベル文字置換、なければ新規追加
-            if RELATED_BLOCK_START in payload["edit_text_1"]:
-                payload["edit_text_1"] = payload["edit_text_1"].replace(
-                    "明日出勤予定", "本日出勤中"
-                ).replace(
-                    "明後日以降出勤予定", "明日以降出勤予定"
-                )
-                log.info(f"    📎 回遊リスト: ラベル切替（明日→本日、明後日→明日）")
-            else:
-                related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
-                payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
-                log.info(f"    📎 回遊リスト: 新規追加（0時モード）")
+            # 0時モード: 既存ブロックを全除去してから本日ラベルで再生成
+            related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
+            payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
+            log.info(f"    📎 回遊リスト: 再生成（0時モード）")
         else:
             related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
             payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
