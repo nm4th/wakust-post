@@ -84,6 +84,10 @@ WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
 # タイムゾーン（GitHub ActionsはUTCで動くため、JST明示が必須）
 JST = timezone(timedelta(hours=9))
 
+def jst_strftime(fmt):
+    """time.strftimeのJST版"""
+    return datetime.now(JST).strftime(fmt)
+
 # MIDNIGHT_RUN: 実際のJST時刻で自動判定（22:00-05:59 → 0時モード）
 # 環境変数での明示指定も可能（"1"=強制0時モード, "0"=強制通常モード）
 _midnight_env = os.environ.get("MIDNIGHT_RUN", "")
@@ -1028,7 +1032,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 # ============================================================
 def run_update():
     log.info(f"\n{'='*55}")
-    log.info(f"🔍 更新チェック開始 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"🔍 更新チェック開始 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
 
     session = login_wakust()
@@ -1178,7 +1182,7 @@ def run_update():
         related_changed = post_state.get("all_ids") != all_ids_str
 
         # 0時モード: ラベル切替が未実施なら常に更新
-        midnight_needs_swap = MIDNIGHT_RUN and post_state.get("labels_swapped_date") != time.strftime("%Y-%m-%d")
+        midnight_needs_swap = MIDNIGHT_RUN and post_state.get("labels_swapped_date") != jst_strftime("%Y-%m-%d")
 
         # next_date=Noneの記事はタイトル更新・再投稿しない（回遊リストのみ）
         if info["next_date"] is None:
@@ -1199,17 +1203,17 @@ def run_update():
                 "dates":       info["next_date"],
                 "title":      new_title,
                 "reposted":   do_repost,
-                "reposted_at": time.strftime("%Y-%m-%d %H:%M:%S") if do_repost else state.get(post_id, {}).get("reposted_at", ""),
+                "reposted_at": jst_strftime("%Y-%m-%d %H:%M:%S") if do_repost else state.get(post_id, {}).get("reposted_at", ""),
                 "all_ids":    all_ids_str,
-                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "labels_swapped_date": time.strftime("%Y-%m-%d") if MIDNIGHT_RUN else "",
+                "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+                "labels_swapped_date": jst_strftime("%Y-%m-%d") if MIDNIGHT_RUN else "",
             }
             save_state(state)
 
         time.sleep(2)
 
     session.close()
-    log.info(f"\n✅ 全処理完了 ({time.strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
 
 # ============================================================
