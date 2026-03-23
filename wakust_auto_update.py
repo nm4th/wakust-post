@@ -304,8 +304,26 @@ def fetch_post_list(session):
             break
         all_posts.extend(posts)
         # 次ページがあるか確認
-        next_link = soup.find("a", href=re.compile(r"cp=\d+"), string=re.compile(r"次|›|>"))
+        # 方法1: cp=次ページ番号 のリンクを探す
+        next_page = page + 1
+        next_link = soup.find("a", href=re.compile(rf"cp={next_page}\b"))
+        # 方法2: テキストで「次」「›」「>」を含むリンク
         if not next_link:
+            next_link = soup.find("a", href=re.compile(r"cp=\d+"), string=re.compile(r"次|›|>|»"))
+        # 方法3: 現在ページより大きいcp=のリンクがあれば次ページあり
+        if not next_link:
+            for a in soup.find_all("a", href=re.compile(r"cp=(\d+)")):
+                m_cp = re.search(r"cp=(\d+)", a["href"])
+                if m_cp and int(m_cp.group(1)) > page:
+                    next_link = a
+                    break
+        if next_link:
+            log.info(f"    📄 次ページあり: {next_link.get('href', '')} text={next_link.get_text(strip=True)!r}")
+        else:
+            # デバッグ: ページネーション関連リンクを出力
+            cp_links = soup.find_all("a", href=re.compile(r"cp=\d+"))
+            if cp_links:
+                log.info(f"    🔧 cp=リンク一覧: {[(a['href'], a.get_text(strip=True)[:10]) for a in cp_links]}")
             break
         page += 1
         time.sleep(0.5)
