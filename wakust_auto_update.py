@@ -304,8 +304,26 @@ def fetch_post_list(session):
             break
         all_posts.extend(posts)
         # 次ページがあるか確認
-        next_link = soup.find("a", href=re.compile(r"cp=\d+"), string=re.compile(r"次|›|>"))
+        # 方法1: cp=次ページ番号 のリンクを探す
+        next_page = page + 1
+        next_link = soup.find("a", href=re.compile(rf"cp={next_page}\b"))
+        # 方法2: テキストで「次」「›」「>」を含むリンク
         if not next_link:
+            next_link = soup.find("a", href=re.compile(r"cp=\d+"), string=re.compile(r"次|›|>|»|›|»"))
+        # 方法3: 現在ページより大きいcp=のリンクがあれば次ページあり
+        if not next_link:
+            for a in soup.find_all("a", href=re.compile(r"cp=(\d+)")):
+                m_cp = re.search(r"cp=(\d+)", a["href"])
+                if m_cp and int(m_cp.group(1)) > page:
+                    next_link = a
+                    break
+        if next_link:
+            log.info(f"    📄 次ページあり: {next_link.get('href', '')} text={next_link.get_text(strip=True)!r}")
+        else:
+            # デバッグ: ページネーション関連リンクを出力
+            cp_links = soup.find_all("a", href=re.compile(r"cp=\d+"))
+            if cp_links:
+                log.info(f"    🔧 cp=リンク一覧: {[(a['href'], a.get_text(strip=True)[:10]) for a in cp_links]}")
             break
         page += 1
         time.sleep(0.5)
@@ -618,6 +636,30 @@ def fetch_next_date_from_schedule(schedule_url):
                     candidates.append((d, f"{month}/{day}"))
             if candidates:
                 break
+
+    # パターンK: krc_cast_calendar形式（アダマス等）
+    # div.krc_cast_calendar > ul > li 内に p.day（日付）と p（出勤情報）
+    if not candidates:
+        cal_div = soup.find("div", class_=re.compile(r"krc_cast_calendar|cast.?calendar", re.I))
+        if cal_div:
+            for li in cal_div.find_all("li"):
+                day_p = li.find("p", class_="day")
+                if not day_p:
+                    continue
+                m = re.search(r"(\d{1,2})/(\d{1,2})", day_p.get_text())
+                if not m:
+                    continue
+                # day_p の次の p が出勤情報
+                info_p = day_p.find_next_sibling("p")
+                info = info_p.get_text(strip=True) if info_p else ""
+                if "休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                    continue
+                month, day = int(m.group(1)), int(m.group(2))
+                d = datetime(current_year, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                log.info(f"    📅 形式K(krc_cast_calendar)でマッチ")
 
     # パターンM: men-este形式（tokyo-fairy-land等）
     # div.sch-date 内の dt に日付、div.sch-work 内の dd に出勤情報
