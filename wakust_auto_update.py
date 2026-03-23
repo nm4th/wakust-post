@@ -539,20 +539,22 @@ def fetch_next_date_from_schedule(schedule_url):
             week_tables.extend(el.find_all("table"))
     for wt in week_tables:
         for row in wt.find_all("tr"):
-            th = row.find("th")
-            td = row.find("td")
-            if not th or not td:
+            ths = row.find_all("th")
+            tds = row.find_all("td")
+            if not ths or not tds:
                 continue
-            m = re.search(r"(\d{1,2})/(\d{1,2})", th.get_text())
-            if not m:
-                continue
-            info = td.get_text(" ", strip=True)
-            if "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
-                continue
-            month, day = int(m.group(1)), int(m.group(2))
-            d = datetime(current_year, month, day)
-            if d >= start_date:
-                candidates.append((d, f"{month}/{day}"))
+            # th と td が交互に並ぶ形式（1行に7日分等）に対応
+            for th, td in zip(ths, tds):
+                m = re.search(r"(\d{1,2})/(\d{1,2})", th.get_text())
+                if not m:
+                    continue
+                info = td.get_text(" ", strip=True)
+                if "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                    continue
+                month, day = int(m.group(1)), int(m.group(2))
+                d = datetime(current_year, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
     if candidates:
         log.info(f"    📅 形式W(weekSchedule)でマッチ")
 
