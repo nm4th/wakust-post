@@ -309,7 +309,7 @@ def fetch_post_list(session):
         next_link = soup.find("a", href=re.compile(rf"cp={next_page}\b"))
         # 方法2: テキストで「次」「›」「>」を含むリンク
         if not next_link:
-            next_link = soup.find("a", href=re.compile(r"cp=\d+"), string=re.compile(r"次|›|>|»"))
+            next_link = soup.find("a", href=re.compile(r"cp=\d+"), string=re.compile(r"次|›|>|»|›|»"))
         # 方法3: 現在ページより大きいcp=のリンクがあれば次ページあり
         if not next_link:
             for a in soup.find_all("a", href=re.compile(r"cp=(\d+)")):
