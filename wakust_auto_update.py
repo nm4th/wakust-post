@@ -81,14 +81,16 @@ log = logging.getLogger(__name__)
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
 
+# タイムゾーン（GitHub ActionsはUTCで動くため、JST明示が必須）
+JST = timezone(timedelta(hours=9))
+
 # MIDNIGHT_RUN: 実際のJST時刻で自動判定（22:00-05:59 → 0時モード）
 # 環境変数での明示指定も可能（"1"=強制0時モード, "0"=強制通常モード）
 _midnight_env = os.environ.get("MIDNIGHT_RUN", "")
 if _midnight_env in ("0", "1"):
     MIDNIGHT_RUN = _midnight_env == "1"
 else:
-    from datetime import timezone
-    _jst_hour = datetime.now(timezone(timedelta(hours=9))).hour
+    _jst_hour = datetime.now(JST).hour
     MIDNIGHT_RUN = _jst_hour >= 22 or _jst_hour < 6
 
 
@@ -129,7 +131,7 @@ def log_pv(posts, post_infos=None, state=None):
     出力: wakust_pv_log.csv（追記形式、17列）
     """
     os.makedirs(PV_LOG_DIR, exist_ok=True)
-    now = datetime.now()
+    now = datetime.now(JST)
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     weekday = WEEKDAY_JP[now.weekday()]
 
@@ -523,7 +525,7 @@ def fetch_next_date_from_schedule(schedule_url):
         log.error(f"    ❌ スケジュール取得失敗: {e}")
         return [], False, False
 
-    today        = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     # 16時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
     start_date   = today if MIDNIGHT_RUN else today + timedelta(days=1)
     current_year = today.year
@@ -836,7 +838,7 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
             others = [p for p in others if p["post"].get("category") != "神奈川県"]
 
     from datetime import datetime
-    today_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
     if MIDNIGHT_RUN:
         # 0時モード: グループ1=今日出勤(is_today)、グループ2=明日以降
@@ -942,7 +944,7 @@ def inject_related_html(original_html, related_html):
 # ============================================================
 def inject_updated_date(html):
     """edit_text_1の冒頭に「〇月〇日更新」を注入（既存があれば置換）"""
-    now = datetime.now()
+    now = datetime.now(JST)
     date_html = f'{UPDATED_DATE_START}<p><strong>{now.month}月{now.day}日更新</strong></p><br/>{UPDATED_DATE_END}'
 
     # マーカー無しの既存「〇月〇日更新」テキストを除去（重複防止）
