@@ -619,6 +619,30 @@ def fetch_next_date_from_schedule(schedule_url):
             if candidates:
                 break
 
+    # パターンK: krc_cast_calendar形式（アダマス等）
+    # div.krc_cast_calendar > ul > li 内に p.day（日付）と p（出勤情報）
+    if not candidates:
+        cal_div = soup.find("div", class_=re.compile(r"krc_cast_calendar|cast.?calendar", re.I))
+        if cal_div:
+            for li in cal_div.find_all("li"):
+                day_p = li.find("p", class_="day")
+                if not day_p:
+                    continue
+                m = re.search(r"(\d{1,2})/(\d{1,2})", day_p.get_text())
+                if not m:
+                    continue
+                # day_p の次の p が出勤情報
+                info_p = day_p.find_next_sibling("p")
+                info = info_p.get_text(strip=True) if info_p else ""
+                if "休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                    continue
+                month, day = int(m.group(1)), int(m.group(2))
+                d = datetime(current_year, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                log.info(f"    📅 形式K(krc_cast_calendar)でマッチ")
+
     # パターンM: men-este形式（tokyo-fairy-land等）
     # div.sch-date 内の dt に日付、div.sch-work 内の dd に出勤情報
     if not candidates:
