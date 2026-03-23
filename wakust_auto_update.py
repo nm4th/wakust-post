@@ -969,6 +969,9 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     if "edit_text_1" in payload:
+        # decode_contents()がHTMLエンティティ(&lt;!-- → <!--)を返す場合があるので
+        # inject前にunescapeしてコメントマーカーのregexが確実に一致するようにする
+        payload["edit_text_1"] = html_module.unescape(payload["edit_text_1"])
         if not MIDNIGHT_RUN:
             payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         if MIDNIGHT_RUN:
