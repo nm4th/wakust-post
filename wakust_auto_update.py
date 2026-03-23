@@ -363,6 +363,7 @@ def fetch_post_details(session, post):
                 category    = opt.get_text(strip=True)
                 m = re.search(r"\((\d+)/(\d+)\)", category)
                 if m:
+                    category = category[:m.start()].strip()
                     category_current = int(m.group(1))
                     category_max     = int(m.group(2))
                     if category_current >= category_max:
