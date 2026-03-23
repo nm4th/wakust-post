@@ -905,15 +905,15 @@ def inject_updated_date(html):
     bare_pattern = r'<p>\s*<strong>\s*\d{1,2}月\d{1,2}日更新\s*</strong>\s*</p>\s*(?:<br\s*/?>)?\s*'
     html = re.sub(bare_pattern, '', html)
 
-    # マーカー付きの既存テキストがあれば置換
+    # マーカー付きの既存テキストがあれば全除去してから先頭に追加
     if UPDATED_DATE_START in html:
-        return re.sub(
-            rf"{re.escape(UPDATED_DATE_START)}.*?{re.escape(UPDATED_DATE_END)}",
-            date_html,
+        html = re.sub(
+            rf"{re.escape(UPDATED_DATE_START)}.*?{re.escape(UPDATED_DATE_END)}\s*",
+            "",
             html,
             flags=re.DOTALL,
         )
-    return date_html + "\n" + html
+    return date_html + "\n" + html.lstrip()
 
 
 # ============================================================
