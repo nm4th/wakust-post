@@ -244,6 +244,7 @@ def _parse_post_list_page(soup):
         sales_pt = None
         posted_at = None
         edited_at = None
+        is_reserved = False
         tr = td.find_parent("tr")
         if tr:
             for sib_td in tr.find_all("td"):
@@ -272,6 +273,8 @@ def _parse_post_list_page(soup):
                     if m_sp:
                         sales_pt = int(m_sp.group(1))
                 # 投稿日時・最終編集日時
+                if "予約" in text:
+                    is_reserved = True
                 dt_m = re.search(r"(\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2})", text)
                 if dt_m:
                     if posted_at is None:
@@ -293,6 +296,7 @@ def _parse_post_list_page(soup):
             "sales_pt":    sales_pt,
             "posted_at":   posted_at,
             "edited_at":   edited_at,
+            "is_reserved": is_reserved,
         })
     return posts
 
@@ -1086,6 +1090,10 @@ def run_update():
     post_infos = []
     for post in posts:
         log.info(f"\n📄 [{post['id']}] {post['title']}")
+
+        if post.get("is_reserved"):
+            log.info(f"    ⏭️  予約投稿のためスキップ")
+            continue
 
         details = fetch_post_details(session, post)
         post["category"] = details["category"]
