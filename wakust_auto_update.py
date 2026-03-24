@@ -935,11 +935,11 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         main = re.sub(r"【[^】]*】", "", title).strip()
         return area, cup, main
 
-    def _build_card_table(group, label):
-        """グループをカード型テーブルHTMLに変換する"""
+    def _build_card_list(group, label):
+        """グループを縦積みカード型HTMLに変換する（スマホ最適化）"""
         group = sorted(group, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
         group = group[:5]
-        rows = ""
+        cards = ""
         for info in group:
             title = info["new_title"] or info["post"]["title"]
             url   = info["post"]["url"]
@@ -957,28 +957,29 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
                     f'font-size:11px;padding:2px 8px;border-radius:4px">'
                     f'{cup}</span>'
                 )
-            rows += (
-                f'<tr>'
-                f'<td style="padding:10px 12px;border-bottom:1px solid #333;vertical-align:top;white-space:nowrap">'
-                f'{badge_html}</td>'
-                f'<td style="padding:10px 12px;border-bottom:1px solid #333">'
-                f'<a href="{url}" style="color:#6db3f2;text-decoration:none">{main}</a></td>'
-                f'</tr>\n'
+            cards += (
+                f'<div style="border:1px solid #333;border-radius:8px;padding:10px 12px;'
+                f'margin-bottom:8px">'
+            )
+            if badge_html:
+                cards += f'<div style="margin-bottom:6px">{badge_html}</div>'
+            cards += (
+                f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
+                f'font-size:14px;line-height:1.5">{main}</a>'
+                f'</div>\n'
             )
         return (
             f'<p style="margin-bottom:8px"><strong>{label}</strong></p>\n'
-            f'<table style="width:100%;border-collapse:collapse;background:#1a1a2e;'
-            f'border-radius:8px;overflow:hidden;margin-bottom:16px">\n'
-            f'{rows}</table>\n'
+            f'{cards}'
         )
 
     inner = "<hr/>\n"
 
     if group1:
-        inner += _build_card_table(group1, label1)
+        inner += _build_card_list(group1, label1)
 
     if group2:
-        inner += _build_card_table(group2, label2)
+        inner += _build_card_list(group2, label2)
 
     return f'\n{RELATED_BLOCK_START}\n{inner}{RELATED_BLOCK_END}\n'
 
