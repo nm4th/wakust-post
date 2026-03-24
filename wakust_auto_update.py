@@ -920,6 +920,9 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     inner = "<hr/>\n"
 
     if group1:
+        # 販売回数の多い順にソートし、上位5件に絞る
+        group1 = sorted(group1, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
+        group1 = group1[:5]
         items_html = ""
         for info in group1:
             title = info["new_title"] or info["post"]["title"]
