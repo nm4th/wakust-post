@@ -921,35 +921,64 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     if not group1 and not group2:
         return ""
 
+    def _parse_title_badges(title):
+        """タイトルから【】バッジ部分とメイン見出しを分離する"""
+        brackets = re.findall(r"【([^】]+)】", title)
+        area = ""
+        cup = ""
+        for b in brackets:
+            if re.search(r"[A-Z]カップ", b):
+                cup = re.search(r"[A-Z]カップ", b).group()
+            elif "出勤" not in b:
+                area = b
+        # メイン見出し = バッジ部分をすべて除去した残り
+        main = re.sub(r"【[^】]*】", "", title).strip()
+        return area, cup, main
+
+    def _build_card_table(group, label):
+        """グループをカード型テーブルHTMLに変換する"""
+        group = sorted(group, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
+        group = group[:5]
+        rows = ""
+        for info in group:
+            title = info["new_title"] or info["post"]["title"]
+            url   = info["post"]["url"]
+            area, cup, main = _parse_title_badges(title)
+            badge_html = ""
+            if area:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
+                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                    f'{area}</span>'
+                )
+            if cup:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#e85d75;color:#fff;'
+                    f'font-size:11px;padding:2px 8px;border-radius:4px">'
+                    f'{cup}</span>'
+                )
+            rows += (
+                f'<tr>'
+                f'<td style="padding:10px 12px;border-bottom:1px solid #333;vertical-align:top;white-space:nowrap">'
+                f'{badge_html}</td>'
+                f'<td style="padding:10px 12px;border-bottom:1px solid #333">'
+                f'<a href="{url}" style="color:#6db3f2;text-decoration:none">{main}</a></td>'
+                f'</tr>\n'
+            )
+        return (
+            f'<p style="margin-bottom:8px"><strong>{label}</strong></p>\n'
+            f'<table style="width:100%;border-collapse:collapse;background:#1a1a2e;'
+            f'border-radius:8px;overflow:hidden;margin-bottom:16px">\n'
+            f'{rows}</table>\n'
+        )
+
     inner = "<hr/>\n"
 
     if group1:
-        # 販売回数の多い順にソートし、上位5件に絞る
-        group1 = sorted(group1, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
-        group1 = group1[:5]
-        items_html = ""
-        for info in group1:
-            title = info["new_title"] or info["post"]["title"]
-            url   = info["post"]["url"]
-            items_html += f'<li><a href="{url}">{title}</a></li>\n'
-        inner += (
-            f'<p><strong>{label1}</strong></p>\n'
-            f'<ul>\n{items_html}</ul>\n'
-        )
+        inner += _build_card_table(group1, label1)
 
     if group2:
-        # 販売回数の多い順にソートし、上位5件に絞る
-        group2 = sorted(group2, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
-        group2 = group2[:5]
-        items_html = ""
-        for info in group2:
-            title = info["new_title"] or info["post"]["title"]
-            url   = info["post"]["url"]
-            items_html += f'<li><a href="{url}">{title}</a></li>\n'
-        inner += (
-            f'<p><strong>{label2}</strong></p>\n'
-            f'<ul>\n{items_html}</ul>\n'
-        )
+        inner += _build_card_table(group2, label2)
 
     return f'\n{RELATED_BLOCK_START}\n{inner}{RELATED_BLOCK_END}\n'
 
