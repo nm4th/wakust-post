@@ -924,16 +924,19 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     def _parse_title_badges(title):
         """タイトルから【】バッジ部分とメイン見出しを分離する"""
         brackets = re.findall(r"【([^】]+)】", title)
+        schedule = ""
         area = ""
         cup = ""
         for b in brackets:
             if re.search(r"[A-Z]カップ", b):
                 cup = re.search(r"[A-Z]カップ", b).group()
-            elif "出勤" not in b:
+            elif "出勤" in b:
+                schedule = b
+            else:
                 area = b
         # メイン見出し = バッジ部分をすべて除去した残り
         main = re.sub(r"【[^】]*】", "", title).strip()
-        return area, cup, main
+        return schedule, area, cup, main
 
     def _build_card_list(group, label):
         """グループを縦積みカード型HTMLに変換する（スマホ最適化）"""
@@ -943,8 +946,14 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         for info in group:
             title = info["new_title"] or info["post"]["title"]
             url   = info["post"]["url"]
-            area, cup, main = _parse_title_badges(title)
+            schedule, area, cup, main = _parse_title_badges(title)
             badge_html = ""
+            if schedule:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#2d8a4e;color:#fff;'
+                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                    f'{schedule}</span>'
+                )
             if area:
                 badge_html += (
                     f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
