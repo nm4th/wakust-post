@@ -1095,7 +1095,11 @@ def run_update():
             log.info(f"    ⏭️  予約投稿のためスキップ")
             continue
 
-        details = fetch_post_details(session, post)
+        try:
+            details = fetch_post_details(session, post)
+        except Exception as e:
+            log.error(f"    ❌ 記事詳細取得失敗: {e}")
+            continue
         post["category"] = details["category"]
 
         if not details["schedule_url"]:
