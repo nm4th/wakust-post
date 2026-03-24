@@ -529,6 +529,23 @@ def fetch_next_date_from_schedule(schedule_url):
         log.error(f"    ❌ スケジュール取得失敗: {e}")
         return [], False, False
 
+    # JSレンダリング判定: weekScheduleクラスがあるがtableが空の場合
+    # → Playwrightでヘッドレスブラウザ経由で再取得
+    if (soup.find(class_=re.compile(r"weekSchedule", re.I)) and
+            not soup.find("table")):
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(schedule_url, wait_until="networkidle", timeout=20000)
+                js_html = page.content()
+                browser.close()
+            soup = BeautifulSoup(js_html, "html.parser")
+            log.info(f"    🔧 JSレンダリングでHTML再取得成功")
+        except Exception as e:
+            log.warning(f"    ⚠️ Playwrightフォールバック失敗: {e}")
+
     today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     # 16時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
     start_date   = today if MIDNIGHT_RUN else today + timedelta(days=1)
