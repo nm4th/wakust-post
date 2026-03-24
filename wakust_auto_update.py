@@ -555,7 +555,9 @@ def fetch_next_date_from_schedule(schedule_url):
                 if not m:
                     continue
                 info = td.get_text(" ", strip=True)
-                if "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                if "お休み" in info or "未定" in info:
+                    continue
+                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
                     continue
                 month, day = int(m.group(1)), int(m.group(2))
                 d = datetime(current_year, month, day)
@@ -572,7 +574,9 @@ def fetch_next_date_from_schedule(schedule_url):
             if headers and cells:
                 for header, cell in zip(headers, cells):
                     info = cell.get_text(strip=True)
-                    if not info or "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                    if not info or "お休み" in info or "未定" in info:
+                        continue
+                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
                         continue
                     # 「3月5日」または「3/5(木)」形式どちらも対応
                     m = re.search(r"(\d+)月\s*(\d+)日", header.get_text())
@@ -604,7 +608,9 @@ def fetch_next_date_from_schedule(schedule_url):
                             if d < start_date:
                                 continue
                             info = info_cells[i].get_text(" ", strip=True) if i < len(info_cells) else ""
-                            if "未定" in info or "お休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                            if "未定" in info or "お休み" in info:
+                                continue
+                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
                                 continue
                             candidates.append((d, f"{month}/{day}"))
 
@@ -640,7 +646,9 @@ def fetch_next_date_from_schedule(schedule_url):
                 d = datetime(current_year, month, day)
                 if d < start_date:
                     continue
-                if re.search(r"\d{2}:\d{2}", info_text) and "お休み" not in info_text:
+                if "お休み" in info_text or "未定" in info_text:
+                    continue
+                if re.search(r"\d{2}:\d{2}", info_text) or "満枠" in info_text:
                     candidates.append((d, f"{month}/{day}"))
             if candidates:
                 break
@@ -660,7 +668,9 @@ def fetch_next_date_from_schedule(schedule_url):
                 # day_p の次の p が出勤情報
                 info_p = day_p.find_next_sibling("p")
                 info = info_p.get_text(strip=True) if info_p else ""
-                if "休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                if "休み" in info or "未定" in info:
+                    continue
+                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
                     continue
                 month, day = int(m.group(1)), int(m.group(2))
                 d = datetime(current_year, month, day)
@@ -679,7 +689,9 @@ def fetch_next_date_from_schedule(schedule_url):
             dds = sch_work.find_all("dd")
             for dt, dd in zip(dts, dds):
                 info = dd.get_text(strip=True)
-                if "休み" in info or not re.search(r"\d{2}:\d{2}", info):
+                if "休み" in info or "未定" in info:
+                    continue
+                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
                     continue
                 m = re.search(r"(\d{1,2})/(\d{1,2})", dt.get_text())
                 if not m:
@@ -704,7 +716,9 @@ def fetch_next_date_from_schedule(schedule_url):
                     continue
                 if i < len(sche_divs):
                     info = sche_divs[i].get_text(" ", strip=True)
-                    if "未定" in info or not re.search(r"\d{2}:\d{2}", info):
+                    if "未定" in info or "お休み" in info:
+                        continue
+                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
                         continue
                 candidates.append((d, f"{month}/{day}"))
 
