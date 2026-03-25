@@ -97,6 +97,9 @@ else:
     _jst_hour = datetime.now(JST).hour
     MIDNIGHT_RUN = _jst_hour >= 22 or _jst_hour < 6
 
+# CALENDAR_ONLY: まとめ記事（出勤カレンダー）のみ更新
+CALENDAR_ONLY = os.environ.get("CALENDAR_ONLY", "0") == "1"
+
 
 # ============================================================
 # 定数
@@ -115,6 +118,13 @@ RELATED_NEXT_BLOCK_START  = "<!-- related_next_posts_start -->"
 RELATED_NEXT_BLOCK_END    = "<!-- related_next_posts_end -->"
 UPDATED_DATE_START        = "<!-- updated_date_start -->"
 UPDATED_DATE_END          = "<!-- updated_date_end -->"
+CALENDAR_BLOCK_START      = "<!-- calendar_block_start -->"
+CALENDAR_BLOCK_END        = "<!-- calendar_block_end -->"
+
+# まとめ記事（出勤カレンダー）: タイトル更新・再投稿をスキップ
+SUMMARY_POST_ID           = "1656151"
+# まとめ記事に掲載するカテゴリ
+SUMMARY_CATEGORIES        = {"東京都", "池袋", "新宿"}
 
 
 
@@ -1069,6 +1079,209 @@ def inject_related_html(original_html, related_html):
 
 
 # ============================================================
+# まとめ記事: 出勤カレンダーHTML生成
+# ============================================================
+def build_calendar_html(all_post_infos):
+    """東京都/池袋/新宿の記事を日付別にまとめた出勤カレンダーHTMLを生成する。"""
+    from datetime import datetime as _dt
+
+    # 対象カテゴリの記事を抽出
+    target = [
+        info for info in all_post_infos
+        if info["post"].get("category") in SUMMARY_CATEGORIES
+        and info["post"]["id"] != SUMMARY_POST_ID
+    ]
+
+    if not target:
+        return ""
+
+    # 日付→記事リストのマッピングを構築
+    date_map = defaultdict(list)  # {"3/26": [info, ...], ...}
+    for info in target:
+        next_date = info.get("next_date")
+        if not next_date:
+            continue
+        # "3/13,14|4/4" → ["3/13", "3/14", "4/4"]
+        dates = []
+        for part in next_date.split("|"):
+            items = part.split(",")
+            if "/" in items[0]:
+                month = items[0].split("/")[0]
+                dates.append(items[0])
+                for d in items[1:]:
+                    dates.append(f"{month}/{d}")
+            else:
+                dates.extend(items)
+        for d in dates:
+            date_map[d].append(info)
+
+    if not date_map:
+        # 日付なし記事のみの場合
+        pass
+
+    # 日付をソート（月/日の数値順）
+    def _date_sort_key(d):
+        parts = d.split("/")
+        return (int(parts[0]), int(parts[1]))
+
+    sorted_dates = sorted(date_map.keys(), key=_date_sort_key)
+
+    # 曜日取得用
+    now = datetime.now(JST)
+    year = now.year
+
+    def _get_weekday(date_str):
+        m, d = date_str.split("/")
+        try:
+            dt = _dt(year, int(m), int(d))
+            return ["月", "火", "水", "木", "金", "土", "日"][dt.weekday()]
+        except ValueError:
+            return ""
+
+    def _parse_title_short(title):
+        """タイトルからメイン名前部分を抽出"""
+        main = re.sub(r"【[^】]*】", "", title).strip()
+        return main
+
+    # カレンダーHTML構築
+    inner = ""
+    for date_str in sorted_dates:
+        infos = date_map[date_str]
+        weekday = _get_weekday(date_str)
+        # 日付ヘッダー
+        wd_color = "#e85d75" if weekday in ("土", "日") else "#6db3f2"
+        inner += (
+            f'<div style="margin-bottom:12px">'
+            f'<div style="background:#2d2d2d;padding:8px 12px;border-radius:6px 6px 0 0;'
+            f'border:1px solid #444;border-bottom:none">'
+            f'<span style="font-size:15px;font-weight:bold;color:#fff">'
+            f'📅 {date_str}（<span style="color:{wd_color}">{weekday}</span>）'
+            f'</span>'
+            f'</div>'
+        )
+        # 記事カード
+        for info in sorted(infos, key=lambda x: x["post"].get("sales_count") or 0, reverse=True):
+            title = info["new_title"] or info["post"]["title"]
+            url = info["post"]["url"]
+            category = info["post"].get("category", "")
+            schedule, area, cup, main = _parse_title_badges_calendar(title)
+            badge_html = ""
+            if area:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
+                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'{area}</span>'
+                )
+            elif category:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
+                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'{category}</span>'
+                )
+            if cup:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#e85d75;color:#fff;'
+                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'{cup}</span>'
+                )
+            post_tags = info.get("tags", [])
+            if post_tags:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#d48806;color:#fff;'
+                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'{" | ".join(post_tags)}</span>'
+                )
+            inner += (
+                f'<div style="border:1px solid #444;border-top:none;padding:8px 12px;'
+                f'background:#1a1a1a">'
+            )
+            if badge_html:
+                inner += f'<div style="margin-bottom:4px">{badge_html}</div>'
+            inner += (
+                f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
+                f'font-size:13px;line-height:1.4">{main}</a>'
+                f'</div>'
+            )
+        inner += '</div>\n'
+
+    # 日付なしの記事（出勤日不明）
+    no_date = [
+        info for info in target
+        if not info.get("next_date")
+    ]
+    if no_date:
+        inner += (
+            f'<div style="margin-top:16px;margin-bottom:12px">'
+            f'<p style="margin-bottom:8px"><strong>📋 出勤日未定</strong></p>'
+        )
+        for info in sorted(no_date, key=lambda x: x["post"].get("sales_count") or 0, reverse=True):
+            title = info["new_title"] or info["post"]["title"]
+            url = info["post"]["url"]
+            main = _parse_title_short(title)
+            category = info["post"].get("category", "")
+            inner += (
+                f'<div style="border:1px solid #444;border-radius:6px;padding:8px 12px;'
+                f'margin-bottom:6px;background:#1a1a1a">'
+                f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
+                f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;margin-bottom:4px">'
+                f'{category}</span>'
+                f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
+                f'font-size:13px;line-height:1.4">{main}</a>'
+                f'</div>'
+            )
+        inner += '</div>\n'
+
+    now_str = f"{now.month}月{now.day}日更新"
+    html = (
+        f'{CALENDAR_BLOCK_START}\n'
+        f'<p><strong>{now_str}</strong></p><br/>'
+        f'<p style="font-size:16px;font-weight:bold;margin-bottom:12px">'
+        f'🗓️ 東京エリア 出勤カレンダー</p>\n'
+        f'{inner}'
+        f'{CALENDAR_BLOCK_END}\n'
+    )
+    return html
+
+
+def _parse_title_badges_calendar(title):
+    """タイトルから【】バッジ部分とメイン見出しを分離する（カレンダー用）"""
+    brackets = re.findall(r"【([^】]+)】", title)
+    schedule = ""
+    area = ""
+    cup = ""
+    for b in brackets:
+        if re.search(r"[A-Z]カップ", b):
+            cup = re.search(r"[A-Z]カップ", b).group()
+        elif "出勤" in b:
+            schedule = b
+        else:
+            area = b
+    main = re.sub(r"【[^】]*】", "", title).strip()
+    return schedule, area, cup, main
+
+
+def inject_calendar_html(original_html, calendar_html):
+    """まとめ記事のedit_text_1にカレンダーHTMLを注入する。"""
+    # 既存カレンダーブロックを除去
+    if CALENDAR_BLOCK_START in original_html:
+        original_html = re.sub(
+            rf"{re.escape(CALENDAR_BLOCK_START)}.*?{re.escape(CALENDAR_BLOCK_END)}\s*",
+            "",
+            original_html,
+            flags=re.DOTALL,
+        )
+    # 既存の回遊リストも除去（まとめ記事では使わない）
+    if RELATED_BLOCK_START in original_html:
+        original_html = re.sub(
+            rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}\s*",
+            "",
+            original_html,
+            flags=re.DOTALL,
+        )
+    return original_html.rstrip() + "\n" + calendar_html
+
+
+# ============================================================
 # 更新日の注入
 # ============================================================
 def inject_updated_date(html):
@@ -1151,6 +1364,121 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 
     log.error(f"    ❌ 更新失敗 (status: {res.status_code})")
     return False
+
+
+# ============================================================
+# カレンダーのみ更新モード
+# ============================================================
+def run_calendar_only():
+    """まとめ記事（出勤カレンダー）だけを更新する。"""
+    log.info(f"\n{'='*55}")
+    log.info(f"📅 カレンダーのみ更新 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    session = login_wakust()
+    if not session:
+        return
+
+    posts = fetch_post_list(session)
+    if not posts:
+        log.warning("⚠️  記事が見つかりませんでした")
+        session.close()
+        return
+
+    # まとめ記事が存在するか確認
+    summary_post = None
+    for post in posts:
+        if post["id"] == SUMMARY_POST_ID:
+            summary_post = post
+            break
+
+    if not summary_post:
+        log.warning(f"⚠️  まとめ記事 [{SUMMARY_POST_ID}] が見つかりません")
+        session.close()
+        return
+
+    # 対象カテゴリの記事情報を収集
+    post_infos = []
+    for post in posts:
+        if post.get("is_reserved"):
+            continue
+        cat_known = False
+        try:
+            details = fetch_post_details(session, post)
+        except Exception as e:
+            log.error(f"    ❌ [{post['id']}] 記事詳細取得失敗: {e}")
+            continue
+        post["category"] = details["category"]
+
+        # まとめ記事自体は情報収集だけ
+        if post["id"] == SUMMARY_POST_ID:
+            summary_details = details
+            continue
+
+        # 対象カテゴリ以外はスキップ（情報収集不要）
+        if post.get("category") not in SUMMARY_CATEGORIES:
+            log.info(f"    ⏭️  [{post['id']}] カテゴリ「{post.get('category')}」: 対象外")
+            continue
+
+        log.info(f"\n📄 [{post['id']}] {post['title']} ({post.get('category')})")
+
+        tags = fetch_post_tags(session, post["url"])
+
+        dates, is_tomorrow, is_today = (None, False, False)
+        if details["schedule_url"]:
+            log.info(f"    🔗 {details['schedule_url']}")
+            dates_list, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+            if dates_list:
+                dates = ",".join(dates_list)
+                log.info(f"    📅 直近の出勤日: {dates}")
+
+        new_title = post["title"]
+        if dates:
+            dates_list_raw = []
+            for part in dates.split(","):
+                dates_list_raw.append(part)
+            new_title = build_new_title(post["title"], dates_list_raw)
+
+        post_infos.append({
+            "post":      post,
+            "details":   details,
+            "next_date": dates,
+            "is_tomorrow":  is_tomorrow,
+            "is_today":    is_today,
+            "new_title": new_title,
+            "tags":      tags,
+        })
+        time.sleep(1)
+
+    # カレンダーHTML生成＆注入
+    calendar_html = build_calendar_html(post_infos)
+    if not calendar_html:
+        log.warning("⚠️  カレンダーに掲載する記事がありません")
+        session.close()
+        return
+
+    log.info(f"\n📝 [{SUMMARY_POST_ID}] まとめ記事: 出勤カレンダー更新")
+    payload = dict(summary_details["payload"])
+    payload["edit_title"] = summary_post["title"]
+    if "edit_text_1" in payload:
+        text = payload["edit_text_1"]
+        for _round in range(5):
+            decoded = html_module.unescape(text)
+            if decoded == text:
+                break
+            text = decoded
+        payload["edit_text_1"] = text
+        payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
+    payload.pop(REPOST_FIELD, None)
+
+    res = session.post(EDIT_FORM_ACTION, data=payload)
+    if res.status_code == 200:
+        log.info(f"    ✅ まとめ記事更新完了")
+    else:
+        log.warning(f"    ⚠️  まとめ記事更新失敗 (HTTP {res.status_code})")
+
+    session.close()
+    log.info(f"\n✅ カレンダー更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
 
 # ============================================================
@@ -1259,11 +1587,12 @@ def run_update():
             posts_by_category[info["post"]["category"]].append(info)
 
         for category, infos in posts_by_category.items():
-            # 再投稿の基本条件: 上限未達 & 有料セクションURL由来
+            # 再投稿の基本条件: 上限未達 & 有料セクションURL由来 & まとめ記事でない
             eligible = [i for i in infos
                         if not i["details"].get("at_limit", False)
                         and not i["details"].get("schedule_from_free", False)
-                        and i["next_date"] is not None]
+                        and i["next_date"] is not None
+                        and i["post"]["id"] != SUMMARY_POST_ID]
 
             if not eligible:
                 continue
@@ -1310,6 +1639,8 @@ def run_update():
     log.info("🚀 更新処理開始（全記事更新＋再投稿）")
     log.info(f"{'─'*55}")
 
+    all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
+
     for info in post_infos:
         post_id       = info["post"]["id"]
         new_title     = info["new_title"]
@@ -1318,8 +1649,44 @@ def run_update():
         title_changed = (new_title != info["post"]["title"])
         date_changed  = (post_state.get("dates") != info["next_date"])
         # 更新記事の顔ぶれが変わっていたら回遊リストも更新が必要
-        all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
         related_changed = post_state.get("all_ids") != all_ids_str
+
+        # ── まとめ記事: タイトル更新・再投稿スキップ、カレンダーのみ注入 ──
+        if post_id == SUMMARY_POST_ID:
+            calendar_html = build_calendar_html(post_infos)
+            if not calendar_html and not related_changed:
+                log.info(f"\n    ℹ️  [{post_id}] まとめ記事: 変化なし。スキップ")
+                continue
+            log.info(f"\n📝 [{post_id}] まとめ記事: 出勤カレンダー更新")
+            payload = dict(info["details"]["payload"])
+            # タイトルはそのまま維持
+            payload["edit_title"] = info["post"]["title"]
+            if "edit_text_1" in payload:
+                text = payload["edit_text_1"]
+                for _round in range(5):
+                    decoded = html_module.unescape(text)
+                    if decoded == text:
+                        break
+                    text = decoded
+                payload["edit_text_1"] = text
+                payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
+            # 再投稿しない
+            payload.pop(REPOST_FIELD, None)
+            res = session.post(EDIT_FORM_ACTION, data=payload)
+            if res.status_code == 200:
+                log.info(f"    ✅ まとめ記事更新完了")
+                state[post_id] = {
+                    "dates":       None,
+                    "title":       info["post"]["title"],
+                    "reposted":   False,
+                    "all_ids":    all_ids_str,
+                    "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                save_state(state)
+            else:
+                log.warning(f"    ⚠️  まとめ記事更新失敗 (HTTP {res.status_code})")
+            time.sleep(2)
+            continue
 
         # 0時モード: ラベル切替が未実施なら常に更新
         midnight_needs_swap = MIDNIGHT_RUN and post_state.get("labels_swapped_date") != jst_strftime("%Y-%m-%d")
@@ -1360,7 +1727,11 @@ def run_update():
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
-    mode = "0時モード（回遊ラベル切替・再投稿なし）" if MIDNIGHT_RUN else "16時モード（通常）"
-    log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
-    log.info(f"   MIDNIGHT_RUN={os.environ.get('MIDNIGHT_RUN', '(未設定)')}")
-    run_update()
+    if CALENDAR_ONLY:
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
+        run_calendar_only()
+    else:
+        mode = "0時モード（回遊ラベル切替・再投稿なし）" if MIDNIGHT_RUN else "16時モード（通常）"
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
+        log.info(f"   MIDNIGHT_RUN={os.environ.get('MIDNIGHT_RUN', '(未設定)')}")
+        run_update()
