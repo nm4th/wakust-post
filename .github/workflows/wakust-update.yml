@@ -12,6 +12,10 @@ on:
         description: '0時モードで実行する'
         type: boolean
         default: false
+      calendar_only:
+        description: 'カレンダーのみ更新する'
+        type: boolean
+        default: false
 
 jobs:
   update:
@@ -37,6 +41,7 @@ jobs:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
           MIDNIGHT_RUN: ${{ (github.event.schedule == '0 15 * * *' || inputs.midnight_mode == true) && '1' || '0' }}
+          CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
         run: python wakust_auto_update.py
 
       - name: Upload logs
