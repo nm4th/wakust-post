@@ -999,13 +999,13 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
                     f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
                     f'{cup}</span>'
                 )
-            # アルファベットタグバッジ（例: CKB|F|HR）を1つにまとめて表示
+            # アルファベットタグバッジ（例: CK | F | HR）を1つにまとめて表示
             post_tags = info.get("tags", [])
             if post_tags:
                 badge_html += (
                     f'<span style="display:inline-block;background:#d48806;color:#fff;'
                     f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{"|".join(post_tags)}</span>'
+                    f'{" | ".join(post_tags)}</span>'
                 )
             cards += (
                 f'<div style="border:1px solid #333;border-radius:8px;padding:10px 12px;'
