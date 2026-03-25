@@ -686,6 +686,39 @@ def fetch_next_date_from_schedule(schedule_url):
                         if d >= start_date:
                             candidates.append((d, f"{month}/{day}"))
 
+            # 形式A2: th=日付(1行目), td=店舗名(2行目)+時刻(3行目)の複数行構造
+            # （kichijoji-igokochi等: th7個, td14個のように行をまたいで情報が分かれる）
+            if not candidates and headers and cells:
+                rows = table.find_all("tr")
+                if len(rows) >= 3:
+                    th_row = [r for r in rows if r.find("th")]
+                    td_rows = [r for r in rows if r.find("td") and not r.find("th")]
+                    if th_row and len(td_rows) >= 2:
+                        date_ths = th_row[0].find_all("th")
+                        num_cols = len(date_ths)
+                        # 各列の全tdテキストを結合
+                        col_infos = [""] * num_cols
+                        for td_row in td_rows:
+                            tds_in_row = td_row.find_all("td")
+                            for ci, td in enumerate(tds_in_row):
+                                if ci < num_cols:
+                                    col_infos[ci] += " " + td.get_text(" ", strip=True)
+                        for ci, th in enumerate(date_ths):
+                            m = re.search(r"(\d{1,2})/(\d{1,2})", th.get_text())
+                            if not m:
+                                continue
+                            info = col_infos[ci]
+                            if "お休み" in info or "未定" in info:
+                                continue
+                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                                continue
+                            month, day = int(m.group(1)), int(m.group(2))
+                            d = datetime(current_year, month, day)
+                            if d >= start_date:
+                                candidates.append((d, f"{month}/{day}"))
+                        if candidates:
+                            log.info(f"    📅 形式A2(th日付+td複数行)でマッチ")
+
             # 形式B: 1行目tdが日付、2行目tdが出勤情報（tennesu等）
             # ※各行に複数列ある場合のみ（namexspaのような縦1列テーブルと区別）
             if not candidates:
