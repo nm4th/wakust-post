@@ -1109,7 +1109,11 @@ def build_calendar_html(all_post_infos):
                 month = items[0].split("/")[0]
                 dates.append(items[0])
                 for d in items[1:]:
-                    dates.append(f"{month}/{d}")
+                    # "3/27"のようにフル形式ならそのまま、"27"なら月を補完
+                    if "/" in d:
+                        dates.append(d)
+                    else:
+                        dates.append(f"{month}/{d}")
             else:
                 dates.extend(items)
         for d in dates:
