@@ -1028,6 +1028,11 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     if group1:
         inner += _build_card_list(group1, label1)
 
+    if group1 and group2:
+        inner += (
+            '<hr style="border:none;border-top:1px solid #555;margin:12px 0"/>\n'
+        )
+
     if group2:
         inner += _build_card_list(group2, label2)
 
