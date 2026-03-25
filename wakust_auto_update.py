@@ -897,17 +897,20 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
 
     カテゴリ回遊ルール:
       - 神奈川県: 神奈川県内のみで回遊
+      - 埼玉県: 埼玉県内のみで回遊
+      - 多摩: 多摩内のみで回遊
       - 東京都/池袋/新宿: 互いに回遊OK
     """
     others = [p for p in all_post_infos if p["post"]["id"] != current_post_id]
 
     # カテゴリ別回遊フィルタリング
-    # 神奈川県: 神奈川県同士のみ / それ以外: 神奈川県以外すべてで回遊
+    # 神奈川県/埼玉県: 同県同士のみ / それ以外: 神奈川県・埼玉県以外すべてで回遊
+    LOCAL_ONLY_CATEGORIES = {"神奈川県", "埼玉県", "多摩"}
     if current_category:
-        if current_category == "神奈川県":
-            others = [p for p in others if p["post"].get("category") == "神奈川県"]
+        if current_category in LOCAL_ONLY_CATEGORIES:
+            others = [p for p in others if p["post"].get("category") == current_category]
         else:
-            others = [p for p in others if p["post"].get("category") != "神奈川県"]
+            others = [p for p in others if p["post"].get("category") not in LOCAL_ONLY_CATEGORIES]
 
     from datetime import datetime
     today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
@@ -1122,10 +1125,11 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
             all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
             # ログもカテゴリ回遊ルールに合わせてフィルタ
             cur_cat = post.get("category")
-            if cur_cat == "神奈川県":
-                all_others = [p for p in all_others if p["post"].get("category") == "神奈川県"]
+            LOCAL_ONLY = {"神奈川県", "埼玉県", "多摩"}
+            if cur_cat in LOCAL_ONLY:
+                all_others = [p for p in all_others if p["post"].get("category") == cur_cat]
             else:
-                all_others = [p for p in all_others if p["post"].get("category") != "神奈川県"]
+                all_others = [p for p in all_others if p["post"].get("category") not in LOCAL_ONLY]
             tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
             future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
             if all_others:
