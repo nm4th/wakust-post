@@ -122,9 +122,18 @@ CALENDAR_BLOCK_START      = "<!-- calendar_block_start -->"
 CALENDAR_BLOCK_END        = "<!-- calendar_block_end -->"
 
 # まとめ記事（出勤カレンダー）: タイトル更新・再投稿をスキップ
-SUMMARY_POST_ID           = "1656151"
-# まとめ記事に掲載するカテゴリ
-SUMMARY_CATEGORIES        = {"東京都", "池袋", "新宿"}
+# {post_id: {"categories": set, "area_label": str}}
+SUMMARY_POSTS = {
+    "1656151": {"categories": {"東京都", "池袋", "新宿"}, "area_label": "東京エリア"},
+    "1656586": {"categories": {"多摩"},                   "area_label": "多摩エリア"},
+    "1656589": {"categories": {"神奈川県"},               "area_label": "神奈川エリア"},
+    "1656592": {"categories": {"埼玉県"},                 "area_label": "埼玉エリア"},
+}
+SUMMARY_POST_IDS = set(SUMMARY_POSTS.keys())
+# 全まとめ記事の対象カテゴリ（情報収集用）
+SUMMARY_ALL_CATEGORIES = set()
+for _sp in SUMMARY_POSTS.values():
+    SUMMARY_ALL_CATEGORIES |= _sp["categories"]
 
 
 
@@ -1148,15 +1157,21 @@ def inject_related_html(original_html, related_html):
 # ============================================================
 # まとめ記事: 出勤カレンダーHTML生成
 # ============================================================
-def build_calendar_html(all_post_infos):
-    """東京都/池袋/新宿の記事を日付別にまとめた出勤カレンダーHTMLを生成する。"""
+def build_calendar_html(all_post_infos, summary_post_id=None):
+    """指定まとめ記事の対象カテゴリの記事を日付別にまとめた出勤カレンダーHTMLを生成する。"""
     from datetime import datetime as _dt
+
+    if summary_post_id is None:
+        summary_post_id = list(SUMMARY_POSTS.keys())[0]
+    sp_config = SUMMARY_POSTS[summary_post_id]
+    target_categories = sp_config["categories"]
+    area_label = sp_config["area_label"]
 
     # 対象カテゴリの記事を抽出
     target = [
         info for info in all_post_infos
-        if info["post"].get("category") in SUMMARY_CATEGORIES
-        and info["post"]["id"] != SUMMARY_POST_ID
+        if info["post"].get("category") in target_categories
+        and info["post"]["id"] not in SUMMARY_POST_IDS
     ]
 
     if not target:
@@ -1322,7 +1337,7 @@ def build_calendar_html(all_post_infos):
         f'<div style="background:linear-gradient(135deg,#6c5ce7,#a29bfe);padding:14px 16px;'
         f'border-radius:12px;margin-bottom:16px;text-align:center">'
         f'<p style="font-size:18px;font-weight:bold;color:#fff;margin:0;text-shadow:0 1px 3px rgba(0,0,0,0.2)">'
-        f'🗓️ 東京エリア 出勤カレンダー</p>'
+        f'🗓️ {area_label} 出勤カレンダー</p>'
         f'<p style="font-size:12px;color:rgba(255,255,255,0.8);margin:4px 0 0">'
         f'{now_str}</p>'
         f'</div>\n'
@@ -1459,7 +1474,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 # カレンダーのみ更新モード
 # ============================================================
 def run_calendar_only():
-    """まとめ記事（出勤カレンダー）だけを更新する。"""
+    """全まとめ記事（出勤カレンダー）を更新する。"""
     log.info(f"\n{'='*55}")
     log.info(f"📅 カレンダーのみ更新 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
@@ -1475,14 +1490,17 @@ def run_calendar_only():
         return
 
     # まとめ記事が存在するか確認
-    summary_post = None
+    summary_posts_found = {}  # {post_id: post}
+    summary_details_map = {}  # {post_id: details}
     for post in posts:
-        if post["id"] == SUMMARY_POST_ID:
-            summary_post = post
-            break
+        if post["id"] in SUMMARY_POST_IDS:
+            summary_posts_found[post["id"]] = post
 
-    if not summary_post:
-        log.warning(f"⚠️  まとめ記事 [{SUMMARY_POST_ID}] が見つかりません")
+    missing = SUMMARY_POST_IDS - set(summary_posts_found.keys())
+    if missing:
+        log.warning(f"⚠️  まとめ記事が見つかりません: {missing}")
+
+    if not summary_posts_found:
         session.close()
         return
 
@@ -1491,7 +1509,6 @@ def run_calendar_only():
     for post in posts:
         if post.get("is_reserved"):
             continue
-        cat_known = False
         try:
             details = fetch_post_details(session, post)
         except Exception as e:
@@ -1499,13 +1516,13 @@ def run_calendar_only():
             continue
         post["category"] = details["category"]
 
-        # まとめ記事自体は情報収集だけ
-        if post["id"] == SUMMARY_POST_ID:
-            summary_details = details
+        # まとめ記事自体は詳細だけ保存
+        if post["id"] in SUMMARY_POST_IDS:
+            summary_details_map[post["id"]] = details
             continue
 
-        # 対象カテゴリ以外はスキップ（情報収集不要）
-        if post.get("category") not in SUMMARY_CATEGORIES:
+        # 対象カテゴリ以外はスキップ
+        if post.get("category") not in SUMMARY_ALL_CATEGORIES:
             log.info(f"    ⏭️  [{post['id']}] カテゴリ「{post.get('category')}」: 対象外")
             continue
 
@@ -1539,32 +1556,39 @@ def run_calendar_only():
         })
         time.sleep(1)
 
-    # カレンダーHTML生成＆注入
-    calendar_html = build_calendar_html(post_infos)
-    if not calendar_html:
-        log.warning("⚠️  カレンダーに掲載する記事がありません")
-        session.close()
-        return
+    # 各まとめ記事ごとにカレンダーHTML生成＆注入
+    for sp_id, sp_post in summary_posts_found.items():
+        if sp_id not in summary_details_map:
+            log.warning(f"⚠️  [{sp_id}] まとめ記事の詳細取得できず。スキップ")
+            continue
 
-    log.info(f"\n📝 [{SUMMARY_POST_ID}] まとめ記事: 出勤カレンダー更新")
-    payload = dict(summary_details["payload"])
-    payload["edit_title"] = summary_post["title"]
-    if "edit_text_1" in payload:
-        text = payload["edit_text_1"]
-        for _round in range(5):
-            decoded = html_module.unescape(text)
-            if decoded == text:
-                break
-            text = decoded
-        payload["edit_text_1"] = text
-        payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
-    payload.pop(REPOST_FIELD, None)
+        area_label = SUMMARY_POSTS[sp_id]["area_label"]
+        calendar_html = build_calendar_html(post_infos, summary_post_id=sp_id)
+        if not calendar_html:
+            log.warning(f"⚠️  [{sp_id}] {area_label}: カレンダーに掲載する記事なし")
+            continue
 
-    res = session.post(EDIT_FORM_ACTION, data=payload)
-    if res.status_code == 200:
-        log.info(f"    ✅ まとめ記事更新完了")
-    else:
-        log.warning(f"    ⚠️  まとめ記事更新失敗 (HTTP {res.status_code})")
+        log.info(f"\n📝 [{sp_id}] {area_label} まとめ記事: 出勤カレンダー更新")
+        sp_details = summary_details_map[sp_id]
+        payload = dict(sp_details["payload"])
+        payload["edit_title"] = sp_post["title"]
+        if "edit_text_1" in payload:
+            text = payload["edit_text_1"]
+            for _round in range(5):
+                decoded = html_module.unescape(text)
+                if decoded == text:
+                    break
+                text = decoded
+            payload["edit_text_1"] = text
+            payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
+        payload.pop(REPOST_FIELD, None)
+
+        res = session.post(EDIT_FORM_ACTION, data=payload)
+        if res.status_code == 200:
+            log.info(f"    ✅ {area_label} まとめ記事更新完了")
+        else:
+            log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
+        time.sleep(2)
 
     session.close()
     log.info(f"\n✅ カレンダー更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
@@ -1681,7 +1705,7 @@ def run_update():
                         if not i["details"].get("at_limit", False)
                         and not i["details"].get("schedule_from_free", False)
                         and i["next_date"] is not None
-                        and i["post"]["id"] != SUMMARY_POST_ID]
+                        and i["post"]["id"] not in SUMMARY_POST_IDS]
 
             if not eligible:
                 continue
@@ -1741,12 +1765,17 @@ def run_update():
         related_changed = post_state.get("all_ids") != all_ids_str
 
         # ── まとめ記事: タイトル更新・再投稿スキップ、カレンダーのみ注入 ──
-        if post_id == SUMMARY_POST_ID:
-            calendar_html = build_calendar_html(post_infos)
+        # 0時モードではカレンダー更新しない
+        if post_id in SUMMARY_POST_IDS and MIDNIGHT_RUN:
+            log.info(f"    ⏭️  0時モード: カレンダー更新スキップ")
+            continue
+        if post_id in SUMMARY_POST_IDS:
+            area_label = SUMMARY_POSTS[post_id]["area_label"]
+            calendar_html = build_calendar_html(post_infos, summary_post_id=post_id)
             if not calendar_html and not related_changed:
-                log.info(f"\n    ℹ️  [{post_id}] まとめ記事: 変化なし。スキップ")
+                log.info(f"\n    ℹ️  [{post_id}] {area_label} まとめ記事: 変化なし。スキップ")
                 continue
-            log.info(f"\n📝 [{post_id}] まとめ記事: 出勤カレンダー更新")
+            log.info(f"\n📝 [{post_id}] {area_label} まとめ記事: 出勤カレンダー更新")
             payload = dict(info["details"]["payload"])
             # タイトルはそのまま維持
             payload["edit_title"] = info["post"]["title"]
@@ -1763,7 +1792,7 @@ def run_update():
             payload.pop(REPOST_FIELD, None)
             res = session.post(EDIT_FORM_ACTION, data=payload)
             if res.status_code == 200:
-                log.info(f"    ✅ まとめ記事更新完了")
+                log.info(f"    ✅ {area_label} まとめ記事更新完了")
                 state[post_id] = {
                     "dates":       None,
                     "title":       info["post"]["title"],
@@ -1773,7 +1802,7 @@ def run_update():
                 }
                 save_state(state)
             else:
-                log.warning(f"    ⚠️  まとめ記事更新失敗 (HTTP {res.status_code})")
+                log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
             time.sleep(2)
             continue
 
