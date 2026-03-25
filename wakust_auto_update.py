@@ -553,25 +553,68 @@ def fetch_post_tags(session, post_url):
 
 
 # ============================================================
+# Playwrightでページ取得（403対策・JSレンダリング対策）
+# ============================================================
+def _fetch_with_playwright(url):
+    """Playwrightでヘッドレスブラウザ経由でページを取得する。成功時はBeautifulSoupオブジェクトを返す。"""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                locale="ja-JP",
+            )
+            page = context.new_page()
+            response = page.goto(url, wait_until="networkidle", timeout=20000)
+            if response and response.status == 403:
+                browser.close()
+                log.warning(f"    ⚠️ Playwrightでも403: {url}")
+                return None
+            js_html = page.content()
+            browser.close()
+        soup = BeautifulSoup(js_html, "html.parser")
+        # 403ページかどうか本文でも確認
+        title = soup.find("title")
+        if title and "403" in title.get_text():
+            log.warning(f"    ⚠️ Playwrightでも403(本文): {url}")
+            return None
+        log.info(f"    🔧 Playwrightで取得成功")
+        return soup
+    except Exception as e:
+        log.warning(f"    ⚠️ Playwrightフォールバック失敗: {e}")
+        return None
+
+
+# ============================================================
 # スケジュールページから直近の出勤日を取得
 # ============================================================
 def fetch_next_date_from_schedule(schedule_url):
     try:
         res = requests.get(schedule_url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+            "Referer": schedule_url,
         }, timeout=10)
-        if res.status_code != 200:
+        if res.status_code == 403:
+            log.info(f"    🔧 HTTP 403 → Playwrightで再取得を試行")
+            soup = _fetch_with_playwright(schedule_url)
+            if soup is None:
+                return [], False, False
+        elif res.status_code != 200:
             log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
             return [], False, False
-        # content-typeのcharsetを優先（apparent_encodingは誤判定があるため）
-        if res.encoding is None or res.encoding == "ISO-8859-1":
-            ctype = res.headers.get("content-type", "")
-            m_charset = re.search(r"charset=([^\s;]+)", ctype, re.I)
-            if m_charset:
-                res.encoding = m_charset.group(1)
-            else:
-                res.encoding = "utf-8"
-        soup = BeautifulSoup(res.text, "html.parser")
+        else:
+            # content-typeのcharsetを優先（apparent_encodingは誤判定があるため）
+            if res.encoding is None or res.encoding == "ISO-8859-1":
+                ctype = res.headers.get("content-type", "")
+                m_charset = re.search(r"charset=([^\s;]+)", ctype, re.I)
+                if m_charset:
+                    res.encoding = m_charset.group(1)
+                else:
+                    res.encoding = "utf-8"
+            soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
         log.error(f"    ❌ スケジュール取得失敗: {e}")
         return [], False, False
@@ -580,18 +623,9 @@ def fetch_next_date_from_schedule(schedule_url):
     # → Playwrightでヘッドレスブラウザ経由で再取得
     if (soup.find(class_=re.compile(r"weekSchedule", re.I)) and
             not soup.find("table")):
-        try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                page.goto(schedule_url, wait_until="networkidle", timeout=20000)
-                js_html = page.content()
-                browser.close()
-            soup = BeautifulSoup(js_html, "html.parser")
-            log.info(f"    🔧 JSレンダリングでHTML再取得成功")
-        except Exception as e:
-            log.warning(f"    ⚠️ Playwrightフォールバック失敗: {e}")
+        pw_soup = _fetch_with_playwright(schedule_url)
+        if pw_soup:
+            soup = pw_soup
 
     today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     # 16時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
