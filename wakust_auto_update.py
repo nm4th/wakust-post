@@ -510,6 +510,39 @@ def fetch_post_details(session, post):
 
 
 # ============================================================
+# 記事公開ページからタグを取得
+# ============================================================
+def fetch_post_tags(session, post_url):
+    """記事の公開ページからアルファベットのみのタグを抽出する。
+
+    タグは「KEYWORD(NUMBER)」形式で表示されている。
+    例: CKB(127), F(1473), HR(23397), 中野(989), 巨乳(19987)
+    → アルファベットのみ: ["CKB", "F", "HR"]
+    """
+    try:
+        res = session.get(post_url)
+        if res.status_code != 200:
+            log.warning(f"    ⚠️  タグ取得失敗 (HTTP {res.status_code})")
+            return []
+        soup = BeautifulSoup(res.text, "html.parser")
+
+        tags = []
+        # ページ内のリンク・スパンからタグ形式テキストを探す
+        for el in soup.find_all(["a", "span"]):
+            text = el.get_text(strip=True)
+            m = re.match(r'^([A-Za-z]+)\(\d+\)$', text)
+            if m:
+                tags.append(m.group(1))
+
+        if tags:
+            log.info(f"    🏷️  タグ: {tags}")
+        return tags
+    except Exception as e:
+        log.warning(f"    ⚠️  タグ取得エラー: {e}")
+        return []
+
+
+# ============================================================
 # スケジュールページから直近の出勤日を取得
 # ============================================================
 def fetch_next_date_from_schedule(schedule_url):
@@ -963,8 +996,16 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
             if cup:
                 badge_html += (
                     f'<span style="display:inline-block;background:#e85d75;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px">'
+                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
                     f'{cup}</span>'
+                )
+            # アルファベットタグバッジ（例: CKB|F|HR）を1つにまとめて表示
+            post_tags = info.get("tags", [])
+            if post_tags:
+                badge_html += (
+                    f'<span style="display:inline-block;background:#d48806;color:#fff;'
+                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                    f'{"|".join(post_tags)}</span>'
                 )
             cards += (
                 f'<div style="border:1px solid #333;border-radius:8px;padding:10px 12px;'
@@ -1141,6 +1182,9 @@ def run_update():
             continue
         post["category"] = details["category"]
 
+        # 記事公開ページからアルファベットタグを取得
+        tags = fetch_post_tags(session, post["url"])
+
         if not details["schedule_url"]:
             log.warning(f"    ⚠️  スケジュールURLなし。回遊リストのみ対象")
             post_infos.append({
@@ -1150,6 +1194,7 @@ def run_update():
                 "is_tomorrow":  False,
                 "is_today":    False,
                 "new_title": post["title"],
+                "tags":      tags,
             })
             continue
 
@@ -1166,6 +1211,7 @@ def run_update():
                 "is_tomorrow":  False,
                 "is_today":    False,
                 "new_title": post["title"],  # タイトルは変えない
+                "tags":      tags,
             })
             continue
 
@@ -1180,6 +1226,7 @@ def run_update():
             "is_tomorrow":  is_tomorrow,
             "is_today":    is_today,
             "new_title": new_title,
+            "tags":      tags,
         })
         time.sleep(1)
 
