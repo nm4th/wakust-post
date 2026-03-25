@@ -132,8 +132,13 @@ SUMMARY_POSTS = {
 SUMMARY_POST_IDS = set(SUMMARY_POSTS.keys())
 # 全まとめ記事の対象カテゴリ（情報収集用）
 SUMMARY_ALL_CATEGORIES = set()
-for _sp in SUMMARY_POSTS.values():
+# カテゴリ→カレンダー記事URL のマッピング
+CATEGORY_CALENDAR_URL = {}
+for _sp_id, _sp in SUMMARY_POSTS.items():
     SUMMARY_ALL_CATEGORIES |= _sp["categories"]
+    _cal_url = f"https://wakust.com/Risingnoboru/{_sp_id}/"
+    for _cat in _sp["categories"]:
+        CATEGORY_CALENDAR_URL[_cat] = {"url": _cal_url, "label": _sp["area_label"]}
 
 
 
@@ -1239,6 +1244,19 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
 
     if group2:
         inner += _build_card_list(group2, label2)
+
+    # カテゴリに対応するカレンダー記事へのリンク
+    if current_category and current_category in CATEGORY_CALENDAR_URL:
+        cal_info = CATEGORY_CALENDAR_URL[current_category]
+        inner += (
+            '<hr style="border:none;border-top:1px solid #555;margin:12px 0"/>\n'
+            f'<div style="text-align:center;padding:8px 0">'
+            f'<a href="{cal_info["url"]}" style="display:inline-block;background:linear-gradient(135deg,#6c5ce7,#a29bfe);'
+            f'color:#fff;text-decoration:none;font-size:13px;font-weight:bold;'
+            f'padding:8px 16px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.15)">'
+            f'🗓️ {cal_info["label"]} 出勤カレンダーを見る</a>'
+            f'</div>\n'
+        )
 
     return f'\n{RELATED_BLOCK_START}\n{inner}{RELATED_BLOCK_END}\n'
 
