@@ -1219,19 +1219,24 @@ def build_calendar_html(all_post_infos):
     for date_str in sorted_dates:
         infos = date_map[date_str]
         weekday = _get_weekday(date_str)
-        # 日付ヘッダー
-        wd_color = "#e85d75" if weekday in ("土", "日") else "#6db3f2"
+        # 日付ヘッダー - 曜日で色分け
+        if weekday == "日":
+            header_bg = "linear-gradient(135deg, #ff6b6b, #ee5a24)"
+        elif weekday == "土":
+            header_bg = "linear-gradient(135deg, #74b9ff, #0984e3)"
+        else:
+            header_bg = "linear-gradient(135deg, #00b894, #00cec9)"
         inner += (
-            f'<div style="margin-bottom:12px">'
-            f'<div style="background:#2d2d2d;padding:8px 12px;border-radius:6px 6px 0 0;'
-            f'border:1px solid #444;border-bottom:none">'
-            f'<span style="font-size:15px;font-weight:bold;color:#fff">'
-            f'📅 {date_str}（<span style="color:{wd_color}">{weekday}</span>）'
+            f'<div style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
+            f'box-shadow:0 2px 8px rgba(0,0,0,0.15)">'
+            f'<div style="background:{header_bg};padding:10px 14px">'
+            f'<span style="font-size:15px;font-weight:bold;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.2)">'
+            f'📅 {date_str}（{weekday}）'
             f'</span>'
             f'</div>'
         )
         # 記事カード
-        for info in sorted(infos, key=lambda x: x["post"].get("sales_count") or 0, reverse=True):
+        for idx, info in enumerate(sorted(infos, key=lambda x: x["post"].get("sales_count") or 0, reverse=True)):
             title = info["new_title"] or info["post"]["title"]
             url = info["post"]["url"]
             category = info["post"].get("category", "")
@@ -1239,38 +1244,43 @@ def build_calendar_html(all_post_infos):
             badge_html = ""
             if area:
                 badge_html += (
-                    f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
-                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
+                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                    f'font-weight:bold;letter-spacing:0.5px">'
                     f'{area}</span>'
                 )
             elif category:
                 badge_html += (
-                    f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
-                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
+                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                    f'font-weight:bold;letter-spacing:0.5px">'
                     f'{category}</span>'
                 )
             if cup:
                 badge_html += (
-                    f'<span style="display:inline-block;background:#e85d75;color:#fff;'
-                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'<span style="display:inline-block;background:linear-gradient(135deg,#fd79a8,#e84393);color:#fff;'
+                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                    f'font-weight:bold">'
                     f'{cup}</span>'
                 )
             post_tags = info.get("tags", [])
             if post_tags:
                 badge_html += (
-                    f'<span style="display:inline-block;background:#d48806;color:#fff;'
-                    f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">'
+                    f'<span style="display:inline-block;background:linear-gradient(135deg,#fdcb6e,#e17055);color:#fff;'
+                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                    f'font-weight:bold">'
                     f'{" | ".join(post_tags)}</span>'
                 )
+            border_top = "" if idx == 0 else "border-top:1px solid rgba(255,255,255,0.08);"
             inner += (
-                f'<div style="border:1px solid #444;border-top:none;padding:8px 12px;'
-                f'background:#1a1a1a">'
+                f'<div style="{border_top}padding:10px 14px;'
+                f'background:rgba(255,255,255,0.05)">'
             )
             if badge_html:
-                inner += f'<div style="margin-bottom:4px">{badge_html}</div>'
+                inner += f'<div style="margin-bottom:5px">{badge_html}</div>'
             inner += (
-                f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
-                f'font-size:13px;line-height:1.4">{main}</a>'
+                f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
+                f'font-size:13px;line-height:1.5;font-weight:500">{main}</a>'
                 f'</div>'
             )
         inner += '</div>\n'
@@ -1282,8 +1292,11 @@ def build_calendar_html(all_post_infos):
     ]
     if no_date:
         inner += (
-            f'<div style="margin-top:16px;margin-bottom:12px">'
-            f'<p style="margin-bottom:8px"><strong>📋 出勤日未定</strong></p>'
+            f'<div style="margin-top:18px;margin-bottom:14px">'
+            f'<div style="background:linear-gradient(135deg,#636e72,#2d3436);padding:10px 14px;'
+            f'border-radius:10px 10px 0 0">'
+            f'<span style="font-size:14px;font-weight:bold;color:#dfe6e9">'
+            f'📋 出勤日未定</span></div>'
         )
         for info in sorted(no_date, key=lambda x: x["post"].get("sales_count") or 0, reverse=True):
             title = info["new_title"] or info["post"]["title"]
@@ -1291,13 +1304,14 @@ def build_calendar_html(all_post_infos):
             main = _parse_title_short(title)
             category = info["post"].get("category", "")
             inner += (
-                f'<div style="border:1px solid #444;border-radius:6px;padding:8px 12px;'
-                f'margin-bottom:6px;background:#1a1a1a">'
-                f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
-                f'font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px;margin-bottom:4px">'
+                f'<div style="padding:10px 14px;background:rgba(255,255,255,0.05);'
+                f'border-top:1px solid rgba(255,255,255,0.08)">'
+                f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
+                f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;margin-bottom:4px;'
+                f'font-weight:bold">'
                 f'{category}</span>'
-                f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
-                f'font-size:13px;line-height:1.4">{main}</a>'
+                f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
+                f'font-size:13px;line-height:1.5;font-weight:500">{main}</a>'
                 f'</div>'
             )
         inner += '</div>\n'
@@ -1305,9 +1319,13 @@ def build_calendar_html(all_post_infos):
     now_str = f"{now.month}月{now.day}日更新"
     html = (
         f'{CALENDAR_BLOCK_START}\n'
-        f'<p><strong>{now_str}</strong></p><br/>'
-        f'<p style="font-size:16px;font-weight:bold;margin-bottom:12px">'
-        f'🗓️ 東京エリア 出勤カレンダー</p>\n'
+        f'<div style="background:linear-gradient(135deg,#6c5ce7,#a29bfe);padding:14px 16px;'
+        f'border-radius:12px;margin-bottom:16px;text-align:center">'
+        f'<p style="font-size:18px;font-weight:bold;color:#fff;margin:0;text-shadow:0 1px 3px rgba(0,0,0,0.2)">'
+        f'🗓️ 東京エリア 出勤カレンダー</p>'
+        f'<p style="font-size:12px;color:rgba(255,255,255,0.8);margin:4px 0 0">'
+        f'{now_str}</p>'
+        f'</div>\n'
         f'{inner}'
         f'{CALENDAR_BLOCK_END}\n'
     )
