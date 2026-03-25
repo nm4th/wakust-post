@@ -97,6 +97,9 @@ else:
     _jst_hour = datetime.now(JST).hour
     MIDNIGHT_RUN = _jst_hour >= 22 or _jst_hour < 6
 
+# CALENDAR_ONLY: まとめ記事（出勤カレンダー）のみ更新
+CALENDAR_ONLY = os.environ.get("CALENDAR_ONLY", "0") == "1"
+
 
 # ============================================================
 # 定数
@@ -1364,6 +1367,121 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 
 
 # ============================================================
+# カレンダーのみ更新モード
+# ============================================================
+def run_calendar_only():
+    """まとめ記事（出勤カレンダー）だけを更新する。"""
+    log.info(f"\n{'='*55}")
+    log.info(f"📅 カレンダーのみ更新 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    session = login_wakust()
+    if not session:
+        return
+
+    posts = fetch_post_list(session)
+    if not posts:
+        log.warning("⚠️  記事が見つかりませんでした")
+        session.close()
+        return
+
+    # まとめ記事が存在するか確認
+    summary_post = None
+    for post in posts:
+        if post["id"] == SUMMARY_POST_ID:
+            summary_post = post
+            break
+
+    if not summary_post:
+        log.warning(f"⚠️  まとめ記事 [{SUMMARY_POST_ID}] が見つかりません")
+        session.close()
+        return
+
+    # 対象カテゴリの記事情報を収集
+    post_infos = []
+    for post in posts:
+        if post.get("is_reserved"):
+            continue
+        cat_known = False
+        try:
+            details = fetch_post_details(session, post)
+        except Exception as e:
+            log.error(f"    ❌ [{post['id']}] 記事詳細取得失敗: {e}")
+            continue
+        post["category"] = details["category"]
+
+        # まとめ記事自体は情報収集だけ
+        if post["id"] == SUMMARY_POST_ID:
+            summary_details = details
+            continue
+
+        # 対象カテゴリ以外はスキップ（情報収集不要）
+        if post.get("category") not in SUMMARY_CATEGORIES:
+            log.info(f"    ⏭️  [{post['id']}] カテゴリ「{post.get('category')}」: 対象外")
+            continue
+
+        log.info(f"\n📄 [{post['id']}] {post['title']} ({post.get('category')})")
+
+        tags = fetch_post_tags(session, post["url"])
+
+        dates, is_tomorrow, is_today = (None, False, False)
+        if details["schedule_url"]:
+            log.info(f"    🔗 {details['schedule_url']}")
+            dates_list, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+            if dates_list:
+                dates = ",".join(dates_list)
+                log.info(f"    📅 直近の出勤日: {dates}")
+
+        new_title = post["title"]
+        if dates:
+            dates_list_raw = []
+            for part in dates.split(","):
+                dates_list_raw.append(part)
+            new_title = build_new_title(post["title"], dates_list_raw)
+
+        post_infos.append({
+            "post":      post,
+            "details":   details,
+            "next_date": dates,
+            "is_tomorrow":  is_tomorrow,
+            "is_today":    is_today,
+            "new_title": new_title,
+            "tags":      tags,
+        })
+        time.sleep(1)
+
+    # カレンダーHTML生成＆注入
+    calendar_html = build_calendar_html(post_infos)
+    if not calendar_html:
+        log.warning("⚠️  カレンダーに掲載する記事がありません")
+        session.close()
+        return
+
+    log.info(f"\n📝 [{SUMMARY_POST_ID}] まとめ記事: 出勤カレンダー更新")
+    payload = dict(summary_details["payload"])
+    payload["edit_title"] = summary_post["title"]
+    if "edit_text_1" in payload:
+        text = payload["edit_text_1"]
+        for _round in range(5):
+            decoded = html_module.unescape(text)
+            if decoded == text:
+                break
+            text = decoded
+        payload["edit_text_1"] = text
+        payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
+    payload.pop(REPOST_FIELD, None)
+
+    res = session.post(EDIT_FORM_ACTION, data=payload)
+    if res.status_code == 200:
+        log.info(f"    ✅ まとめ記事更新完了")
+    else:
+        log.warning(f"    ⚠️  まとめ記事更新失敗 (HTTP {res.status_code})")
+
+    session.close()
+    log.info(f"\n✅ カレンダー更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+
+
+# ============================================================
 # メイン処理
 # ============================================================
 def run_update():
@@ -1609,7 +1727,11 @@ def run_update():
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
-    mode = "0時モード（回遊ラベル切替・再投稿なし）" if MIDNIGHT_RUN else "16時モード（通常）"
-    log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
-    log.info(f"   MIDNIGHT_RUN={os.environ.get('MIDNIGHT_RUN', '(未設定)')}")
-    run_update()
+    if CALENDAR_ONLY:
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
+        run_calendar_only()
+    else:
+        mode = "0時モード（回遊ラベル切替・再投稿なし）" if MIDNIGHT_RUN else "16時モード（通常）"
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
+        log.info(f"   MIDNIGHT_RUN={os.environ.get('MIDNIGHT_RUN', '(未設定)')}")
+        run_update()
