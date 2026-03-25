@@ -1765,6 +1765,10 @@ def run_update():
         related_changed = post_state.get("all_ids") != all_ids_str
 
         # ── まとめ記事: タイトル更新・再投稿スキップ、カレンダーのみ注入 ──
+        # 0時モードではカレンダー更新しない
+        if post_id in SUMMARY_POST_IDS and MIDNIGHT_RUN:
+            log.info(f"    ⏭️  0時モード: カレンダー更新スキップ")
+            continue
         if post_id in SUMMARY_POST_IDS:
             area_label = SUMMARY_POSTS[post_id]["area_label"]
             calendar_html = build_calendar_html(post_infos, summary_post_id=post_id)
