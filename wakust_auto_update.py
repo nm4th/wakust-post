@@ -606,9 +606,11 @@ def fetch_next_date_from_schedule(schedule_url):
             "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
             "Referer": schedule_url,
         }, timeout=10)
+        _used_playwright = False
         if res.status_code == 403:
             log.info(f"    🔧 HTTP 403 → Playwrightで再取得を試行")
             soup = _fetch_with_playwright(schedule_url)
+            _used_playwright = True
             if soup is None:
                 return [], False, False
         elif res.status_code != 200:
@@ -630,11 +632,12 @@ def fetch_next_date_from_schedule(schedule_url):
 
     # JSレンダリング判定: weekScheduleクラスがあるがtableが空の場合
     # → Playwrightでヘッドレスブラウザ経由で再取得
-    if (soup.find(class_=re.compile(r"weekSchedule", re.I)) and
+    if not _used_playwright and (soup.find(class_=re.compile(r"weekSchedule", re.I)) and
             not soup.find("table")):
         pw_soup = _fetch_with_playwright(schedule_url)
         if pw_soup:
             soup = pw_soup
+            _used_playwright = True
 
     today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     # 16時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
@@ -841,6 +844,36 @@ def fetch_next_date_from_schedule(schedule_url):
                 if d >= start_date:
                     candidates.append((d, f"{month}/{day}"))
 
+    # パターンP: profile_list形式（liora2024等）
+    # div.profile_list > p.p_day(日のみ: "25(水)") + p.p_check(時刻: "10:00 - 15:00")
+    if not candidates:
+        prof_lists = soup.find_all("div", class_=re.compile(r"profile_list"))
+        if prof_lists:
+            current_month = today.month
+            for pl in prof_lists:
+                day_p = pl.find("p", class_=re.compile(r"p_day"))
+                check_p = pl.find("p", class_=re.compile(r"p_check"))
+                if not day_p or not check_p:
+                    continue
+                m = re.search(r"(\d{1,2})\s*\(", day_p.get_text())
+                if not m:
+                    continue
+                info = check_p.get_text(strip=True)
+                if info == "-" or "休み" in info or "未定" in info:
+                    continue
+                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                    continue
+                day = int(m.group(1))
+                # 月情報がないので当月を基準に、日が今日より小さければ翌月と推定
+                month = current_month
+                if day < today.day - 7:
+                    month = current_month + 1 if current_month < 12 else 1
+                d = datetime(current_year if month >= current_month else current_year + 1, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                log.info(f"    📅 形式P(profile_list)でマッチ")
+
     # パターン3: div構造の日付+出勤情報（tennesu等）
     if not candidates:
         date_divs = soup.find_all("div", class_=re.compile(r"date"))
@@ -891,6 +924,88 @@ def fetch_next_date_from_schedule(schedule_url):
             if d >= start_date:
                 candidates.append((d, f"{month}/{day}"))
 
+    # 全パーサー失敗 → Playwright未使用ならフォールバック再取得して再解析
+    if not candidates and not _used_playwright:
+        log.info(f"    🔧 全パーサー失敗 → Playwrightで再取得を試行")
+        pw_soup = _fetch_with_playwright(schedule_url)
+        if pw_soup:
+            soup = pw_soup
+            _used_playwright = True
+            # 再帰ではなく主要パターンだけ再チェック
+            # Format M (men-este)
+            sch_date = soup.find("div", class_=re.compile(r"sch-date"))
+            sch_work = soup.find("div", class_=re.compile(r"sch-work"))
+            if sch_date and sch_work:
+                dts = sch_date.find_all("dt")
+                dds = sch_work.find_all("dd")
+                for dt_el, dd_el in zip(dts, dds):
+                    info = dd_el.get_text(strip=True)
+                    if "休み" in info or "未定" in info:
+                        continue
+                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                        continue
+                    m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                    if m:
+                        month, day = int(m.group(1)), int(m.group(2))
+                        d = datetime(current_year, month, day)
+                        if d >= start_date:
+                            candidates.append((d, f"{month}/{day}"))
+            # Format P (profile_list)
+            if not candidates:
+                prof_lists = soup.find_all("div", class_=re.compile(r"profile_list"))
+                if prof_lists:
+                    current_month = today.month
+                    for pl in prof_lists:
+                        day_p = pl.find("p", class_=re.compile(r"p_day"))
+                        check_p = pl.find("p", class_=re.compile(r"p_check"))
+                        if not day_p or not check_p:
+                            continue
+                        m = re.search(r"(\d{1,2})\s*\(", day_p.get_text())
+                        if not m:
+                            continue
+                        info = check_p.get_text(strip=True)
+                        if info == "-" or "休み" in info or "未定" in info:
+                            continue
+                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            continue
+                        day = int(m.group(1))
+                        month = current_month
+                        if day < today.day - 7:
+                            month = current_month + 1 if current_month < 12 else 1
+                        d = datetime(current_year if month >= current_month else current_year + 1, month, day)
+                        if d >= start_date:
+                            candidates.append((d, f"{month}/{day}"))
+            # テーブル系 (W, A, B)
+            if not candidates:
+                for table in soup.find_all("table"):
+                    for row in table.find_all("tr"):
+                        ths = row.find_all("th")
+                        tds = row.find_all("td")
+                        for th, td in zip(ths, tds):
+                            m = re.search(r"(\d{1,2})/(\d{1,2})", th.get_text())
+                            if not m:
+                                continue
+                            info = td.get_text(" ", strip=True)
+                            if "お休み" in info or "未定" in info:
+                                continue
+                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                                continue
+                            month, day = int(m.group(1)), int(m.group(2))
+                            d = datetime(current_year, month, day)
+                            if d >= start_date:
+                                candidates.append((d, f"{month}/{day}"))
+                    if candidates:
+                        break
+            # テキスト正規表現
+            if not candidates:
+                for m in re.finditer(r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)[^\n]{0,5}(\d{2}:\d{2})", soup.get_text()):
+                    month, day = int(m.group(1)), int(m.group(2))
+                    d = datetime(current_year, month, day)
+                    if d >= start_date:
+                        candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                log.info(f"    📅 Playwrightフォールバックでマッチ")
+
     if not candidates:
         # デバッグ: どのパターンにもマッチしなかった場合、HTML構造をダンプ
         text_snippet = soup.get_text()[:500].replace("\n", "\\n")
@@ -902,7 +1017,7 @@ def fetch_next_date_from_schedule(schedule_url):
         for i, t in enumerate(tables[:3]):
             log.warning(f"    🔧 table[{i}] HTML先頭300字: {str(t)[:300]}")
         # div構造のダンプ（スケジュール関連クラス）
-        for cls in ("schedule", "sche", "date", "shift", "calendar", "week"):
+        for cls in ("schedule", "sche", "date", "shift", "calendar", "week", "profile"):
             divs = soup.find_all(["div", "dl", "ul", "li", "span"], class_=re.compile(cls, re.I))
             if divs:
                 log.warning(f"    🔧 class~'{cls}' 要素数={len(divs)} 先頭: {str(divs[0])[:200]}")
