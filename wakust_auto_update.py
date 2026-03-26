@@ -1169,9 +1169,12 @@ def build_new_title(current_title, dates):
 
     def replace_bracket(m):
         inner = m.group(1)
-        if not re.search(r"[\d/,｜]+出勤", inner):
+        if not re.search(r"[\d/,｜|\s]+出勤", inner):
             return m.group(0)  # 日付+出勤がなければそのまま
-        inner_clean = re.sub(r"[\d/,｜\s]+出勤", "", inner)
+        # 日付+出勤パターンを除去（全角・半角パイプ両対応）
+        inner_clean = re.sub(r"[\d/,｜|\s]+出勤", "", inner)
+        # 前回のバグ等で残った孤立日付フラグメント（例: "3/28|"）も除去
+        inner_clean = re.sub(r"[\d/,｜|]+", "", inner_clean)
         replaced[0] = True
         return f"【{date_str}出勤{inner_clean}】"
 
