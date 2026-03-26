@@ -1383,8 +1383,10 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
             f'</span>'
             f'</div>'
         )
-        # 記事カード
-        for idx, info in enumerate(sorted(infos, key=lambda x: x["post"].get("sales_count") or 0, reverse=True)):
+        # 記事カード - 2列グリッド
+        sorted_infos = sorted(infos, key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
+        inner += '<div style="display:flex;flex-wrap:wrap">'
+        for idx, info in enumerate(sorted_infos):
             title = info["new_title"] or info["post"]["title"]
             url = info["post"]["url"]
             category = info["post"].get("category", "")
@@ -1419,19 +1421,20 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
                     f'font-weight:bold">'
                     f'{" | ".join(post_tags)}</span>'
                 )
-            border_top = "" if idx == 0 else "border-top:1px solid rgba(255,255,255,0.08);"
             inner += (
-                f'<div style="{border_top}padding:10px 14px;'
-                f'background:rgba(255,255,255,0.05)">'
+                f'<div style="width:50%;box-sizing:border-box;padding:4px">'
+                f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
+                f'padding:8px 10px;height:100%;box-sizing:border-box;'
+                f'border:1px solid rgba(255,255,255,0.08)">'
             )
             if badge_html:
-                inner += f'<div style="margin-bottom:5px">{badge_html}</div>'
+                inner += f'<div style="margin-bottom:4px">{badge_html}</div>'
             inner += (
                 f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
-                f'font-size:13px;line-height:1.5;font-weight:500">{main}</a>'
-                f'</div>'
+                f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
+                f'</div></div>'
             )
-        inner += '</div>\n'
+        inner += '</div></div>\n'
 
     # 日付なしの記事（出勤日不明）
     no_date = [
@@ -1440,11 +1443,12 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
     ]
     if no_date:
         inner += (
-            f'<div style="margin-top:18px;margin-bottom:14px">'
-            f'<div style="background:linear-gradient(135deg,#636e72,#2d3436);padding:10px 14px;'
-            f'border-radius:10px 10px 0 0">'
+            f'<div style="margin-top:18px;margin-bottom:14px;border-radius:10px;overflow:hidden;'
+            f'box-shadow:0 2px 8px rgba(0,0,0,0.15)">'
+            f'<div style="background:linear-gradient(135deg,#636e72,#2d3436);padding:10px 14px">'
             f'<span style="font-size:14px;font-weight:bold;color:#dfe6e9">'
             f'📋 出勤日未定</span></div>'
+            f'<div style="display:flex;flex-wrap:wrap">'
         )
         for info in sorted(no_date, key=lambda x: x["post"].get("sales_count") or 0, reverse=True):
             title = info["new_title"] or info["post"]["title"]
@@ -1452,17 +1456,19 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
             main = _parse_title_short(title)
             category = info["post"].get("category", "")
             inner += (
-                f'<div style="padding:10px 14px;background:rgba(255,255,255,0.05);'
-                f'border-top:1px solid rgba(255,255,255,0.08)">'
+                f'<div style="width:50%;box-sizing:border-box;padding:4px">'
+                f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
+                f'padding:8px 10px;height:100%;box-sizing:border-box;'
+                f'border:1px solid rgba(255,255,255,0.08)">'
                 f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
                 f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;margin-bottom:4px;'
                 f'font-weight:bold">'
                 f'{category}</span>'
                 f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
-                f'font-size:13px;line-height:1.5;font-weight:500">{main}</a>'
-                f'</div>'
+                f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
+                f'</div></div>'
             )
-        inner += '</div>\n'
+        inner += '</div></div>\n'
 
     now_str = f"{now.month}月{now.day}日更新"
     html = (
