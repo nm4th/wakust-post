@@ -624,6 +624,7 @@ PLAYWRIGHT_PREFER_DOMAINS = {
     "men-este",        # *.men-este.com (tokyo-fairy-land等)
     "mens-este",       # omiya-mens-este.net 等
     "bed-of-roses",    # Alpine.js (x-for/x-text) でJSレンダリング必須
+    "liora2024",       # requests.getで接続タイムアウト
 }
 
 def fetch_next_date_from_schedule(schedule_url):
@@ -665,8 +666,13 @@ def fetch_next_date_from_schedule(schedule_url):
                         res.encoding = "utf-8"
                 soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
-        log.error(f"    ❌ スケジュール取得失敗: {e}")
-        return [], False, False
+        log.warning(f"    ⚠️ requests取得失敗: {e}")
+        log.info(f"    🔧 接続エラー → Playwrightで再取得を試行")
+        soup = _fetch_with_playwright(schedule_url)
+        _used_playwright = True
+        if soup is None:
+            log.error(f"    ❌ Playwrightでも取得失敗")
+            return [], False, False
 
     # JSレンダリング判定: スケジュール構造があるが中身が空の場合
     # → Playwrightでヘッドレスブラウザ経由で再取得
