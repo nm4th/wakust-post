@@ -1535,7 +1535,7 @@ def inject_calendar_html(original_html, calendar_html):
             original_html,
             flags=re.DOTALL,
         )
-    # 既存の回遊リストも除去（まとめ記事では使わない）
+    # 既存の回遊リストも除去（マーカーあり）
     if RELATED_BLOCK_START in original_html:
         original_html = re.sub(
             rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}\s*",
@@ -1543,6 +1543,14 @@ def inject_calendar_html(original_html, calendar_html):
             original_html,
             flags=re.DOTALL,
         )
+    # マーカーなしの古い回遊リスト（箇条書き形式）も除去
+    # 「出勤予定の他の記事もチェック」「出勤中の他の記事もチェック」を起点に末尾まで除去
+    original_html = re.sub(
+        r'<hr\s*/?>?\s*.*?出勤[^\n]*の他の記事もチェック.*',
+        "",
+        original_html,
+        flags=re.DOTALL,
+    )
     return original_html.rstrip() + "\n" + calendar_html
 
 
@@ -1592,14 +1600,16 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         payload["edit_text_1"] = text
         if not MIDNIGHT_RUN:
             payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
-        if MIDNIGHT_RUN:
-            # 0時モード: 既存ブロックを全除去してから本日ラベルで再生成
-            related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
-            payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
-            log.info(f"    📎 回遊リスト: 再生成（0時モード）")
-        else:
-            related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
-            payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
+        # まとめ記事には回遊リストを入れない
+        if post["id"] not in SUMMARY_POST_IDS:
+            if MIDNIGHT_RUN:
+                # 0時モード: 既存ブロックを全除去してから本日ラベルで再生成
+                related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
+                payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
+                log.info(f"    📎 回遊リスト: 再生成（0時モード）")
+            else:
+                related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
+                payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
             all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
             # ログもカテゴリ回遊ルールに合わせてフィルタ
             cur_cat = post.get("category")
