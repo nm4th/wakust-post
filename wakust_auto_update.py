@@ -620,34 +620,48 @@ def _fetch_with_playwright(url):
 # ============================================================
 # スケジュールページから直近の出勤日を取得
 # ============================================================
+PLAYWRIGHT_PREFER_DOMAINS = {
+    "omiya-mens-este.net",
+}
+
 def fetch_next_date_from_schedule(schedule_url):
     try:
-        res = requests.get(schedule_url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
-            "Referer": schedule_url,
-        }, timeout=10)
         _used_playwright = False
-        if res.status_code == 403:
-            log.info(f"    🔧 HTTP 403 → Playwrightで再取得を試行")
+        _parsed_host = urlparse(schedule_url).hostname or ""
+        _force_playwright = any(d in _parsed_host for d in PLAYWRIGHT_PREFER_DOMAINS)
+
+        if _force_playwright:
+            log.info(f"    🔧 Playwright優先ドメイン → Playwrightで取得")
             soup = _fetch_with_playwright(schedule_url)
             _used_playwright = True
             if soup is None:
                 return [], False, False
-        elif res.status_code != 200:
-            log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
-            return [], False, False
         else:
-            # content-typeのcharsetを優先（apparent_encodingは誤判定があるため）
-            if res.encoding is None or res.encoding == "ISO-8859-1":
-                ctype = res.headers.get("content-type", "")
-                m_charset = re.search(r"charset=([^\s;]+)", ctype, re.I)
-                if m_charset:
-                    res.encoding = m_charset.group(1)
-                else:
-                    res.encoding = "utf-8"
-            soup = BeautifulSoup(res.text, "html.parser")
+            res = requests.get(schedule_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+                "Referer": schedule_url,
+            }, timeout=10)
+            if res.status_code == 403:
+                log.info(f"    🔧 HTTP 403 → Playwrightで再取得を試行")
+                soup = _fetch_with_playwright(schedule_url)
+                _used_playwright = True
+                if soup is None:
+                    return [], False, False
+            elif res.status_code != 200:
+                log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
+                return [], False, False
+            else:
+                # content-typeのcharsetを優先（apparent_encodingは誤判定があるため）
+                if res.encoding is None or res.encoding == "ISO-8859-1":
+                    ctype = res.headers.get("content-type", "")
+                    m_charset = re.search(r"charset=([^\s;]+)", ctype, re.I)
+                    if m_charset:
+                        res.encoding = m_charset.group(1)
+                    else:
+                        res.encoding = "utf-8"
+                soup = BeautifulSoup(res.text, "html.parser")
     except Exception as e:
         log.error(f"    ❌ スケジュール取得失敗: {e}")
         return [], False, False
@@ -862,25 +876,30 @@ def fetch_next_date_from_schedule(schedule_url):
 
     # パターンM: men-este形式（tokyo-fairy-land等）
     # div.sch-date 内の dt に日付、div.sch-work 内の dd に出勤情報
+    # 複数週(複数sch-date/sch-work)がある場合は全ペアを処理
     if not candidates:
-        sch_date = soup.find("div", class_=re.compile(r"sch-date"))
-        sch_work = soup.find("div", class_=re.compile(r"sch-work"))
-        if sch_date and sch_work:
-            dts = sch_date.find_all("dt")
-            dds = sch_work.find_all("dd")
-            for dt, dd in zip(dts, dds):
-                info = dd.get_text(strip=True)
-                if "休み" in info or "未定" in info:
-                    continue
-                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
-                    continue
-                m = re.search(r"(\d{1,2})/(\d{1,2})", dt.get_text())
-                if not m:
-                    continue
-                month, day = int(m.group(1)), int(m.group(2))
-                d = datetime(current_year, month, day)
-                if d >= start_date:
-                    candidates.append((d, f"{month}/{day}"))
+        all_sch_dates = soup.find_all("div", class_=re.compile(r"sch-date"))
+        all_sch_works = soup.find_all("div", class_=re.compile(r"sch-work"))
+        if all_sch_dates and all_sch_works:
+            log.info(f"    🔧 形式M: sch-date={len(all_sch_dates)}個, sch-work={len(all_sch_works)}個")
+            for sch_date, sch_work in zip(all_sch_dates, all_sch_works):
+                dts = sch_date.find_all("dt")
+                dds = sch_work.find_all("dd")
+                for dt_el, dd_el in zip(dts, dds):
+                    info = dd_el.get_text(strip=True)
+                    if "休み" in info or "未定" in info:
+                        continue
+                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                        continue
+                    m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                    if not m:
+                        continue
+                    month, day = int(m.group(1)), int(m.group(2))
+                    d = datetime(current_year, month, day)
+                    if d >= start_date:
+                        candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                log.info(f"    📅 形式M(sch-date/sch-work)でマッチ")
 
     # パターンP: profile_list形式（liora2024等）
     # div.profile_list > p.p_day(日のみ: "25(水)") + p.p_check(時刻: "10:00 - 15:00")
@@ -970,24 +989,26 @@ def fetch_next_date_from_schedule(schedule_url):
             soup = pw_soup
             _used_playwright = True
             # 再帰ではなく主要パターンだけ再チェック
-            # Format M (men-este)
-            sch_date = soup.find("div", class_=re.compile(r"sch-date"))
-            sch_work = soup.find("div", class_=re.compile(r"sch-work"))
-            if sch_date and sch_work:
-                dts = sch_date.find_all("dt")
-                dds = sch_work.find_all("dd")
-                for dt_el, dd_el in zip(dts, dds):
-                    info = dd_el.get_text(strip=True)
-                    if "休み" in info or "未定" in info:
-                        continue
-                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
-                        continue
-                    m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
-                    if m:
-                        month, day = int(m.group(1)), int(m.group(2))
-                        d = datetime(current_year, month, day)
-                        if d >= start_date:
-                            candidates.append((d, f"{month}/{day}"))
+            # Format M (men-este) — 複数週対応
+            all_sch_dates = soup.find_all("div", class_=re.compile(r"sch-date"))
+            all_sch_works = soup.find_all("div", class_=re.compile(r"sch-work"))
+            if all_sch_dates and all_sch_works:
+                log.info(f"    🔧 PW形式M: sch-date={len(all_sch_dates)}個, sch-work={len(all_sch_works)}個")
+                for sch_date, sch_work in zip(all_sch_dates, all_sch_works):
+                    dts = sch_date.find_all("dt")
+                    dds = sch_work.find_all("dd")
+                    for dt_el, dd_el in zip(dts, dds):
+                        info = dd_el.get_text(strip=True)
+                        if "休み" in info or "未定" in info:
+                            continue
+                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            continue
+                        m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                        if m:
+                            month, day = int(m.group(1)), int(m.group(2))
+                            d = datetime(current_year, month, day)
+                            if d >= start_date:
+                                candidates.append((d, f"{month}/{day}"))
             # Format P (profile_list)
             if not candidates:
                 prof_lists = soup.find_all("div", class_=re.compile(r"profile_list"))
