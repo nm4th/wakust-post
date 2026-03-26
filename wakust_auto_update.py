@@ -635,10 +635,26 @@ def fetch_next_date_from_schedule(schedule_url):
         log.error(f"    ❌ スケジュール取得失敗: {e}")
         return [], False, False
 
-    # JSレンダリング判定: weekScheduleクラスがあるがtableが空の場合
+    # JSレンダリング判定: スケジュール構造があるが中身が空の場合
     # → Playwrightでヘッドレスブラウザ経由で再取得
-    if not _used_playwright and (soup.find(class_=re.compile(r"weekSchedule", re.I)) and
-            not soup.find("table")):
+    _needs_playwright = False
+    if not _used_playwright:
+        # weekScheduleクラスがあるがtableが空
+        if (soup.find(class_=re.compile(r"weekSchedule", re.I)) and
+                not soup.find("table")):
+            _needs_playwright = True
+        # sch-date/sch-workのdivがあるがdt/ddが空
+        _sch_date_div = soup.find("div", class_=re.compile(r"sch-date"))
+        _sch_work_div = soup.find("div", class_=re.compile(r"sch-work"))
+        if _sch_date_div and _sch_work_div:
+            if not _sch_date_div.find("dt") or not _sch_work_div.find("dd"):
+                _needs_playwright = True
+        # sch-tblクラスがあるがスケジュールデータが空
+        _sch_tbl = soup.find(class_=re.compile(r"sch-tbl"))
+        if _sch_tbl and not _sch_tbl.find("dt") and not _sch_tbl.find("td"):
+            _needs_playwright = True
+    if _needs_playwright:
+        log.info(f"    🔧 JSレンダリング検出 → Playwrightで再取得を試行")
         pw_soup = _fetch_with_playwright(schedule_url)
         if pw_soup:
             soup = pw_soup
