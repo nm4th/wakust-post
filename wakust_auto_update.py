@@ -124,10 +124,10 @@ CALENDAR_BLOCK_END        = "<!-- calendar_block_end -->"
 # まとめ記事（出勤カレンダー）: タイトル更新・再投稿をスキップ
 # {post_id: {"categories": set, "area_label": str}}
 SUMMARY_POSTS = {
-    "1656151": {"categories": {"東京都", "池袋", "新宿"}, "area_label": "東京エリア"},
-    "1656586": {"categories": {"多摩"},                   "area_label": "多摩エリア"},
-    "1656589": {"categories": {"神奈川県"},               "area_label": "神奈川エリア"},
-    "1656592": {"categories": {"埼玉県"},                 "area_label": "埼玉エリア"},
+    "1657099": {"categories": {"東京都", "池袋", "新宿"}, "area_label": "東京エリア"},
+    "1657101": {"categories": {"多摩"},                   "area_label": "多摩エリア"},
+    "1657104": {"categories": {"神奈川県"},               "area_label": "神奈川エリア"},
+    "1657105": {"categories": {"埼玉県"},                 "area_label": "埼玉エリア"},
 }
 SUMMARY_POST_IDS = set(SUMMARY_POSTS.keys())
 # 全まとめ記事の対象カテゴリ（情報収集用）
