@@ -1383,58 +1383,65 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
             f'</span>'
             f'</div>'
         )
-        # 記事カード - 2列グリッド
+        # 記事カード - 2列テーブル
         sorted_infos = sorted(infos, key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
-        inner += '<div style="display:flex;flex-wrap:wrap">'
-        for idx, info in enumerate(sorted_infos):
-            title = info["new_title"] or info["post"]["title"]
-            url = info["post"]["url"]
-            category = info["post"].get("category", "")
-            schedule, area, cup, main = _parse_title_badges_calendar(title)
-            badge_html = ""
-            if area:
-                badge_html += (
-                    f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
-                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
-                    f'font-weight:bold;letter-spacing:0.5px">'
-                    f'{area}</span>'
-                )
-            elif category:
-                badge_html += (
-                    f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
-                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
-                    f'font-weight:bold;letter-spacing:0.5px">'
-                    f'{category}</span>'
-                )
-            if cup:
-                badge_html += (
-                    f'<span style="display:inline-block;background:linear-gradient(135deg,#fd79a8,#e84393);color:#fff;'
-                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
-                    f'font-weight:bold">'
-                    f'{cup}</span>'
-                )
-            post_tags = info.get("tags", [])
-            if post_tags:
-                badge_html += (
-                    f'<span style="display:inline-block;background:linear-gradient(135deg,#fdcb6e,#e17055);color:#fff;'
-                    f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
-                    f'font-weight:bold">'
-                    f'{" | ".join(post_tags)}</span>'
-                )
-            inner += (
-                f'<div style="width:50%;box-sizing:border-box;padding:4px">'
-                f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
-                f'padding:8px 10px;height:100%;box-sizing:border-box;'
-                f'border:1px solid rgba(255,255,255,0.08)">'
-            )
-            if badge_html:
-                inner += f'<div style="margin-bottom:4px">{badge_html}</div>'
-            inner += (
-                f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
-                f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
-                f'</div></div>'
-            )
-        inner += '</div></div>\n'
+        inner += '<table style="width:100%;border-collapse:collapse;border-spacing:0"><tbody>'
+        for idx in range(0, len(sorted_infos), 2):
+            inner += '<tr>'
+            for col in range(2):
+                if idx + col < len(sorted_infos):
+                    info = sorted_infos[idx + col]
+                    title = info["new_title"] or info["post"]["title"]
+                    url = info["post"]["url"]
+                    category = info["post"].get("category", "")
+                    schedule, area, cup, main = _parse_title_badges_calendar(title)
+                    badge_html = ""
+                    if area:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
+                            f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                            f'font-weight:bold;letter-spacing:0.5px">'
+                            f'{area}</span>'
+                        )
+                    elif category:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
+                            f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                            f'font-weight:bold;letter-spacing:0.5px">'
+                            f'{category}</span>'
+                        )
+                    if cup:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:linear-gradient(135deg,#fd79a8,#e84393);color:#fff;'
+                            f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                            f'font-weight:bold">'
+                            f'{cup}</span>'
+                        )
+                    post_tags = info.get("tags", [])
+                    if post_tags:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:linear-gradient(135deg,#fdcb6e,#e17055);color:#fff;'
+                            f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;'
+                            f'font-weight:bold">'
+                            f'{" | ".join(post_tags)}</span>'
+                        )
+                    cell_content = ""
+                    if badge_html:
+                        cell_content += f'<div style="margin-bottom:4px">{badge_html}</div>'
+                    cell_content += (
+                        f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
+                        f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
+                    )
+                    inner += (
+                        f'<td style="width:50%;vertical-align:top;padding:4px">'
+                        f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
+                        f'padding:8px 10px;border:1px solid rgba(255,255,255,0.08)">'
+                        f'{cell_content}</div></td>'
+                    )
+                else:
+                    inner += '<td style="width:50%"></td>'
+            inner += '</tr>'
+        inner += '</tbody></table></div>\n'
 
     # 日付なしの記事（出勤日不明）
     no_date = [
@@ -1442,33 +1449,40 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         if not info.get("next_date")
     ]
     if no_date:
+        sorted_no_date = sorted(no_date, key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
         inner += (
             f'<div style="margin-top:18px;margin-bottom:14px;border-radius:10px;overflow:hidden;'
             f'box-shadow:0 2px 8px rgba(0,0,0,0.15)">'
             f'<div style="background:linear-gradient(135deg,#636e72,#2d3436);padding:10px 14px">'
             f'<span style="font-size:14px;font-weight:bold;color:#dfe6e9">'
             f'📋 出勤日未定</span></div>'
-            f'<div style="display:flex;flex-wrap:wrap">'
+            f'<table style="width:100%;border-collapse:collapse;border-spacing:0"><tbody>'
         )
-        for info in sorted(no_date, key=lambda x: x["post"].get("sales_count") or 0, reverse=True):
-            title = info["new_title"] or info["post"]["title"]
-            url = info["post"]["url"]
-            main = _parse_title_short(title)
-            category = info["post"].get("category", "")
-            inner += (
-                f'<div style="width:50%;box-sizing:border-box;padding:4px">'
-                f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
-                f'padding:8px 10px;height:100%;box-sizing:border-box;'
-                f'border:1px solid rgba(255,255,255,0.08)">'
-                f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
-                f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;margin-bottom:4px;'
-                f'font-weight:bold">'
-                f'{category}</span>'
-                f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
-                f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
-                f'</div></div>'
-            )
-        inner += '</div></div>\n'
+        for idx in range(0, len(sorted_no_date), 2):
+            inner += '<tr>'
+            for col in range(2):
+                if idx + col < len(sorted_no_date):
+                    info = sorted_no_date[idx + col]
+                    title = info["new_title"] or info["post"]["title"]
+                    url = info["post"]["url"]
+                    main = _parse_title_short(title)
+                    category = info["post"].get("category", "")
+                    inner += (
+                        f'<td style="width:50%;vertical-align:top;padding:4px">'
+                        f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
+                        f'padding:8px 10px;border:1px solid rgba(255,255,255,0.08)">'
+                        f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
+                        f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;margin-bottom:4px;'
+                        f'font-weight:bold">'
+                        f'{category}</span>'
+                        f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
+                        f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
+                        f'</div></td>'
+                    )
+                else:
+                    inner += '<td style="width:50%"></td>'
+            inner += '</tr>'
+        inner += '</tbody></table></div>\n'
 
     now_str = f"{now.month}月{now.day}日更新"
     html = (
