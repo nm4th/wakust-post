@@ -573,18 +573,31 @@ def _fetch_with_playwright(url):
     """Playwrightでヘッドレスブラウザ経由でページを取得する。成功時はBeautifulSoupオブジェクトを返す。"""
     try:
         from playwright.sync_api import sync_playwright
+        import time as _time
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 locale="ja-JP",
+                java_script_enabled=True,
             )
             page = context.new_page()
-            response = page.goto(url, wait_until="networkidle", timeout=20000)
+            # まずdomcontentloadedで高速ロード
+            response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
             if response and response.status == 403:
-                browser.close()
-                log.warning(f"    ⚠️ Playwrightでも403: {url}")
-                return None
+                # Cloudflareチャレンジの可能性: 数秒待って再チェック
+                log.info(f"    🔧 403応答 → Cloudflareチャレンジ待機中...")
+                _time.sleep(5)
+                # ページが遷移（チャレンジ通過）したか確認
+                page.wait_for_load_state("networkidle", timeout=15000)
+            else:
+                # 通常ページ: JSレンダリング完了を待つ
+                page.wait_for_load_state("networkidle", timeout=15000)
+            # スケジュール要素が表示されるまで追加で待機
+            try:
+                page.wait_for_selector(".sch-date, .sch-work, .weekSchedule, table", timeout=5000)
+            except Exception:
+                pass  # タイムアウトでも続行
             js_html = page.content()
             browser.close()
         soup = BeautifulSoup(js_html, "html.parser")
@@ -592,6 +605,10 @@ def _fetch_with_playwright(url):
         title = soup.find("title")
         if title and "403" in title.get_text():
             log.warning(f"    ⚠️ Playwrightでも403(本文): {url}")
+            return None
+        # Cloudflareチャレンジページの検出
+        if soup.find(id="challenge-running") or soup.find(id="cf-challenge-running"):
+            log.warning(f"    ⚠️ Cloudflareチャレンジを通過できず: {url}")
             return None
         log.info(f"    🔧 Playwrightで取得成功")
         return soup
