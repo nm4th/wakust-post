@@ -621,8 +621,9 @@ def _fetch_with_playwright(url):
 # スケジュールページから直近の出勤日を取得
 # ============================================================
 PLAYWRIGHT_PREFER_DOMAINS = {
-    "men-este",   # *.men-este.com (tokyo-fairy-land等)
-    "mens-este",  # omiya-mens-este.net 等
+    "men-este",        # *.men-este.com (tokyo-fairy-land等)
+    "mens-este",       # omiya-mens-este.net 等
+    "bed-of-roses",    # Alpine.js (x-for/x-text) でJSレンダリング必須
 }
 
 def fetch_next_date_from_schedule(schedule_url):
@@ -1035,9 +1036,10 @@ def fetch_next_date_from_schedule(schedule_url):
                         d = datetime(current_year if month >= current_month else current_year + 1, month, day)
                         if d >= start_date:
                             candidates.append((d, f"{month}/{day}"))
-            # テーブル系 (W, A, B)
+            # テーブル系 (W, A, B) — 同一行 th+td と、別行(headerTr/bodyTr)の両方に対応
             if not candidates:
                 for table in soup.find_all("table"):
+                    # まず同一行内の th+td をチェック
                     for row in table.find_all("tr"):
                         ths = row.find_all("th")
                         tds = row.find_all("td")
@@ -1054,6 +1056,25 @@ def fetch_next_date_from_schedule(schedule_url):
                             d = datetime(current_year, month, day)
                             if d >= start_date:
                                 candidates.append((d, f"{month}/{day}"))
+                    # 別行(headerTr=th, bodyTr=td)の場合: テーブル全体のth/tdをzip
+                    if not candidates:
+                        headers = table.find_all("th")
+                        cells = table.find_all("td")
+                        if headers and cells:
+                            for header, cell in zip(headers, cells):
+                                h_text = header.get_text()
+                                m = re.search(r"(\d{1,2})/(\d{1,2})", h_text)
+                                if not m:
+                                    continue
+                                info = cell.get_text(" ", strip=True)
+                                if "お休み" in info or "未定" in info:
+                                    continue
+                                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                                    continue
+                                month, day = int(m.group(1)), int(m.group(2))
+                                d = datetime(current_year, month, day)
+                                if d >= start_date:
+                                    candidates.append((d, f"{month}/{day}"))
                     if candidates:
                         break
             # テキスト正規表現
