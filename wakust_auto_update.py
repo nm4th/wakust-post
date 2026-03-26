@@ -579,6 +579,7 @@ def _fetch_with_playwright(url):
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 locale="ja-JP",
+                timezone_id="Asia/Tokyo",
                 java_script_enabled=True,
             )
             page = context.new_page()
