@@ -1847,7 +1847,7 @@ def run_update():
                 "next_date": None,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": post["title"],
+                "new_title": _strip_today_tag(post["title"]),
                 "tags":      tags,
             })
             continue
@@ -1864,7 +1864,7 @@ def run_update():
                 "next_date": None,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": post["title"],  # タイトルは変えない
+                "new_title": _strip_today_tag(post["title"]),
                 "tags":      tags,
             })
             continue
