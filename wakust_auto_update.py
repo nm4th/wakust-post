@@ -621,7 +621,8 @@ def _fetch_with_playwright(url):
 # スケジュールページから直近の出勤日を取得
 # ============================================================
 PLAYWRIGHT_PREFER_DOMAINS = {
-    "omiya-mens-este.net",
+    "men-este",   # *.men-este.com (tokyo-fairy-land等)
+    "mens-este",  # omiya-mens-este.net 等
 }
 
 def fetch_next_date_from_schedule(schedule_url):
