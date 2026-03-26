@@ -1069,11 +1069,19 @@ def format_dates(dates):
     return "｜".join(parts)
 
 
+TODAY_TAG = " #本日出勤"
+
+def _strip_today_tag(title):
+    """タイトルから #本日出勤 タグを除去する（回遊リスト・カレンダー表示用）"""
+    return title.replace(TODAY_TAG, "").rstrip()
+
+
 def build_new_title(current_title, dates):
     # dates: リスト（例: ["3/13", "3/14", "3/15"]）
     # 【】内に日付+出勤パターンがあれば置換（カップ数等は保持）
     # 重複（【3/5出勤3/5出勤Iカップ】等）も同時に修正する
     # replacedフラグで「置換が実際に起きたか」を管理し、二重追加を防ぐ
+    current_title = _strip_today_tag(current_title)  # 前回の #本日出勤 を除去
     date_str = format_dates(dates)
     replaced = [False]
 
@@ -1186,7 +1194,7 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         group = group[:5]
         cards = ""
         for info in group:
-            title = info["new_title"] or info["post"]["title"]
+            title = _strip_today_tag(info["new_title"] or info["post"]["title"])
             url   = info["post"]["url"]
             schedule, area, cup, main = _parse_title_badges(title)
             badge_html = ""
@@ -1391,7 +1399,7 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
             for col in range(2):
                 if idx + col < len(sorted_infos):
                     info = sorted_infos[idx + col]
-                    title = info["new_title"] or info["post"]["title"]
+                    title = _strip_today_tag(info["new_title"] or info["post"]["title"])
                     url = info["post"]["url"]
                     category = info["post"].get("category", "")
                     schedule, area, cup, main = _parse_title_badges_calendar(title)
@@ -1463,7 +1471,7 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
             for col in range(2):
                 if idx + col < len(sorted_no_date):
                     info = sorted_no_date[idx + col]
-                    title = info["new_title"] or info["post"]["title"]
+                    title = _strip_today_tag(info["new_title"] or info["post"]["title"])
                     url = info["post"]["url"]
                     main = _parse_title_short(title)
                     category = info["post"].get("category", "")
@@ -1822,6 +1830,9 @@ def run_update():
         log.info(f"    📅 直近の出勤日: {dates_str} {'【明日出勤！】' if is_tomorrow else ''}")
 
         new_title = build_new_title(post["title"], dates)
+        # 0時モード: 本日出勤の記事にハッシュタグを付与
+        if MIDNIGHT_RUN and is_today:
+            new_title = new_title.rstrip() + TODAY_TAG
         post_infos.append({
             "post":      post,
             "details":   details,
