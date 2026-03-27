@@ -537,17 +537,19 @@ def fetch_post_details(session, post):
 # 記事公開ページからタグを取得
 # ============================================================
 def fetch_post_tags(session, post_url):
-    """記事の公開ページからアルファベットのみのタグを抽出する。
+    """記事の公開ページからアルファベットのみのタグとタイトル画像URLを抽出する。
 
     タグは「KEYWORD(NUMBER)」形式で表示されている。
     例: CKB(127), F(1473), HR(23397), 中野(989), 巨乳(19987)
     → アルファベットのみ: ["CKB", "F", "HR"]
+
+    戻り値: (tags: list[str], image_url: str|None)
     """
     try:
         res = session.get(post_url)
         if res.status_code != 200:
             log.warning(f"    ⚠️  タグ取得失敗 (HTTP {res.status_code})")
-            return []
+            return [], None
         soup = BeautifulSoup(res.text, "html.parser")
 
         tags = []
@@ -560,10 +562,26 @@ def fetch_post_tags(session, post_url):
 
         if tags:
             log.info(f"    🏷️  タグ: {tags}")
-        return tags
+
+        # タイトル画像URLを抽出（og:image → 記事本文内の最初のimg）
+        image_url = None
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            image_url = og_image["content"].strip()
+        if not image_url:
+            # 記事本文内の最初のimgタグ
+            article = soup.find("article") or soup.find(class_=re.compile(r"post|entry|content"))
+            if article:
+                img = article.find("img", src=True)
+                if img:
+                    image_url = img["src"].strip()
+        if image_url:
+            log.info(f"    🖼️  画像: {image_url}")
+
+        return tags, image_url
     except Exception as e:
         log.warning(f"    ⚠️  タグ取得エラー: {e}")
-        return []
+        return [], None
 
 
 # ============================================================
@@ -1432,6 +1450,25 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         # 日付なし記事のみの場合
         pass
 
+    # 過去の日付を除外（今日以降のみ表示）
+    today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    current_year = today_dt.year
+
+    def _is_future_date(date_str):
+        """今日以降の日付かどうかを判定"""
+        try:
+            parts = date_str.split("/")
+            m, d = int(parts[0]), int(parts[1])
+            dt = _dt(current_year, m, d)
+            return dt >= today_dt
+        except (ValueError, IndexError):
+            return False
+
+    date_map = {d: infos for d, infos in date_map.items() if _is_future_date(d)}
+
+    if not date_map:
+        return ""
+
     # 日付をソート（月/日の数値順）
     def _date_sort_key(d):
         parts = d.split("/")
@@ -1526,6 +1563,17 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
                         f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
                         f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
                     )
+                    # タイトル画像を表示（小さめ）
+                    img_url = info.get("image_url")
+                    if img_url:
+                        cell_content += (
+                            f'<div style="margin-top:6px">'
+                            f'<a href="{url}">'
+                            f'<img src="{img_url}" alt="{main}" '
+                            f'style="width:80px;height:auto;border-radius:6px;'
+                            f'object-fit:cover;display:block" />'
+                            f'</a></div>'
+                        )
                     inner += (
                         f'<td style="width:50%;vertical-align:top;padding:4px">'
                         f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
@@ -1785,7 +1833,7 @@ def run_calendar_only():
 
         log.info(f"\n📄 [{post['id']}] {post['title']} ({post.get('category')})")
 
-        tags = fetch_post_tags(session, post["url"])
+        tags, image_url = fetch_post_tags(session, post["url"])
 
         dates, is_tomorrow, is_today = (None, False, False)
         if details["schedule_url"]:
@@ -1810,6 +1858,7 @@ def run_calendar_only():
             "is_today":    is_today,
             "new_title": new_title,
             "tags":      tags,
+            "image_url": image_url,
         })
         time.sleep(1)
 
@@ -1889,8 +1938,8 @@ def run_update():
             continue
         post["category"] = details["category"]
 
-        # 記事公開ページからアルファベットタグを取得
-        tags = fetch_post_tags(session, post["url"])
+        # 記事公開ページからアルファベットタグとタイトル画像を取得
+        tags, image_url = fetch_post_tags(session, post["url"])
 
         if not details["schedule_url"]:
             log.warning(f"    ⚠️  スケジュールURLなし。回遊リストのみ対象")
@@ -1902,6 +1951,7 @@ def run_update():
                 "is_today":    False,
                 "new_title": _strip_today_tag(post["title"]),
                 "tags":      tags,
+                "image_url": image_url,
             })
             continue
 
@@ -1919,6 +1969,7 @@ def run_update():
                 "is_today":    False,
                 "new_title": _strip_today_tag(post["title"]),
                 "tags":      tags,
+                "image_url": image_url,
             })
             continue
 
@@ -1937,6 +1988,7 @@ def run_update():
             "is_today":    is_today,
             "new_title": new_title,
             "tags":      tags,
+            "image_url": image_url,
         })
         time.sleep(1)
 
