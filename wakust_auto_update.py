@@ -1293,55 +1293,74 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         return schedule, area, cup, main
 
     def _build_card_list(group, label):
-        """グループを縦積みカード型HTMLに変換する（スマホ最適化）"""
+        """グループを2列カード型HTMLに変換する（スマホ最適化・画像付き）"""
         group = sorted(group, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
-        group = group[:5]
-        cards = ""
-        for info in group:
-            title = _strip_today_tag(info["new_title"] or info["post"]["title"])
-            url   = info["post"]["url"]
-            schedule, area, cup, main = _parse_title_badges(title)
-            badge_html = ""
-            if schedule:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#2d8a4e;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{schedule}</span>'
-                )
-            if area:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{area}</span>'
-                )
-            if cup:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#e85d75;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{cup}</span>'
-                )
-            # アルファベットタグバッジ（例: CK | F | HR）を1つにまとめて表示
-            post_tags = info.get("tags", [])
-            if post_tags:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#d48806;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{" | ".join(post_tags)}</span>'
-                )
-            cards += (
-                f'<div style="border:1px solid #333;border-radius:8px;padding:10px 12px;'
-                f'margin-bottom:8px">'
-            )
-            if badge_html:
-                cards += f'<div style="margin-bottom:6px">{badge_html}</div>'
-            cards += (
-                f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
-                f'font-size:14px;line-height:1.5">{main}</a>'
-                f'</div>\n'
-            )
+        group = group[:4]
+        rows = ""
+        for idx in range(0, len(group), 2):
+            rows += '<tr>'
+            for col in range(2):
+                if idx + col < len(group):
+                    info = group[idx + col]
+                    title = _strip_today_tag(info["new_title"] or info["post"]["title"])
+                    url   = info["post"]["url"]
+                    schedule, area, cup, main = _parse_title_badges(title)
+                    badge_html = ""
+                    if schedule:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#2d8a4e;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{schedule}</span>'
+                        )
+                    if area:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{area}</span>'
+                        )
+                    if cup:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#e85d75;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{cup}</span>'
+                        )
+                    post_tags = info.get("tags", [])
+                    if post_tags:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#d48806;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{" | ".join(post_tags)}</span>'
+                        )
+                    cell_content = ""
+                    if badge_html:
+                        cell_content += f'<div style="margin-bottom:4px">{badge_html}</div>'
+                    cell_content += (
+                        f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
+                        f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
+                    )
+                    img_url = info.get("image_url")
+                    if img_url:
+                        cell_content += (
+                            f'<div style="margin-top:6px">'
+                            f'<a href="{url}">'
+                            f'<img src="{img_url}" alt="{main}" '
+                            f'style="width:100%;height:auto;border-radius:6px;'
+                            f'object-fit:cover;display:block" />'
+                            f'</a></div>'
+                        )
+                    rows += (
+                        f'<td style="width:50%;vertical-align:top;padding:4px">'
+                        f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
+                        f'padding:8px 10px;border:1px solid rgba(255,255,255,0.08)">'
+                        f'{cell_content}</div></td>'
+                    )
+                else:
+                    rows += '<td style="width:50%"></td>'
+            rows += '</tr>'
         return (
             f'<p style="margin-bottom:8px"><strong>{label}</strong></p>\n'
-            f'{cards}'
+            f'<table style="width:100%;border-collapse:collapse;border-spacing:0"><tbody>'
+            f'{rows}</tbody></table>\n'
         )
 
     inner = "<hr/>\n"
@@ -1563,14 +1582,14 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
                         f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
                         f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
                     )
-                    # タイトル画像を表示（小さめ）
+                    # タイトル画像を表示（カード横幅いっぱい）
                     img_url = info.get("image_url")
                     if img_url:
                         cell_content += (
                             f'<div style="margin-top:6px">'
                             f'<a href="{url}">'
                             f'<img src="{img_url}" alt="{main}" '
-                            f'style="width:80px;height:auto;border-radius:6px;'
+                            f'style="width:100%;height:auto;border-radius:6px;'
                             f'object-fit:cover;display:block" />'
                             f'</a></div>'
                         )
@@ -1618,14 +1637,14 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
                         f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
                         f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
                     )
-                    # タイトル画像を表示（小さめ）
+                    # タイトル画像を表示（カード横幅いっぱい）
                     img_url = info.get("image_url")
                     if img_url:
                         cell_content += (
                             f'<div style="margin-top:6px">'
                             f'<a href="{url}">'
                             f'<img src="{img_url}" alt="{main}" '
-                            f'style="width:80px;height:auto;border-radius:6px;'
+                            f'style="width:100%;height:auto;border-radius:6px;'
                             f'object-fit:cover;display:block" />'
                             f'</a></div>'
                         )
