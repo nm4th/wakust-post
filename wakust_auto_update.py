@@ -1152,7 +1152,7 @@ def fetch_next_date_from_schedule(schedule_url):
 # ============================================================
 def format_dates(dates):
     """日付リストを短縮表記にフォーマット
-    同月: "3/13,14,15"  月またぎ: "3/13,14|4/4"
+    同月: "3/13,14,15"  月またぎ: "3/13,14 | 4/4"
     """
     if not dates:
         return ""
@@ -1167,7 +1167,7 @@ def format_dates(dates):
     parts = []
     for m, days in groups:
         parts.append(f"{m}/{','.join(days)}")
-    return "|".join(parts)
+    return " | ".join(parts)
 
 
 TODAY_TAG = " #本日出勤"
@@ -1192,8 +1192,8 @@ def build_new_title(current_title, dates):
             return m.group(0)  # 日付+出勤がなければそのまま
         # 日付+出勤パターンを除去（全角・半角パイプ両対応）
         inner_clean = re.sub(r"[\d/,｜|\s]+出勤", "", inner)
-        # 前回のバグ等で残った孤立日付フラグメント（例: "3/28|"）も除去
-        inner_clean = re.sub(r"[\d/,｜|]+", "", inner_clean)
+        # 前回のバグ等で残った孤立日付フラグメント（例: "3/28 | "）も除去
+        inner_clean = re.sub(r"[\d/,｜|\s]+", "", inner_clean)
         replaced[0] = True
         return f"【{date_str}出勤{inner_clean}】"
 
@@ -1814,6 +1814,30 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
                 log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
             else:
                 log.info(f"    📎 回遊リストなし")
+
+    # edit_text_2に残っている旧形式の回遊リストブロックを除去
+    if "edit_text_2" in payload:
+        text2 = payload["edit_text_2"]
+        for _round in range(5):
+            decoded = html_module.unescape(text2)
+            if decoded == text2:
+                break
+            text2 = decoded
+        if RELATED_BLOCK_START in text2:
+            text2 = re.sub(
+                rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}\s*",
+                "",
+                text2,
+                flags=re.DOTALL,
+            )
+        if RELATED_NEXT_BLOCK_START in text2:
+            text2 = re.sub(
+                rf"{re.escape(RELATED_NEXT_BLOCK_START)}.*?{re.escape(RELATED_NEXT_BLOCK_END)}\s*",
+                "",
+                text2,
+                flags=re.DOTALL,
+            )
+        payload["edit_text_2"] = text2
 
     # repostフィールドを明示的に制御（フォームHTMLから紛れ込み防止）
     payload.pop(REPOST_FIELD, None)
