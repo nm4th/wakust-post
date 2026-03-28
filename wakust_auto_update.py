@@ -120,6 +120,8 @@ UPDATED_DATE_START        = "<!-- updated_date_start -->"
 UPDATED_DATE_END          = "<!-- updated_date_end -->"
 CALENDAR_BLOCK_START      = "<!-- calendar_block_start -->"
 CALENDAR_BLOCK_END        = "<!-- calendar_block_end -->"
+PAID_PREVIEW_START        = "<!-- paid_preview_start -->"
+PAID_PREVIEW_END          = "<!-- paid_preview_end -->"
 
 # まとめ記事（出勤カレンダー）: タイトル更新・再投稿をスキップ
 # {post_id: {"categories": set, "area_label": str}}
@@ -1392,6 +1394,50 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     return f'\n{RELATED_BLOCK_START}\n{inner}{RELATED_BLOCK_END}\n'
 
 
+def build_paid_preview_html():
+    """有料パートの案内ブロックHTMLを生成する。
+
+    回遊リスト・カレンダー誘導の後に挿入し、
+    購入後に閲覧できる情報を読者に提示する。
+    """
+    return (
+        f'\n{PAID_PREVIEW_START}\n'
+        '<div style="margin:24px 0 16px;border-radius:8px;overflow:hidden">'
+        '<div style="background:linear-gradient(90deg,#e91e8c,#ff69b4);'
+        'padding:10px 16px;display:flex;align-items:center">'
+        '<span style="font-size:18px;margin-right:8px">🔒</span>'
+        '<span style="color:#fff;font-size:16px;font-weight:bold">有料パートでは</span>'
+        '</div>'
+        '<div style="padding:12px 16px;font-size:14px;line-height:1.8">'
+        '<p style="margin:0">・セラピストの在籍店舗</p>'
+        '<p style="margin:0">・セラピスト名</p>'
+        '</div>'
+        '</div>'
+        f'\n{PAID_PREVIEW_END}\n'
+    )
+
+
+def inject_paid_preview_html(original_html):
+    """edit_text_1に有料パートプレビューを注入する。
+
+    挿入位置: 回遊リスト・カレンダー誘導の後（末尾）。
+    既存ブロックがあれば置換する。
+    """
+    preview_html = build_paid_preview_html()
+
+    # 既存ブロックを除去
+    if PAID_PREVIEW_START in original_html:
+        original_html = re.sub(
+            rf"{re.escape(PAID_PREVIEW_START)}.*?{re.escape(PAID_PREVIEW_END)}\s*",
+            "",
+            original_html,
+            flags=re.DOTALL,
+        )
+
+    # 回遊リスト・カレンダー誘導の後（末尾）に追加
+    return original_html.rstrip() + "\n" + preview_html
+
+
 def inject_related_html(original_html, related_html):
     # 旧形式の直近ブロックが残っていれば全て削除
     if RELATED_NEXT_BLOCK_START in original_html:
@@ -1814,6 +1860,8 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
                 log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
             else:
                 log.info(f"    📎 回遊リストなし")
+            # 有料パートプレビューを回遊リスト・カレンダー誘導の後に注入
+            payload["edit_text_1"] = inject_paid_preview_html(payload["edit_text_1"])
 
     # edit_text_2に残っている旧形式の回遊リストブロックを除去
     if "edit_text_2" in payload:
