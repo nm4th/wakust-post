@@ -1563,14 +1563,14 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
                         f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
                         f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
                     )
-                    # タイトル画像を表示（小さめ）
+                    # タイトル画像を表示（カード横幅いっぱい）
                     img_url = info.get("image_url")
                     if img_url:
                         cell_content += (
                             f'<div style="margin-top:6px">'
                             f'<a href="{url}">'
                             f'<img src="{img_url}" alt="{main}" '
-                            f'style="width:80px;height:auto;border-radius:6px;'
+                            f'style="width:100%;height:auto;border-radius:6px;'
                             f'object-fit:cover;display:block" />'
                             f'</a></div>'
                         )
@@ -1618,14 +1618,14 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
                         f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
                         f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
                     )
-                    # タイトル画像を表示（小さめ）
+                    # タイトル画像を表示（カード横幅いっぱい）
                     img_url = info.get("image_url")
                     if img_url:
                         cell_content += (
                             f'<div style="margin-top:6px">'
                             f'<a href="{url}">'
                             f'<img src="{img_url}" alt="{main}" '
-                            f'style="width:80px;height:auto;border-radius:6px;'
+                            f'style="width:100%;height:auto;border-radius:6px;'
                             f'object-fit:cover;display:block" />'
                             f'</a></div>'
                         )
