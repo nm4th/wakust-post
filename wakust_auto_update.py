@@ -1609,16 +1609,31 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
                     url = info["post"]["url"]
                     main = _parse_title_short(title)
                     category = info["post"].get("category", "")
-                    inner += (
-                        f'<td style="width:50%;vertical-align:top;padding:4px">'
-                        f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
-                        f'padding:8px 10px;border:1px solid rgba(255,255,255,0.08)">'
+                    cell_content = ""
+                    cell_content += (
                         f'<span style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'
                         f'font-size:10px;padding:2px 8px;border-radius:10px;margin-right:4px;margin-bottom:4px;'
                         f'font-weight:bold">'
                         f'{category}</span>'
                         f'<a href="{url}" style="color:#74b9ff;text-decoration:none;'
                         f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
+                    )
+                    # タイトル画像を表示（小さめ）
+                    img_url = info.get("image_url")
+                    if img_url:
+                        cell_content += (
+                            f'<div style="margin-top:6px">'
+                            f'<a href="{url}">'
+                            f'<img src="{img_url}" alt="{main}" '
+                            f'style="width:80px;height:auto;border-radius:6px;'
+                            f'object-fit:cover;display:block" />'
+                            f'</a></div>'
+                        )
+                    inner += (
+                        f'<td style="width:50%;vertical-align:top;padding:4px">'
+                        f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
+                        f'padding:8px 10px;border:1px solid rgba(255,255,255,0.08)">'
+                        f'{cell_content}'
                         f'</div></td>'
                     )
                 else:
@@ -1677,14 +1692,36 @@ def inject_calendar_html(original_html, calendar_html):
             original_html,
             flags=re.DOTALL,
         )
-    # マーカーなしの古い回遊リスト（箇条書き形式）も除去
-    # 「出勤予定の他の記事もチェック」「出勤中の他の記事もチェック」を起点に末尾まで除去
+    # マーカーなしの古い回遊リスト（様々な形式）も除去
+    # パターン1: <hr>から始まる形式（「出勤予定の他の記事もチェック」「出勤中の他の記事もチェック」）
     original_html = re.sub(
         r'<hr\s*/?>?\s*.*?出勤[^\n]*の他の記事もチェック.*',
         "",
         original_html,
         flags=re.DOTALL,
     )
+    # パターン2: <hr>なしで直接「出勤」テキストから始まる形式
+    original_html = re.sub(
+        r'<p[^>]*>\s*<strong>\s*📅[^<]*出勤[^<]*の他の記事もチェック.*',
+        "",
+        original_html,
+        flags=re.DOTALL,
+    )
+    # パターン3: 「カレンダーを見る」リンクが残っている場合
+    original_html = re.sub(
+        r'<div[^>]*>\s*<a[^>]*>🗓️[^<]*出勤カレンダーを見る</a>\s*</div>\s*',
+        "",
+        original_html,
+        flags=re.DOTALL,
+    )
+    # 旧形式の直近ブロックマーカーも除去
+    if RELATED_NEXT_BLOCK_START in original_html:
+        original_html = re.sub(
+            rf"{re.escape(RELATED_NEXT_BLOCK_START)}.*?{re.escape(RELATED_NEXT_BLOCK_END)}\s*",
+            "",
+            original_html,
+            flags=re.DOTALL,
+        )
     return original_html.rstrip() + "\n" + calendar_html
 
 
@@ -1887,6 +1924,29 @@ def run_calendar_only():
                 text = decoded
             payload["edit_text_1"] = text
             payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
+        # edit_text_2にも回遊リストが残っている場合は除去
+        if "edit_text_2" in payload:
+            text2 = payload["edit_text_2"]
+            for _round in range(5):
+                decoded = html_module.unescape(text2)
+                if decoded == text2:
+                    break
+                text2 = decoded
+            if RELATED_BLOCK_START in text2:
+                text2 = re.sub(
+                    rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}\s*",
+                    "",
+                    text2,
+                    flags=re.DOTALL,
+                )
+            if RELATED_NEXT_BLOCK_START in text2:
+                text2 = re.sub(
+                    rf"{re.escape(RELATED_NEXT_BLOCK_START)}.*?{re.escape(RELATED_NEXT_BLOCK_END)}\s*",
+                    "",
+                    text2,
+                    flags=re.DOTALL,
+                )
+            payload["edit_text_2"] = text2
         payload.pop(REPOST_FIELD, None)
 
         res = session.post(EDIT_FORM_ACTION, data=payload)
@@ -2100,6 +2160,29 @@ def run_update():
                     text = decoded
                 payload["edit_text_1"] = text
                 payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
+            # edit_text_2にも回遊リストが残っている場合は除去
+            if "edit_text_2" in payload:
+                text2 = payload["edit_text_2"]
+                for _round in range(5):
+                    decoded = html_module.unescape(text2)
+                    if decoded == text2:
+                        break
+                    text2 = decoded
+                if RELATED_BLOCK_START in text2:
+                    text2 = re.sub(
+                        rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}\s*",
+                        "",
+                        text2,
+                        flags=re.DOTALL,
+                    )
+                if RELATED_NEXT_BLOCK_START in text2:
+                    text2 = re.sub(
+                        rf"{re.escape(RELATED_NEXT_BLOCK_START)}.*?{re.escape(RELATED_NEXT_BLOCK_END)}\s*",
+                        "",
+                        text2,
+                        flags=re.DOTALL,
+                    )
+                payload["edit_text_2"] = text2
             # 再投稿しない
             payload.pop(REPOST_FIELD, None)
             res = session.post(EDIT_FORM_ACTION, data=payload)
