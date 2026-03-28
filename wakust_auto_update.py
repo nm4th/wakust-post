@@ -1405,7 +1405,7 @@ def build_paid_preview_html(image_url=None):
         img_html = (
             '<div style="text-align:center;padding:0 16px 12px">'
             f'<img src="{image_url}" alt="" '
-            'style="width:60%;height:auto;border-radius:6px;display:inline-block;pointer-events:none" />'
+            'style="width:100%;height:auto;border-radius:6px;display:block;pointer-events:none" />'
             '</div>'
         )
     return (
