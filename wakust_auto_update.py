@@ -1394,36 +1394,44 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     return f'\n{RELATED_BLOCK_START}\n{inner}{RELATED_BLOCK_END}\n'
 
 
-def build_paid_preview_html():
+def build_paid_preview_html(image_url=None):
     """有料パートの案内ブロックHTMLを生成する。
 
     回遊リスト・カレンダー誘導の後に挿入し、
     購入後に閲覧できる情報を読者に提示する。
     """
+    img_html = ""
+    if image_url:
+        img_html = (
+            '<div style="text-align:center;padding:0 16px 12px">'
+            f'<img src="{image_url}" alt="" '
+            'style="width:100%;height:auto;border-radius:6px;display:block;pointer-events:none" />'
+            '</div>'
+        )
     return (
         f'\n{PAID_PREVIEW_START}\n'
         '<div style="margin:24px 0 16px;border-radius:8px;overflow:hidden">'
         '<div style="background:linear-gradient(90deg,#e91e8c,#ff69b4);'
         'padding:10px 16px;display:flex;align-items:center">'
         '<span style="font-size:18px;margin-right:8px">🔒</span>'
-        '<span style="color:#fff;font-size:16px;font-weight:bold">有料パートでは</span>'
+        '<span style="color:#fff;font-size:16px;font-weight:bold">この子に会いたくなったら…</span>'
         '</div>'
         '<div style="padding:12px 16px;font-size:14px;line-height:1.8">'
-        '<p style="margin:0">・セラピストの在籍店舗</p>'
-        '<p style="margin:0">・セラピスト名</p>'
+        '<p style="margin:0">有料パートで在籍店舗・セラピスト名をチェック！</p>'
         '</div>'
+        f'{img_html}'
         '</div>'
         f'\n{PAID_PREVIEW_END}\n'
     )
 
 
-def inject_paid_preview_html(original_html):
+def inject_paid_preview_html(original_html, image_url=None):
     """edit_text_1に有料パートプレビューを注入する。
 
     挿入位置: 回遊リスト・カレンダー誘導の後（末尾）。
     既存ブロックがあれば置換する。
     """
-    preview_html = build_paid_preview_html()
+    preview_html = build_paid_preview_html(image_url=image_url)
 
     # 既存ブロックを除去
     if PAID_PREVIEW_START in original_html:
@@ -1816,7 +1824,7 @@ def inject_updated_date(html):
 # ============================================================
 # 記事の更新
 # ============================================================
-def update_post(session, post, details, new_title, do_repost=False, all_post_infos=None):
+def update_post(session, post, details, new_title, do_repost=False, all_post_infos=None, image_url=None):
     payload = dict(details["payload"])
 
     payload["edit_title"] = new_title
@@ -1861,7 +1869,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
             else:
                 log.info(f"    📎 回遊リストなし")
             # 有料パートプレビューを回遊リスト・カレンダー誘導の後に注入
-            payload["edit_text_1"] = inject_paid_preview_html(payload["edit_text_1"])
+            payload["edit_text_1"] = inject_paid_preview_html(payload["edit_text_1"], image_url=image_url)
 
     # edit_text_2に残っている旧形式の回遊リストブロックを除去
     if "edit_text_2" in payload:
@@ -2309,7 +2317,7 @@ def run_update():
         log.info(f"\n📝 [{post_id}] {info['post']['title']}")
         log.info(f"    → {new_title}")
 
-        if update_post(session, info["post"], info["details"], new_title, do_repost, post_infos):
+        if update_post(session, info["post"], info["details"], new_title, do_repost, post_infos, image_url=info.get("image_url")):
             state[post_id] = {
                 "dates":       info["next_date"],
                 "title":      new_title,
