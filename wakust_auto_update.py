@@ -1297,7 +1297,7 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     def _build_card_list(group, label):
         """グループを2列カード型HTMLに変換する（スマホ最適化・画像付き）"""
         group = sorted(group, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
-        group = group[:4]
+        group = group[:2]
         rows = ""
         for idx in range(0, len(group), 2):
             rows += '<tr>'
