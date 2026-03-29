@@ -1607,7 +1607,8 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         else:
             header_bg = "linear-gradient(135deg, #00b894, #00cec9)"
         inner += (
-            f'<div id="{anchor_id}" style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
+            f'<a name="{anchor_id}"></a>'
+            f'<div style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
             f'box-shadow:0 2px 8px rgba(0,0,0,0.15)">'
             f'<div style="background:{header_bg};padding:10px 14px">'
             f'<span style="font-size:15px;font-weight:bold;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.2)">'
@@ -2265,10 +2266,6 @@ def run_update():
         related_changed = post_state.get("all_ids") != all_ids_str
 
         # ── まとめ記事: タイトル更新・再投稿スキップ、カレンダーのみ注入 ──
-        # 0時モードではカレンダー更新しない
-        if post_id in SUMMARY_POST_IDS and MIDNIGHT_RUN:
-            log.info(f"    ⏭️  0時モード: カレンダー更新スキップ")
-            continue
         if post_id in SUMMARY_POST_IDS:
             area_label = SUMMARY_POSTS[post_id]["area_label"]
             calendar_html = build_calendar_html(post_infos, summary_post_id=post_id)
