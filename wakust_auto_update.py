@@ -1153,23 +1153,12 @@ def fetch_next_date_from_schedule(schedule_url):
 # タイトルの【日付出勤】部分を置換
 # ============================================================
 def format_dates(dates):
-    """日付リストを短縮表記にフォーマット
-    同月: "3/13,14,15"  月またぎ: "3/13,14 | 4/4"
+    """日付リストをカンマ区切りでフォーマット
+    例: ["3/21", "3/22", "4/2"] → "3/21,3/22,4/2"
     """
     if not dates:
         return ""
-    # dates: ["3/13", "3/14", "4/4"] 形式
-    groups = []  # [(month, [day, day, ...]), ...]
-    for d in dates:
-        m, day = d.split("/")
-        if groups and groups[-1][0] == m:
-            groups[-1][1].append(day)
-        else:
-            groups.append((m, [day]))
-    parts = []
-    for m, days in groups:
-        parts.append(f"{m}/{','.join(days)}")
-    return " | ".join(parts)
+    return ",".join(dates)
 
 
 TODAY_TAG = " #本日出勤"
@@ -1501,21 +1490,8 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         next_date = info.get("next_date")
         if not next_date:
             continue
-        # "3/13,14|4/4" → ["3/13", "3/14", "4/4"]
-        dates = []
-        for part in next_date.split("|"):
-            items = part.split(",")
-            if "/" in items[0]:
-                month = items[0].split("/")[0]
-                dates.append(items[0])
-                for d in items[1:]:
-                    # "3/27"のようにフル形式ならそのまま、"27"なら月を補完
-                    if "/" in d:
-                        dates.append(d)
-                    else:
-                        dates.append(f"{month}/{d}")
-            else:
-                dates.extend(items)
+        # "3/21,3/22,4/2" → ["3/21", "3/22", "4/2"]
+        dates = [d.strip() for d in next_date.split(",") if "/" in d]
         for d in dates:
             date_map[d].append(info)
 
