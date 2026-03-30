@@ -292,7 +292,7 @@ def _parse_post_list_page(soup):
                         pv_total = int(m_t.group(1))
                 # 売上・販売回数
                 if "販売" in text or "売上" in text:
-                    m_sc = re.search(r"販売\s*[：:]\s*(\d+)", text)
+                    m_sc = re.search(r"販売(?:回数)?\s*[：:]\s*(\d+)", text)
                     m_sp = re.search(r"売上\s*[：:]\s*(\d+)", text)
                     if m_sc:
                         sales_count = int(m_sc.group(1))
