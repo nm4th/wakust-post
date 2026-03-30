@@ -1195,6 +1195,29 @@ def build_new_title(current_title, dates):
     return new_title
 
 
+def inject_tag_badges(title, tags):
+    """タイトルにアルファベットタグのバッジを注入する。
+
+    既存のタグバッジ（純アルファベットのみの【】）があれば除去してから再挿入する。
+    例: 【3/30,31出勤】【Jカップ】【池袋】「…」 + tags=["PZ"]
+      → 【3/30,31出勤】【Jカップ】【池袋】【PZ】「…」
+    """
+    if not tags:
+        # タグがない場合も既存のタグバッジは除去する
+        return re.sub(r"【[A-Za-z]+(?:\s*\|\s*[A-Za-z]+)*】", "", title)
+
+    # 既存のタグバッジを除去（純アルファベット or パイプ区切りアルファベットのみの【】）
+    cleaned = re.sub(r"【[A-Za-z]+(?:\s*\|\s*[A-Za-z]+)*】", "", title)
+
+    # バッジ部分とメイン見出しを分離
+    # 【】で囲まれたバッジをすべて取得し、残りをメイン見出しとする
+    badges = re.findall(r"【[^】]*】", cleaned)
+    main = re.sub(r"【[^】]*】", "", cleaned).strip()
+
+    tag_badge = "【" + " | ".join(tags) + "】"
+    return "".join(badges) + tag_badge + main
+
+
 # ============================================================
 # 回遊リスト（本日・直近出勤の他記事リンク）の生成・注入
 # ============================================================
@@ -2114,7 +2137,7 @@ def run_update():
                 "next_date": None,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": inject_tag_badges(_strip_today_tag(post["title"]), tags),
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -2132,7 +2155,7 @@ def run_update():
                 "next_date": None,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": inject_tag_badges(_strip_today_tag(post["title"]), tags),
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -2142,6 +2165,7 @@ def run_update():
         log.info(f"    📅 直近の出勤日: {dates_str} {'【明日出勤！】' if is_tomorrow else ''}")
 
         new_title = build_new_title(post["title"], dates)
+        new_title = inject_tag_badges(new_title, tags)
         # 0時モード: 本日出勤の記事にハッシュタグを付与
         if MIDNIGHT_RUN and is_today:
             new_title = new_title.rstrip() + TODAY_TAG
