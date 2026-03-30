@@ -1153,23 +1153,12 @@ def fetch_next_date_from_schedule(schedule_url):
 # タイトルの【日付出勤】部分を置換
 # ============================================================
 def format_dates(dates):
-    """日付リストを短縮表記にフォーマット
-    同月: "3/13,14,15"  月またぎ: "3/13,14 | 4/4"
+    """日付リストをカンマ区切りでフォーマット
+    例: ["3/21", "3/22", "4/2"] → "3/21,3/22,4/2"
     """
     if not dates:
         return ""
-    # dates: ["3/13", "3/14", "4/4"] 形式
-    groups = []  # [(month, [day, day, ...]), ...]
-    for d in dates:
-        m, day = d.split("/")
-        if groups and groups[-1][0] == m:
-            groups[-1][1].append(day)
-        else:
-            groups.append((m, [day]))
-    parts = []
-    for m, days in groups:
-        parts.append(f"{m}/{','.join(days)}")
-    return " | ".join(parts)
+    return ",".join(dates)
 
 
 TODAY_TAG = " #本日出勤"
@@ -1204,6 +1193,29 @@ def build_new_title(current_title, dates):
     if not replaced[0]:
         new_title = f"【{date_str}出勤】" + current_title
     return new_title
+
+
+def inject_tag_badges(title, tags):
+    """タイトルにアルファベットタグのバッジを注入する。
+
+    既存のタグバッジ（純アルファベットのみの【】）があれば除去してから再挿入する。
+    例: 【3/30,31出勤】【Jカップ】【池袋】「…」 + tags=["PZ"]
+      → 【3/30,31出勤】【Jカップ】【池袋】【PZ】「…」
+    """
+    if not tags:
+        # タグがない場合も既存のタグバッジは除去する
+        return re.sub(r"【[A-Za-z]+(?:\s*\|\s*[A-Za-z]+)*】", "", title)
+
+    # 既存のタグバッジを除去（純アルファベット or パイプ区切りアルファベットのみの【】）
+    cleaned = re.sub(r"【[A-Za-z]+(?:\s*\|\s*[A-Za-z]+)*】", "", title)
+
+    # バッジ部分とメイン見出しを分離
+    # 【】で囲まれたバッジをすべて取得し、残りをメイン見出しとする
+    badges = re.findall(r"【[^】]*】", cleaned)
+    main = re.sub(r"【[^】]*】", "", cleaned).strip()
+
+    tag_badge = "【" + " | ".join(tags) + "】"
+    return "".join(badges) + tag_badge + main
 
 
 # ============================================================
@@ -1501,21 +1513,8 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         next_date = info.get("next_date")
         if not next_date:
             continue
-        # "3/13,14|4/4" → ["3/13", "3/14", "4/4"]
-        dates = []
-        for part in next_date.split("|"):
-            items = part.split(",")
-            if "/" in items[0]:
-                month = items[0].split("/")[0]
-                dates.append(items[0])
-                for d in items[1:]:
-                    # "3/27"のようにフル形式ならそのまま、"27"なら月を補完
-                    if "/" in d:
-                        dates.append(d)
-                    else:
-                        dates.append(f"{month}/{d}")
-            else:
-                dates.extend(items)
+        # "3/21,3/22,4/2" → ["3/21", "3/22", "4/2"]
+        dates = [d.strip() for d in next_date.split(",") if "/" in d]
         for d in dates:
             date_map[d].append(info)
 
@@ -2138,7 +2137,7 @@ def run_update():
                 "next_date": None,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": inject_tag_badges(_strip_today_tag(post["title"]), tags),
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -2156,7 +2155,7 @@ def run_update():
                 "next_date": None,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": inject_tag_badges(_strip_today_tag(post["title"]), tags),
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -2166,6 +2165,7 @@ def run_update():
         log.info(f"    📅 直近の出勤日: {dates_str} {'【明日出勤！】' if is_tomorrow else ''}")
 
         new_title = build_new_title(post["title"], dates)
+        new_title = inject_tag_badges(new_title, tags)
         # 0時モード: 本日出勤の記事にハッシュタグを付与
         if MIDNIGHT_RUN and is_today:
             new_title = new_title.rstrip() + TODAY_TAG
