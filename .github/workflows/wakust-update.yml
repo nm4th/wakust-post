@@ -42,7 +42,19 @@ jobs:
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
           MIDNIGHT_RUN: ${{ (github.event.schedule == '0 15 * * *' || inputs.midnight_mode == true) && '1' || '0' }}
           CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
+          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: python wakust_auto_update.py
+
+      - name: Commit and push logs
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add logs/ || true
+          git diff --cached --quiet || git commit -m "📊 PVログ自動更新 $(date -u +%Y-%m-%d)"
+          git push || true
 
       - name: Upload logs
         if: always()

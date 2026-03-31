@@ -39,6 +39,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from urllib.parse import urlparse, parse_qs, unquote
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 
 # ============================================================
@@ -80,6 +83,11 @@ log = logging.getLogger(__name__)
 # ============================================================
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
+
+# メール通知設定（GitHub Secretsで管理）
+REPORT_EMAIL    = os.environ.get("REPORT_EMAIL", "")       # 送信先
+SMTP_USER       = os.environ.get("SMTP_USER", "")          # Gmail アドレス
+SMTP_PASSWORD   = os.environ.get("SMTP_PASSWORD", "")      # Gmail アプリパスワード
 
 # タイムゾーン（GitHub ActionsはUTCで動くため、JST明示が必須）
 JST = timezone(timedelta(hours=9))
@@ -208,6 +216,227 @@ def log_pv(posts, post_infos=None, state=None):
     log.info(f"📊 PVログ記録: {len(posts)}件 合計{total_pv}PV → {PV_LOG_FILE}")
     for p in sorted(pv_posts, key=lambda x: x["pv_daily"], reverse=True)[:10]:
         log.info(f"    [{p['id']}] {p['pv_daily']:>4}PV  {p['title']}")
+
+
+PV_REPORT_FILE = "logs/wakust_pv_report.csv"
+
+
+def generate_pv_report(posts):
+    """前日比＋週次サマリーのPV比較レポートを生成する（0時モードで呼ばれる）。
+
+    - 前日比: 前日のCSVデータと比較し各記事のPV増減・ランキング変動を出力
+    - 週次サマリー: 過去7日分のCSVを集計しPV推移・トップ記事・成長率を出力
+    - レポートCSV: logs/wakust_pv_report.csv に当日分を追記
+    """
+    os.makedirs(PV_LOG_DIR, exist_ok=True)
+
+    if not os.path.exists(PV_LOG_FILE):
+        log.info("📈 PV比較レポート: ログファイルが未作成のためスキップ")
+        return
+
+    # CSVを日付ごとにグループ化して読み込む
+    daily_data = _load_pv_log_by_date()
+
+    if not daily_data:
+        log.info("📈 PV比較レポート: 過去データなし。スキップ")
+        return
+
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    dates_sorted = sorted(daily_data.keys())
+
+    # 現在のPVデータをマップ化
+    current_map = {}
+    for p in posts:
+        if p.get("pv_daily") is not None:
+            current_map[p["id"]] = {
+                "title": p["title"],
+                "pv_daily": p.get("pv_daily") or 0,
+                "pv_weekly": p.get("pv_weekly") or 0,
+                "pv_monthly": p.get("pv_monthly") or 0,
+                "pv_total": p.get("pv_total") or 0,
+                "sales_count": p.get("sales_count") or 0,
+            }
+
+    # レポート本文を収集（ログ＋メール用）
+    report_lines = []
+
+    def _report(msg):
+        log.info(msg)
+        report_lines.append(msg)
+
+    # ── 前日比レポート ──
+    yesterday_date = dates_sorted[-1]
+    yesterday_map = daily_data[yesterday_date]
+
+    _report(f"\n{'═'*55}")
+    _report(f"📈 PV比較レポート（前日比: {yesterday_date} → {today}）")
+    _report(f"{'═'*55}")
+
+    # 前日と今日の合計PV
+    prev_total = sum(d.get("pv_daily", 0) for d in yesterday_map.values())
+    curr_total = sum(d.get("pv_daily", 0) for d in current_map.values())
+    diff_total = curr_total - prev_total
+    sign = "+" if diff_total >= 0 else ""
+    _report(f"  合計PV: {prev_total} → {curr_total} ({sign}{diff_total})")
+
+    # 記事ごとの増減を計算
+    report_rows = []
+    for pid, curr in current_map.items():
+        prev = yesterday_map.get(pid, {})
+        prev_pv = prev.get("pv_daily", 0)
+        curr_pv = curr["pv_daily"]
+        diff = curr_pv - prev_pv
+        growth = ((curr_pv / prev_pv - 1) * 100) if prev_pv > 0 else 0
+        report_rows.append({
+            "id": pid,
+            "title": curr["title"],
+            "pv_prev": prev_pv,
+            "pv_curr": curr_pv,
+            "pv_diff": diff,
+            "growth_pct": growth,
+            "pv_total": curr["pv_total"],
+        })
+
+    # PV増加トップ10
+    rising = sorted(report_rows, key=lambda x: x["pv_diff"], reverse=True)
+    _report(f"\n  📈 PV上昇トップ10:")
+    for r in rising[:10]:
+        sign = "+" if r["pv_diff"] >= 0 else ""
+        _report(f"    [{r['id']}] {r['pv_prev']:>4} → {r['pv_curr']:>4} ({sign}{r['pv_diff']:>+4}) {r['title'][:30]}")
+
+    # PV減少ワースト5
+    falling = sorted(report_rows, key=lambda x: x["pv_diff"])
+    worst = [r for r in falling[:5] if r["pv_diff"] < 0]
+    if worst:
+        _report(f"\n  📉 PV下降ワースト5:")
+        for r in worst:
+            _report(f"    [{r['id']}] {r['pv_prev']:>4} → {r['pv_curr']:>4} ({r['pv_diff']:>+4}) {r['title'][:30]}")
+
+    # ── 週次サマリー ──
+    week_dates = dates_sorted[-7:]
+    if len(week_dates) >= 2:
+        _report(f"\n{'═'*55}")
+        _report(f"📊 週次サマリー（{week_dates[0]} 〜 {today}）")
+        _report(f"{'═'*55}")
+
+        # 日別合計PVの推移
+        _report(f"  日別PV推移:")
+        daily_totals = []
+        for d in week_dates:
+            dt = sum(v.get("pv_daily", 0) for v in daily_data[d].values())
+            daily_totals.append(dt)
+            weekday = WEEKDAY_JP[datetime.strptime(d, "%Y-%m-%d").weekday()]
+            _report(f"    {d}（{weekday}）: {dt:>5}PV")
+        _report(f"    {today}（{WEEKDAY_JP[datetime.now(JST).weekday()]}）: {curr_total:>5}PV ← 本日")
+
+        # 週間平均
+        all_totals = daily_totals + [curr_total]
+        avg_pv = sum(all_totals) / len(all_totals)
+        _report(f"  週間平均: {avg_pv:.0f}PV/日")
+
+        # 週間成長率（最初の日 vs 今日）
+        first_day_total = daily_totals[0] if daily_totals else 0
+        if first_day_total > 0:
+            weekly_growth = (curr_total / first_day_total - 1) * 100
+            sign = "+" if weekly_growth >= 0 else ""
+            _report(f"  週間成長率: {sign}{weekly_growth:.1f}%")
+
+        # 週間累計PVトップ10
+        weekly_cumulative = defaultdict(lambda: {"pv_sum": 0, "title": "", "days": 0})
+        for d in week_dates:
+            for pid, data in daily_data[d].items():
+                weekly_cumulative[pid]["pv_sum"] += data.get("pv_daily", 0)
+                weekly_cumulative[pid]["title"] = data.get("title", "")
+                weekly_cumulative[pid]["days"] += 1
+        # 今日分も加算
+        for pid, curr in current_map.items():
+            weekly_cumulative[pid]["pv_sum"] += curr["pv_daily"]
+            weekly_cumulative[pid]["title"] = curr["title"]
+            weekly_cumulative[pid]["days"] += 1
+
+        top_weekly = sorted(weekly_cumulative.items(), key=lambda x: x[1]["pv_sum"], reverse=True)
+        _report(f"\n  🏆 週間累計PVトップ10:")
+        for pid, data in top_weekly[:10]:
+            _report(f"    [{pid}] {data['pv_sum']:>5}PV ({data['days']}日間)  {data['title'][:30]}")
+
+    # ── レポートCSVに追記 ──
+    write_header = not os.path.exists(PV_REPORT_FILE)
+    with open(PV_REPORT_FILE, "a", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow([
+                "日付", "記事ID", "タイトル", "前日PV", "当日PV",
+                "PV増減", "成長率%", "全期間PV",
+            ])
+        for r in report_rows:
+            writer.writerow([
+                today, r["id"], r["title"], r["pv_prev"], r["pv_curr"],
+                r["pv_diff"], f"{r['growth_pct']:.1f}", r["pv_total"],
+            ])
+
+    log.info(f"\n📄 PV比較レポートCSV出力 → {PV_REPORT_FILE}")
+
+    # ── メール送信 ──
+    _send_report_email(today, report_lines)
+
+
+def _send_report_email(today, report_lines):
+    """PV比較レポートをGmail経由でメール送信する。
+
+    必要な環境変数（GitHub Secrets）:
+      REPORT_EMAIL  - 送信先メールアドレス
+      SMTP_USER     - 送信元Gmailアドレス
+      SMTP_PASSWORD  - Gmailアプリパスワード
+    """
+    if not all([REPORT_EMAIL, SMTP_USER, SMTP_PASSWORD]):
+        log.info("📧 メール送信: SMTP設定が未構成のためスキップ")
+        return
+
+    subject = f"ワクスト PVレポート {today}"
+    body = "\n".join(report_lines)
+
+    msg = MIMEMultipart()
+    msg["From"] = SMTP_USER
+    msg["To"] = REPORT_EMAIL
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        log.info(f"📧 レポートメール送信完了 → {REPORT_EMAIL}")
+    except Exception as e:
+        log.warning(f"⚠️ メール送信失敗: {e}")
+
+
+def _load_pv_log_by_date():
+    """PVログCSVを日付ごとに {date: {post_id: {pv_daily, title, ...}}} で読み込む"""
+    daily_data = {}
+    try:
+        with open(PV_LOG_FILE, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                date_str = row.get("記録日時", "")[:10]
+                if not date_str:
+                    continue
+                pid = row.get("記事ID", "")
+                if not pid:
+                    continue
+                if date_str not in daily_data:
+                    daily_data[date_str] = {}
+                daily_data[date_str][pid] = {
+                    "title": row.get("タイトル", ""),
+                    "pv_daily": int(row.get("前日PV") or 0),
+                    "pv_weekly": int(row.get("前週PV") or 0),
+                    "pv_monthly": int(row.get("前月PV") or 0),
+                    "pv_total": int(row.get("全期間PV") or 0),
+                    "sales_count": int(row.get("販売回数") or 0),
+                }
+    except Exception as e:
+        log.warning(f"⚠️ PVログ読み込みエラー: {e}")
+    return daily_data
 
 
 # ============================================================
@@ -1307,7 +1536,7 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         return schedule, area, cup, main
 
     def _build_card_list(group, label):
-        """グループを2列カード型HTMLに変換する（スマホ最適化・画像付き）"""
+        """グループを2列カード型HTMLに変換する（CTA付きスマホ最適化）"""
         group = sorted(group, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
         group = group[:2]
         rows = ""
@@ -1349,24 +1578,34 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
                     if badge_html:
                         cell_content += f'<div style="margin-bottom:4px">{badge_html}</div>'
                     cell_content += (
-                        f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
-                        f'font-size:12px;line-height:1.4;font-weight:500">{main}</a>'
+                        f'<div style="font-size:12px;line-height:1.4;font-weight:500;'
+                        f'color:#e0e0e0;margin-bottom:6px">{main}</div>'
                     )
                     img_url = info.get("image_url")
                     if img_url:
                         cell_content += (
-                            f'<div style="margin-top:6px">'
-                            f'<a href="{url}">'
+                            f'<div style="margin-bottom:8px">'
                             f'<img src="{img_url}" alt="{main}" '
                             f'style="width:100%;height:auto;border-radius:6px;'
                             f'object-fit:cover;display:block" />'
-                            f'</a></div>'
+                            f'</div>'
                         )
+                    # CTAボタン
+                    cell_content += (
+                        f'<div style="text-align:center">'
+                        f'<a href="{url}" style="display:block;background:linear-gradient(135deg,#e91e8c,#ff69b4);'
+                        f'color:#fff;text-decoration:none;font-size:13px;font-weight:bold;'
+                        f'padding:8px 12px;border-radius:6px;'
+                        f'box-shadow:0 2px 8px rgba(233,30,140,0.3)">'
+                        f'この子を見る &raquo;</a>'
+                        f'</div>'
+                    )
                     rows += (
                         f'<td style="width:50%;vertical-align:top;padding:4px">'
+                        f'<a href="{url}" style="text-decoration:none;color:inherit;display:block">'
                         f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
                         f'padding:8px 10px;border:1px solid rgba(255,255,255,0.08)">'
-                        f'{cell_content}</div></td>'
+                        f'{cell_content}</div></a></td>'
                     )
                 else:
                     rows += '<td style="width:50%"></td>'
@@ -2181,9 +2420,10 @@ def run_update():
         })
         time.sleep(1)
 
-    # PVを記録（0時モードのみ）
+    # PVを記録＋比較レポート生成（0時モードのみ）
     if MIDNIGHT_RUN:
         log_pv(posts, post_infos=post_infos, state=state)
+        generate_pv_report(posts)
 
     # 再投稿対象を決定（0時モードでは再投稿しない）
     # カテゴリーごとに上限まで: 明日出勤(ID降順) → 明後日以降(PV降順) で補充
@@ -2220,9 +2460,9 @@ def run_update():
                 log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
                 continue
 
-            # 1) 明日出勤の記事をID降順で選定
+            # 1) 明日出勤の記事をPV降順で選定
             tomorrow = [i for i in eligible if i["is_tomorrow"]]
-            tomorrow.sort(key=lambda x: x["post"]["id"], reverse=True)
+            tomorrow.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
 
             # 2) 明後日以降の記事をPV降順で選定
             future = [i for i in eligible if not i["is_tomorrow"]]
