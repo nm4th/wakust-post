@@ -39,6 +39,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from urllib.parse import urlparse, parse_qs, unquote
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 
 # ============================================================
@@ -80,6 +83,11 @@ log = logging.getLogger(__name__)
 # ============================================================
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
+
+# メール通知設定（GitHub Secretsで管理）
+REPORT_EMAIL    = os.environ.get("REPORT_EMAIL", "")       # 送信先
+SMTP_USER       = os.environ.get("SMTP_USER", "")          # Gmail アドレス
+SMTP_PASSWORD   = os.environ.get("SMTP_PASSWORD", "")      # Gmail アプリパスワード
 
 # タイムゾーン（GitHub ActionsはUTCで動くため、JST明示が必須）
 JST = timezone(timedelta(hours=9))
@@ -249,20 +257,27 @@ def generate_pv_report(posts):
                 "sales_count": p.get("sales_count") or 0,
             }
 
+    # レポート本文を収集（ログ＋メール用）
+    report_lines = []
+
+    def _report(msg):
+        log.info(msg)
+        report_lines.append(msg)
+
     # ── 前日比レポート ──
     yesterday_date = dates_sorted[-1]
     yesterday_map = daily_data[yesterday_date]
 
-    log.info(f"\n{'═'*55}")
-    log.info(f"📈 PV比較レポート（前日比: {yesterday_date} → {today}）")
-    log.info(f"{'═'*55}")
+    _report(f"\n{'═'*55}")
+    _report(f"📈 PV比較レポート（前日比: {yesterday_date} → {today}）")
+    _report(f"{'═'*55}")
 
     # 前日と今日の合計PV
     prev_total = sum(d.get("pv_daily", 0) for d in yesterday_map.values())
     curr_total = sum(d.get("pv_daily", 0) for d in current_map.values())
     diff_total = curr_total - prev_total
     sign = "+" if diff_total >= 0 else ""
-    log.info(f"  合計PV: {prev_total} → {curr_total} ({sign}{diff_total})")
+    _report(f"  合計PV: {prev_total} → {curr_total} ({sign}{diff_total})")
 
     # 記事ごとの増減を計算
     report_rows = []
@@ -284,47 +299,47 @@ def generate_pv_report(posts):
 
     # PV増加トップ10
     rising = sorted(report_rows, key=lambda x: x["pv_diff"], reverse=True)
-    log.info(f"\n  📈 PV上昇トップ10:")
+    _report(f"\n  📈 PV上昇トップ10:")
     for r in rising[:10]:
         sign = "+" if r["pv_diff"] >= 0 else ""
-        log.info(f"    [{r['id']}] {r['pv_prev']:>4} → {r['pv_curr']:>4} ({sign}{r['pv_diff']:>+4}) {r['title'][:30]}")
+        _report(f"    [{r['id']}] {r['pv_prev']:>4} → {r['pv_curr']:>4} ({sign}{r['pv_diff']:>+4}) {r['title'][:30]}")
 
     # PV減少ワースト5
     falling = sorted(report_rows, key=lambda x: x["pv_diff"])
     worst = [r for r in falling[:5] if r["pv_diff"] < 0]
     if worst:
-        log.info(f"\n  📉 PV下降ワースト5:")
+        _report(f"\n  📉 PV下降ワースト5:")
         for r in worst:
-            log.info(f"    [{r['id']}] {r['pv_prev']:>4} → {r['pv_curr']:>4} ({r['pv_diff']:>+4}) {r['title'][:30]}")
+            _report(f"    [{r['id']}] {r['pv_prev']:>4} → {r['pv_curr']:>4} ({r['pv_diff']:>+4}) {r['title'][:30]}")
 
     # ── 週次サマリー ──
     week_dates = dates_sorted[-7:]
     if len(week_dates) >= 2:
-        log.info(f"\n{'═'*55}")
-        log.info(f"📊 週次サマリー（{week_dates[0]} 〜 {today}）")
-        log.info(f"{'═'*55}")
+        _report(f"\n{'═'*55}")
+        _report(f"📊 週次サマリー（{week_dates[0]} 〜 {today}）")
+        _report(f"{'═'*55}")
 
         # 日別合計PVの推移
-        log.info(f"  日別PV推移:")
+        _report(f"  日別PV推移:")
         daily_totals = []
         for d in week_dates:
             dt = sum(v.get("pv_daily", 0) for v in daily_data[d].values())
             daily_totals.append(dt)
             weekday = WEEKDAY_JP[datetime.strptime(d, "%Y-%m-%d").weekday()]
-            log.info(f"    {d}（{weekday}）: {dt:>5}PV")
-        log.info(f"    {today}（{WEEKDAY_JP[datetime.now(JST).weekday()]}）: {curr_total:>5}PV ← 本日")
+            _report(f"    {d}（{weekday}）: {dt:>5}PV")
+        _report(f"    {today}（{WEEKDAY_JP[datetime.now(JST).weekday()]}）: {curr_total:>5}PV ← 本日")
 
         # 週間平均
         all_totals = daily_totals + [curr_total]
         avg_pv = sum(all_totals) / len(all_totals)
-        log.info(f"  週間平均: {avg_pv:.0f}PV/日")
+        _report(f"  週間平均: {avg_pv:.0f}PV/日")
 
         # 週間成長率（最初の日 vs 今日）
         first_day_total = daily_totals[0] if daily_totals else 0
         if first_day_total > 0:
             weekly_growth = (curr_total / first_day_total - 1) * 100
             sign = "+" if weekly_growth >= 0 else ""
-            log.info(f"  週間成長率: {sign}{weekly_growth:.1f}%")
+            _report(f"  週間成長率: {sign}{weekly_growth:.1f}%")
 
         # 週間累計PVトップ10
         weekly_cumulative = defaultdict(lambda: {"pv_sum": 0, "title": "", "days": 0})
@@ -340,9 +355,9 @@ def generate_pv_report(posts):
             weekly_cumulative[pid]["days"] += 1
 
         top_weekly = sorted(weekly_cumulative.items(), key=lambda x: x[1]["pv_sum"], reverse=True)
-        log.info(f"\n  🏆 週間累計PVトップ10:")
+        _report(f"\n  🏆 週間累計PVトップ10:")
         for pid, data in top_weekly[:10]:
-            log.info(f"    [{pid}] {data['pv_sum']:>5}PV ({data['days']}日間)  {data['title'][:30]}")
+            _report(f"    [{pid}] {data['pv_sum']:>5}PV ({data['days']}日間)  {data['title'][:30]}")
 
     # ── レポートCSVに追記 ──
     write_header = not os.path.exists(PV_REPORT_FILE)
@@ -360,6 +375,40 @@ def generate_pv_report(posts):
             ])
 
     log.info(f"\n📄 PV比較レポートCSV出力 → {PV_REPORT_FILE}")
+
+    # ── メール送信 ──
+    _send_report_email(today, report_lines)
+
+
+def _send_report_email(today, report_lines):
+    """PV比較レポートをGmail経由でメール送信する。
+
+    必要な環境変数（GitHub Secrets）:
+      REPORT_EMAIL  - 送信先メールアドレス
+      SMTP_USER     - 送信元Gmailアドレス
+      SMTP_PASSWORD  - Gmailアプリパスワード
+    """
+    if not all([REPORT_EMAIL, SMTP_USER, SMTP_PASSWORD]):
+        log.info("📧 メール送信: SMTP設定が未構成のためスキップ")
+        return
+
+    subject = f"ワクスト PVレポート {today}"
+    body = "\n".join(report_lines)
+
+    msg = MIMEMultipart()
+    msg["From"] = SMTP_USER
+    msg["To"] = REPORT_EMAIL
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        log.info(f"📧 レポートメール送信完了 → {REPORT_EMAIL}")
+    except Exception as e:
+        log.warning(f"⚠️ メール送信失敗: {e}")
 
 
 def _load_pv_log_by_date():

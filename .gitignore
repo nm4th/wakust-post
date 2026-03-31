@@ -1,5 +1,6 @@
 wakust_state.json
-logs/
+logs/*.log
+!logs/*.csv
 __pycache__/
 *.pyc
 .DS_Store
