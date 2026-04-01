@@ -1796,7 +1796,7 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         else:
             link_bg = "#00b894"
         toc_items += (
-            f'<a onclick="document.getElementById(\'{anchor_id}\').scrollIntoView({{behavior:\'smooth\'}});return false;" '
+            f'<a href="javascript:void(0)" onclick="document.getElementById(\'{anchor_id}\').scrollIntoView({{behavior:\'smooth\'}});return false;" '
             f'style="display:inline-block;background:{link_bg};color:#fff;cursor:pointer;'
             f'text-decoration:none;font-size:12px;font-weight:bold;padding:5px 10px;'
             f'border-radius:16px;margin:3px 2px;white-space:nowrap">'
