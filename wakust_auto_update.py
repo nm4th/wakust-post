@@ -2456,33 +2456,40 @@ def run_update():
             log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
             continue
 
-        # 1) 明日出勤の記事をPV降順で選定
-        tomorrow = [i for i in eligible if i["is_tomorrow"]]
-        tomorrow.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
-
-        # 2) 明後日以降の記事をPV降順で選定
-        future = [i for i in eligible if not i["is_tomorrow"]]
-        future.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+        if MIDNIGHT_RUN:
+            # 0時モード: 本日出勤 → 明日以降出勤 の優先順で選定
+            primary = [i for i in eligible if i["is_today"]]
+            primary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+            secondary = [i for i in eligible if not i["is_today"]]
+            secondary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+            primary_label, secondary_label = "本日", "明日以降"
+        else:
+            # 17時モード: 明日出勤 → 明後日以降出勤 の優先順で選定
+            primary = [i for i in eligible if i["is_tomorrow"]]
+            primary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+            secondary = [i for i in eligible if not i["is_tomorrow"]]
+            secondary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+            primary_label, secondary_label = "明日", "明後日以降"
 
         # 上限まで埋める
         selected = []
-        for info in tomorrow:
+        for info in primary:
             if len(selected) >= slots:
                 break
             selected.append(info)
 
-        for info in future:
+        for info in secondary:
             if len(selected) >= slots:
                 break
             selected.append(info)
 
         for info in selected:
             repost_ids.add(info["post"]["id"])
-            is_tmr = "明日" if info["is_tomorrow"] else "明後日以降"
+            label = primary_label if info in primary else secondary_label
             pv = info["post"].get("pv_total") or 0
-            log.info(f"    [{info['post']['id']}] 再投稿対象（{is_tmr}, PV={pv}）")
+            log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, PV={pv}）")
 
-        log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → 明日{len(tomorrow)}件+明後日以降{len(future)}件 → 選定{len(selected)}件")
+        log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → {primary_label}{len(primary)}件+{secondary_label}{len(secondary)}件 → 選定{len(selected)}件")
 
     # 全記事更新＋再投稿
     log.info(f"\n{'─'*55}")
