@@ -2009,10 +2009,18 @@ def _parse_title_badges_calendar(title):
 
 def inject_calendar_html(original_html, calendar_html):
     """まとめ記事のedit_text_1にカレンダーHTMLを注入する。"""
-    # 既存カレンダーブロックを除去
+    # 既存カレンダーブロックを除去（マーカー付き）
     if CALENDAR_BLOCK_START in original_html:
         original_html = re.sub(
             rf"{re.escape(CALENDAR_BLOCK_START)}.*?{re.escape(CALENDAR_BLOCK_END)}\s*",
+            "",
+            original_html,
+            flags=re.DOTALL,
+        )
+    # マーカーなしの旧カレンダー除去（calendar_block_endだけ残っている場合）
+    if CALENDAR_BLOCK_END in original_html:
+        original_html = re.sub(
+            r'<div[^>]*background:\s*linear-gradient[^>]*>.*?出勤カレンダー.*?' + re.escape(CALENDAR_BLOCK_END) + r'\s*',
             "",
             original_html,
             flags=re.DOTALL,
