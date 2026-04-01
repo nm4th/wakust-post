@@ -1,9 +1,9 @@
 """
 ワクスト 記事タイトル自動更新 ＋ 翌日出勤記事再投稿スクリプト
 ====================================================================
-毎日16:00 JSTと0:00 JSTに実行し、以下を行います。
+毎日17:00 JSTと0:00 JSTに実行し、以下を行います。
 
-■ 16:00モード（通常）:
+■ 17:00モード（通常）:
   1. 記事一覧から全記事のURLとタイトルを取得
   2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
   3. スケジュールページから翌日以降で最も近い出勤日を最大3件取得
@@ -15,14 +15,14 @@
   8. PVデータをCSVに記録
 
 ■ 0:00モード（MIDNIGHT_RUN=1）:
-  - 16時に作成済みの回遊リストのラベルを文字置換:
+  - 17時に作成済みの回遊リストのラベルを文字置換:
     明日出勤予定→本日出勤中、明後日以降出勤予定→明日以降出勤予定
-  - 神奈川県・埼玉県カテゴリーの記事を再投稿（20時モードではスキップ）
+  - 神奈川県・埼玉県カテゴリーの記事を再投稿（17時モードではスキップ）
   - 「〇月〇日更新」の書き換えもしない
 
 使い方:
   pip install requests beautifulsoup4
-  python wakust_auto_update.py                # 16:00モード
+  python wakust_auto_update.py                # 17:00モード
   MIDNIGHT_RUN=1 python wakust_auto_update.py # 0:00モード
 """
 
@@ -96,14 +96,14 @@ def jst_strftime(fmt):
     """time.strftimeのJST版"""
     return datetime.now(JST).strftime(fmt)
 
-# MIDNIGHT_RUN: 実際のJST時刻で自動判定（22:00-05:59 → 0時モード）
+# MIDNIGHT_RUN: 実際のJST時刻で自動判定（19:00-05:59 → 0時モード）
 # 環境変数での明示指定も可能（"1"=強制0時モード, "0"=強制通常モード）
 _midnight_env = os.environ.get("MIDNIGHT_RUN", "")
 if _midnight_env in ("0", "1"):
     MIDNIGHT_RUN = _midnight_env == "1"
 else:
     _jst_hour = datetime.now(JST).hour
-    MIDNIGHT_RUN = _jst_hour >= 22 or _jst_hour < 6
+    MIDNIGHT_RUN = _jst_hour >= 19 or _jst_hour < 6
 
 # CALENDAR_ONLY: まとめ記事（出勤カレンダー）のみ更新
 CALENDAR_ONLY = os.environ.get("CALENDAR_ONLY", "0") == "1"
@@ -140,7 +140,7 @@ SUMMARY_POSTS = {
     "1657105": {"categories": {"埼玉県"},                 "area_label": "埼玉エリア"},
 }
 SUMMARY_POST_IDS = set(SUMMARY_POSTS.keys())
-# 0時モードで再投稿するカテゴリー（20時モードでは再投稿しない）
+# 0時モードで再投稿するカテゴリー（17時モードでは再投稿しない）
 MIDNIGHT_REPOST_CATEGORIES = {"神奈川県", "埼玉県"}
 # 全まとめ記事の対象カテゴリ（情報収集用）
 SUMMARY_ALL_CATEGORIES = set()
@@ -952,7 +952,7 @@ def fetch_next_date_from_schedule(schedule_url):
             _used_playwright = True
 
     today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-    # 16時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
+    # 17時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
     start_date   = today if MIDNIGHT_RUN else today + timedelta(days=1)
     current_year = today.year
     candidates   = []
@@ -1445,7 +1445,7 @@ def build_new_title(current_title, dates):
 def build_related_html(all_post_infos, current_post_id, current_category=None):
     """出勤グループ別の回遊リストを生成（更新した全記事対象）
 
-    16:00モード: グループ1=明日出勤、グループ2=明後日以降出勤
+    17:00モード: グループ1=明日出勤、グループ2=明後日以降出勤
     0:00モード:  グループ1=今日出勤、グループ2=明日以降出勤
 
     カテゴリ回遊ルール:
@@ -1488,7 +1488,7 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         label1 = "📅 本日出勤中の他の記事もチェック！"
         label2 = "📆 明日以降出勤予定の他の記事もチェック！"
     else:
-        # 16時モード: グループ1=明日出勤(is_tomorrow)、グループ2=明後日以降
+        # 17時モード: グループ1=明日出勤(is_tomorrow)、グループ2=明後日以降
         group1 = [p for p in others if p["is_tomorrow"]]
         day_after_tomorrow = today_dt + timedelta(days=2)
 
@@ -2418,7 +2418,7 @@ def run_update():
 
     # 再投稿対象を決定
     # カテゴリーごとに上限まで: 明日出勤(ID降順) → 明後日以降(PV降順) で補充
-    # 神奈川県・埼玉県は0時モードで再投稿、それ以外は20時モードで再投稿
+    # 神奈川県・埼玉県は0時モードで再投稿、それ以外は17時モードで再投稿
     repost_ids = set()
     log.info(f"\n{'─'*55}")
     log.info(f"📊 再投稿対象選定")
@@ -2429,7 +2429,7 @@ def run_update():
         posts_by_category[info["post"]["category"]].append(info)
 
     for category, infos in posts_by_category.items():
-        # 0時モードでは MIDNIGHT_REPOST_CATEGORIES のみ、20時モードではそれ以外を再投稿
+        # 0時モードでは MIDNIGHT_REPOST_CATEGORIES のみ、17時モードではそれ以外を再投稿
         if MIDNIGHT_RUN and category not in MIDNIGHT_REPOST_CATEGORIES:
             log.info(f"  🌙 カテゴリー「{category}」: 0時モード対象外。スキップ")
             continue
@@ -2605,7 +2605,7 @@ if __name__ == "__main__":
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
         run_calendar_only()
     else:
-        mode = "0時モード（回遊ラベル切替・神奈川/埼玉再投稿）" if MIDNIGHT_RUN else "16時モード（通常）"
+        mode = "0時モード（回遊ラベル切替・神奈川/埼玉再投稿）" if MIDNIGHT_RUN else "17時モード（通常）"
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
         log.info(f"   MIDNIGHT_RUN={os.environ.get('MIDNIGHT_RUN', '(未設定)')}")
         run_update()
