@@ -1382,12 +1382,23 @@ def fetch_next_date_from_schedule(schedule_url):
 # タイトルの【日付出勤】部分を置換
 # ============================================================
 def format_dates(dates):
-    """日付リストをカンマ区切りでフォーマット
-    例: ["3/21", "3/22", "4/2"] → "3/21,3/22,4/2"
+    """日付リストを月ごとにグループ化してフォーマット
+    同月の日付はドットで繋ぎ月を省略、異なる月は | で区切る
+    例: ["3/28", "4/3", "4/4", "4/5"] → "3/28 | 4/3.4.5"
+    例: ["3/21", "3/22", "4/2"] → "3/21.22 | 4/2"
     """
     if not dates:
         return ""
-    return ",".join(dates)
+    from collections import OrderedDict
+    groups = OrderedDict()
+    for d in dates:
+        if "/" in d:
+            month, day = d.split("/", 1)
+            groups.setdefault(month, []).append(day)
+    parts = []
+    for month, days in groups.items():
+        parts.append(f"{month}/{'.'.join(days)}")
+    return " | ".join(parts)
 
 
 TODAY_TAG = " #本日出勤"
@@ -1410,12 +1421,12 @@ def build_new_title(current_title, dates):
 
     def replace_bracket(m):
         inner = m.group(1)
-        if not re.search(r"[\d/,｜|\s]+出勤", inner):
+        if not re.search(r"[\d/.,｜|\s]+出勤", inner):
             return m.group(0)  # 日付+出勤がなければそのまま
         # 日付+出勤パターンを除去（全角・半角パイプ両対応）
-        inner_clean = re.sub(r"[\d/,｜|\s]+出勤", "", inner)
+        inner_clean = re.sub(r"[\d/.,｜|\s]+出勤", "", inner)
         # 前回のバグ等で残った孤立日付フラグメント（例: "3/28 | "）も除去
-        inner_clean = re.sub(r"[\d/,｜|\s]+", "", inner_clean)
+        inner_clean = re.sub(r"[\d/.,｜|\s]+", "", inner_clean)
         replaced[0] = True
         return f"【{date_str}出勤{inner_clean}】"
 
