@@ -126,8 +126,11 @@ RELATED_NEXT_BLOCK_START  = "<!-- related_next_posts_start -->"
 RELATED_NEXT_BLOCK_END    = "<!-- related_next_posts_end -->"
 UPDATED_DATE_START        = "<!-- updated_date_start -->"
 UPDATED_DATE_END          = "<!-- updated_date_end -->"
-CALENDAR_BLOCK_START      = "<!-- calendar_block_start -->"
-CALENDAR_BLOCK_END        = "<!-- calendar_block_end -->"
+CALENDAR_BLOCK_START      = '<div id="calendar_block_start" style="display:none"></div>'
+CALENDAR_BLOCK_END        = '<div id="calendar_block_end" style="display:none"></div>'
+# 旧マーカー（HTMLコメント版）: サイト側で消える場合があるため互換用
+_OLD_CALENDAR_BLOCK_START = "<!-- calendar_block_start -->"
+_OLD_CALENDAR_BLOCK_END   = "<!-- calendar_block_end -->"
 PAID_PREVIEW_START        = "<!-- paid_preview_start -->"
 PAID_PREVIEW_END          = "<!-- paid_preview_end -->"
 
@@ -2009,7 +2012,7 @@ def _parse_title_badges_calendar(title):
 
 def inject_calendar_html(original_html, calendar_html):
     """まとめ記事のedit_text_1にカレンダーHTMLを注入する。"""
-    # 既存カレンダーブロックを除去
+    # 既存カレンダーブロックを除去（新マーカー: 非表示div）
     if CALENDAR_BLOCK_START in original_html:
         original_html = re.sub(
             rf"{re.escape(CALENDAR_BLOCK_START)}.*?{re.escape(CALENDAR_BLOCK_END)}\s*",
@@ -2017,6 +2020,25 @@ def inject_calendar_html(original_html, calendar_html):
             original_html,
             flags=re.DOTALL,
         )
+    # 旧マーカー（HTMLコメント版）で囲まれたカレンダーを除去
+    if _OLD_CALENDAR_BLOCK_START in original_html:
+        original_html = re.sub(
+            rf"{re.escape(_OLD_CALENDAR_BLOCK_START)}.*?{re.escape(_OLD_CALENDAR_BLOCK_END)}\s*",
+            "",
+            original_html,
+            flags=re.DOTALL,
+        )
+    # 旧マーカーが部分的に消えた場合（endだけ残っている等）
+    if _OLD_CALENDAR_BLOCK_END in original_html:
+        original_html = re.sub(
+            r'<div[^>]*background:\s*linear-gradient[^>]*>.*?出勤カレンダー.*?' + re.escape(_OLD_CALENDAR_BLOCK_END) + r'\s*',
+            "",
+            original_html,
+            flags=re.DOTALL,
+        )
+    # 孤立した旧endマーカーも除去
+    original_html = original_html.replace(_OLD_CALENDAR_BLOCK_END, "")
+    original_html = original_html.replace(_OLD_CALENDAR_BLOCK_START, "")
     # 既存の回遊リストも除去（マーカーあり）
     if RELATED_BLOCK_START in original_html:
         original_html = re.sub(
