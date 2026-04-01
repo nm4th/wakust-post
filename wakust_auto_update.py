@@ -1515,54 +1515,84 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         return schedule, area, cup, main
 
     def _build_card_list(group, label):
-        """グループを縦積みカード型HTMLに変換する（スマホ最適化）"""
+        """グループを2列カード型HTMLに変換する（CTA付きスマホ最適化）"""
         group = sorted(group, key=lambda p: p["post"].get("sales_count") or 0, reverse=True)
-        group = group[:5]
-        cards = ""
-        for info in group:
-            title = _strip_today_tag(info["new_title"] or info["post"]["title"])
-            url   = info["post"]["url"]
-            schedule, area, cup, main = _parse_title_badges(title)
-            badge_html = ""
-            if schedule:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#2d8a4e;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{schedule}</span>'
-                )
-            if area:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{area}</span>'
-                )
-            if cup:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#e85d75;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{cup}</span>'
-                )
-            post_tags = info.get("tags", [])
-            if post_tags:
-                badge_html += (
-                    f'<span style="display:inline-block;background:#d48806;color:#fff;'
-                    f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
-                    f'{" | ".join(post_tags)}</span>'
-                )
-            cards += (
-                f'<div style="border:1px solid #333;border-radius:8px;padding:10px 12px;'
-                f'margin-bottom:8px">'
-            )
-            if badge_html:
-                cards += f'<div style="margin-bottom:6px">{badge_html}</div>'
-            cards += (
-                f'<a href="{url}" style="color:#6db3f2;text-decoration:none;'
-                f'font-size:14px;line-height:1.5">{main}</a>'
-                f'</div>\n'
-            )
+        group = group[:2]
+        rows = ""
+        for idx in range(0, len(group), 2):
+            rows += '<tr>'
+            for col in range(2):
+                if idx + col < len(group):
+                    info = group[idx + col]
+                    title = _strip_today_tag(info["new_title"] or info["post"]["title"])
+                    url   = info["post"]["url"]
+                    schedule, area, cup, main = _parse_title_badges(title)
+                    badge_html = ""
+                    if schedule:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#2d8a4e;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{schedule}</span>'
+                        )
+                    if area:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#4a90d9;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{area}</span>'
+                        )
+                    if cup:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#e85d75;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{cup}</span>'
+                        )
+                    post_tags = info.get("tags", [])
+                    if post_tags:
+                        badge_html += (
+                            f'<span style="display:inline-block;background:#d48806;color:#fff;'
+                            f'font-size:11px;padding:2px 8px;border-radius:4px;margin-right:4px">'
+                            f'{" | ".join(post_tags)}</span>'
+                        )
+                    cell_content = ""
+                    if badge_html:
+                        cell_content += f'<div style="margin-bottom:4px">{badge_html}</div>'
+                    cell_content += (
+                        f'<div style="font-size:12px;line-height:1.4;font-weight:500;'
+                        f'color:#6db3f2;margin-bottom:6px">{main}</div>'
+                    )
+                    img_url = info.get("image_url")
+                    if img_url:
+                        cell_content += (
+                            f'<div style="margin-bottom:8px">'
+                            f'<img src="{img_url}" alt="{main}" '
+                            f'style="width:100%;height:auto;border-radius:6px;'
+                            f'object-fit:cover;display:block" />'
+                            f'</div>'
+                        )
+                    # CTAボタン
+                    cell_content += (
+                        f'<div style="text-align:center">'
+                        f'<a href="{url}" style="display:block;background:linear-gradient(135deg,#e91e8c,#ff69b4);'
+                        f'color:#fff;text-decoration:none;font-size:13px;font-weight:bold;'
+                        f'padding:8px 12px;border-radius:6px;'
+                        f'box-shadow:0 2px 8px rgba(233,30,140,0.3)">'
+                        f'この子を見る &raquo;</a>'
+                        f'</div>'
+                    )
+                    rows += (
+                        f'<td style="width:50%;vertical-align:top;padding:4px">'
+                        f'<a href="{url}" style="text-decoration:none;color:inherit;display:block">'
+                        f'<div style="background:rgba(255,255,255,0.05);border-radius:8px;'
+                        f'padding:8px 10px;border:1px solid rgba(255,255,255,0.08)">'
+                        f'{cell_content}</div></a></td>'
+                    )
+                else:
+                    rows += '<td style="width:50%"></td>'
+            rows += '</tr>'
         return (
             f'<p style="margin-bottom:8px"><strong>{label}</strong></p>\n'
-            f'{cards}'
+            f'<table style="width:100%;border-collapse:collapse;border-spacing:0"><tbody>'
+            f'{rows}</tbody></table>\n'
         )
 
     inner = "<hr/>\n"
@@ -1766,7 +1796,8 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         else:
             link_bg = "#00b894"
         toc_items += (
-            f'<a href="#{anchor_id}" style="display:inline-block;background:{link_bg};color:#fff;'
+            f'<a onclick="document.getElementById(\'{anchor_id}\').scrollIntoView({{behavior:\'smooth\'}});return false;" '
+            f'style="display:inline-block;background:{link_bg};color:#fff;cursor:pointer;'
             f'text-decoration:none;font-size:12px;font-weight:bold;padding:5px 10px;'
             f'border-radius:16px;margin:3px 2px;white-space:nowrap">'
             f'{date_str}（{weekday}）<span style="font-size:10px;opacity:0.9">…{count}件</span></a>'
@@ -1794,8 +1825,7 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         else:
             header_bg = "linear-gradient(135deg, #00b894, #00cec9)"
         inner += (
-            f'<a name="{anchor_id}"></a>'
-            f'<div style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
+            f'<div id="{anchor_id}" style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
             f'box-shadow:0 2px 8px rgba(0,0,0,0.15)">'
             f'<div style="background:{header_bg};padding:10px 14px">'
             f'<span style="font-size:15px;font-weight:bold;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.2)">'
