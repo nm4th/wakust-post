@@ -850,7 +850,7 @@ def _fetch_with_playwright(url):
                 page.wait_for_load_state("networkidle", timeout=15000)
             # スケジュール要素が表示されるまで追加で待機
             try:
-                page.wait_for_selector(".sch-date, .sch-work, .weekSchedule, table", timeout=5000)
+                page.wait_for_selector(".sch-date, .sch-work, .sch-tbl, .weekSchedule, table, dl", timeout=5000)
             except Exception:
                 pass  # タイムアウトでも続行
             js_html = page.content()
@@ -1137,17 +1137,34 @@ def fetch_next_date_from_schedule(schedule_url):
             if candidates:
                 log.info(f"    📅 形式K(krc_cast_calendar)でマッチ")
 
-    # パターンM: men-este形式（tokyo-fairy-land等）
-    # div.sch-date 内の dt に日付、div.sch-work 内の dd に出勤情報
-    # 複数週(複数sch-date/sch-work)がある場合は全ペアを処理
+    # パターンM: men-este形式（tokyo-fairy-land・omiya-mens-este等）
+    # 複数のHTML構造バリエーションに対応:
+    #   M1: div.sch-date > dt に日付、div.sch-work > dd に出勤情報（複数週対応）
+    #   M2: dt.sch-date / dd.sch-work が直接 dl 内に並ぶ形式
+    #   M3: sch-tbl 内の dl > dt + dd ペア（sch-date/sch-work サブクラスなし）
+    #   M4: sch-date/sch-work が div 以外の要素（span, li 等）に付与されている形式
     if not candidates:
         all_sch_dates = soup.find_all("div", class_=re.compile(r"sch-date"))
         all_sch_works = soup.find_all("div", class_=re.compile(r"sch-work"))
         if all_sch_dates and all_sch_works:
-            log.info(f"    🔧 形式M: sch-date={len(all_sch_dates)}個, sch-work={len(all_sch_works)}個")
+            log.info(f"    🔧 形式M1: sch-date={len(all_sch_dates)}個, sch-work={len(all_sch_works)}個")
             for sch_date, sch_work in zip(all_sch_dates, all_sch_works):
                 dts = sch_date.find_all("dt")
                 dds = sch_work.find_all("dd")
+                if not dts or not dds:
+                    # dt/dd がない場合、子要素のタグ名をログに記録し直接テキストで試行
+                    child_tags = [c.name for c in sch_date.children if hasattr(c, 'name') and c.name]
+                    log.info(f"    🔧 形式M1: dt/ddなし (sch-date子要素: {child_tags[:5]}), テキスト抽出を試行")
+                    date_text = sch_date.get_text(strip=True)
+                    work_text = sch_work.get_text(strip=True)
+                    m = re.search(r"(\d{1,2})/(\d{1,2})", date_text)
+                    if m and ("休み" not in work_text and "未定" not in work_text):
+                        if re.search(r"\d{2}:\d{2}", work_text) or "満枠" in work_text:
+                            month, day = int(m.group(1)), int(m.group(2))
+                            d = datetime(current_year, month, day)
+                            if d >= start_date:
+                                candidates.append((d, f"{month}/{day}"))
+                    continue
                 for dt_el, dd_el in zip(dts, dds):
                     info = dd_el.get_text(strip=True)
                     if "休み" in info or "未定" in info:
@@ -1162,7 +1179,76 @@ def fetch_next_date_from_schedule(schedule_url):
                     if d >= start_date:
                         candidates.append((d, f"{month}/{day}"))
             if candidates:
-                log.info(f"    📅 形式M(sch-date/sch-work)でマッチ")
+                log.info(f"    📅 形式M1(sch-date/sch-work div)でマッチ")
+
+    # M2: dt.sch-date / dd.sch-work がdl内に直接並ぶ形式
+    if not candidates:
+        dt_sch = soup.find_all("dt", class_=re.compile(r"sch-date"))
+        dd_sch = soup.find_all("dd", class_=re.compile(r"sch-work"))
+        if dt_sch and dd_sch:
+            log.info(f"    🔧 形式M2: dt.sch-date={len(dt_sch)}個, dd.sch-work={len(dd_sch)}個")
+            for dt_el, dd_el in zip(dt_sch, dd_sch):
+                info = dd_el.get_text(strip=True)
+                if "休み" in info or "未定" in info:
+                    continue
+                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                    continue
+                m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                if not m:
+                    continue
+                month, day = int(m.group(1)), int(m.group(2))
+                d = datetime(current_year, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                log.info(f"    📅 形式M2(dt.sch-date/dd.sch-work)でマッチ")
+
+    # M3: sch-tbl 内の dl > dt + dd ペア
+    if not candidates:
+        sch_tbl = soup.find(class_=re.compile(r"sch-tbl"))
+        if sch_tbl:
+            dts = sch_tbl.find_all("dt")
+            dds = sch_tbl.find_all("dd")
+            if dts and dds:
+                log.info(f"    🔧 形式M3: sch-tbl内 dt={len(dts)}個, dd={len(dds)}個")
+                for dt_el, dd_el in zip(dts, dds):
+                    info = dd_el.get_text(strip=True)
+                    if "休み" in info or "未定" in info:
+                        continue
+                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                        continue
+                    m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                    if not m:
+                        continue
+                    month, day = int(m.group(1)), int(m.group(2))
+                    d = datetime(current_year, month, day)
+                    if d >= start_date:
+                        candidates.append((d, f"{month}/{day}"))
+                if candidates:
+                    log.info(f"    📅 形式M3(sch-tbl dl)でマッチ")
+
+    # M4: sch-date/sch-work が任意の要素（span, li, p 等）に付与されている形式
+    if not candidates:
+        any_sch_dates = soup.find_all(class_=re.compile(r"sch-date"))
+        any_sch_works = soup.find_all(class_=re.compile(r"sch-work"))
+        # div版で見つからなかった場合のみ（div版は上で処理済み）
+        if any_sch_dates and any_sch_works and not all_sch_dates:
+            log.info(f"    🔧 形式M4: sch-date({any_sch_dates[0].name})={len(any_sch_dates)}個, sch-work({any_sch_works[0].name})={len(any_sch_works)}個")
+            for date_el, work_el in zip(any_sch_dates, any_sch_works):
+                info = work_el.get_text(strip=True)
+                if "休み" in info or "未定" in info:
+                    continue
+                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                    continue
+                m = re.search(r"(\d{1,2})/(\d{1,2})", date_el.get_text())
+                if not m:
+                    continue
+                month, day = int(m.group(1)), int(m.group(2))
+                d = datetime(current_year, month, day)
+                if d >= start_date:
+                    candidates.append((d, f"{month}/{day}"))
+            if candidates:
+                log.info(f"    📅 形式M4(sch-date/sch-work 汎用)でマッチ")
 
     # パターンP: profile_list形式（liora2024等）
     # div.profile_list > p.p_day(日のみ: "25(水)") + p.p_check(時刻: "10:00 - 15:00")
@@ -1252,14 +1338,26 @@ def fetch_next_date_from_schedule(schedule_url):
             soup = pw_soup
             _used_playwright = True
             # 再帰ではなく主要パターンだけ再チェック
-            # Format M (men-este) — 複数週対応
+            # Format M (men-este) — 複数バリエーション対応
+            # M1: div.sch-date > dt / div.sch-work > dd
             all_sch_dates = soup.find_all("div", class_=re.compile(r"sch-date"))
             all_sch_works = soup.find_all("div", class_=re.compile(r"sch-work"))
             if all_sch_dates and all_sch_works:
-                log.info(f"    🔧 PW形式M: sch-date={len(all_sch_dates)}個, sch-work={len(all_sch_works)}個")
+                log.info(f"    🔧 PW形式M1: sch-date={len(all_sch_dates)}個, sch-work={len(all_sch_works)}個")
                 for sch_date, sch_work in zip(all_sch_dates, all_sch_works):
                     dts = sch_date.find_all("dt")
                     dds = sch_work.find_all("dd")
+                    if not dts or not dds:
+                        date_text = sch_date.get_text(strip=True)
+                        work_text = sch_work.get_text(strip=True)
+                        m = re.search(r"(\d{1,2})/(\d{1,2})", date_text)
+                        if m and ("休み" not in work_text and "未定" not in work_text):
+                            if re.search(r"\d{2}:\d{2}", work_text) or "満枠" in work_text:
+                                month, day = int(m.group(1)), int(m.group(2))
+                                d = datetime(current_year, month, day)
+                                if d >= start_date:
+                                    candidates.append((d, f"{month}/{day}"))
+                        continue
                     for dt_el, dd_el in zip(dts, dds):
                         info = dd_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
@@ -1267,6 +1365,62 @@ def fetch_next_date_from_schedule(schedule_url):
                         if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
                             continue
                         m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                        if m:
+                            month, day = int(m.group(1)), int(m.group(2))
+                            d = datetime(current_year, month, day)
+                            if d >= start_date:
+                                candidates.append((d, f"{month}/{day}"))
+            # M2: dt.sch-date / dd.sch-work がdl内に直接並ぶ形式
+            if not candidates:
+                dt_sch = soup.find_all("dt", class_=re.compile(r"sch-date"))
+                dd_sch = soup.find_all("dd", class_=re.compile(r"sch-work"))
+                if dt_sch and dd_sch:
+                    log.info(f"    🔧 PW形式M2: dt.sch-date={len(dt_sch)}個, dd.sch-work={len(dd_sch)}個")
+                    for dt_el, dd_el in zip(dt_sch, dd_sch):
+                        info = dd_el.get_text(strip=True)
+                        if "休み" in info or "未定" in info:
+                            continue
+                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            continue
+                        m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                        if m:
+                            month, day = int(m.group(1)), int(m.group(2))
+                            d = datetime(current_year, month, day)
+                            if d >= start_date:
+                                candidates.append((d, f"{month}/{day}"))
+            # M3: sch-tbl 内の dl > dt + dd ペア
+            if not candidates:
+                sch_tbl = soup.find(class_=re.compile(r"sch-tbl"))
+                if sch_tbl:
+                    dts = sch_tbl.find_all("dt")
+                    dds = sch_tbl.find_all("dd")
+                    if dts and dds:
+                        log.info(f"    🔧 PW形式M3: sch-tbl内 dt={len(dts)}個, dd={len(dds)}個")
+                        for dt_el, dd_el in zip(dts, dds):
+                            info = dd_el.get_text(strip=True)
+                            if "休み" in info or "未定" in info:
+                                continue
+                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                                continue
+                            m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
+                            if m:
+                                month, day = int(m.group(1)), int(m.group(2))
+                                d = datetime(current_year, month, day)
+                                if d >= start_date:
+                                    candidates.append((d, f"{month}/{day}"))
+            # M4: sch-date/sch-work が任意の要素に付与
+            if not candidates and not all_sch_dates:
+                any_sch_dates = soup.find_all(class_=re.compile(r"sch-date"))
+                any_sch_works = soup.find_all(class_=re.compile(r"sch-work"))
+                if any_sch_dates and any_sch_works:
+                    log.info(f"    🔧 PW形式M4: sch-date({any_sch_dates[0].name})={len(any_sch_dates)}個")
+                    for date_el, work_el in zip(any_sch_dates, any_sch_works):
+                        info = work_el.get_text(strip=True)
+                        if "休み" in info or "未定" in info:
+                            continue
+                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            continue
+                        m = re.search(r"(\d{1,2})/(\d{1,2})", date_el.get_text())
                         if m:
                             month, day = int(m.group(1)), int(m.group(2))
                             d = datetime(current_year, month, day)
