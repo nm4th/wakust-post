@@ -1812,8 +1812,7 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         else:
             link_bg = "#00b894"
         toc_items += (
-            f'<a onclick="document.getElementById(\'{anchor_id}\').scrollIntoView({{behavior:\'smooth\'}});return false;" '
-            f'style="display:inline-block;background:{link_bg};color:#fff;cursor:pointer;'
+            f'<a href="#{anchor_id}" style="display:inline-block;background:{link_bg};color:#fff;'
             f'text-decoration:none;font-size:12px;font-weight:bold;padding:5px 10px;'
             f'border-radius:16px;margin:3px 2px;white-space:nowrap">'
             f'{date_str}（{weekday}）<span style="font-size:10px;opacity:0.9">…{count}件</span></a>'
@@ -1841,7 +1840,8 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         else:
             header_bg = "linear-gradient(135deg, #00b894, #00cec9)"
         inner += (
-            f'<div id="{anchor_id}" style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
+            f'<a name="{anchor_id}"></a>'
+            f'<div style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
             f'box-shadow:0 2px 8px rgba(0,0,0,0.15)">'
             f'<div style="background:{header_bg};padding:10px 14px">'
             f'<span style="font-size:15px;font-weight:bold;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.2)">'
