@@ -1799,40 +1799,11 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         main = re.sub(r"【[^】]*】", "", title).strip()
         return main
 
-    # 目次（クイックリンク）構築
-    toc_items = ""
-    for date_str in sorted_dates:
-        weekday = _get_weekday(date_str)
-        anchor_id = f"cal-{date_str.replace('/', '-')}"
-        count = len(date_map[date_str])
-        if weekday == "日":
-            link_bg = "#ff6b6b"
-        elif weekday == "土":
-            link_bg = "#74b9ff"
-        else:
-            link_bg = "#00b894"
-        toc_items += (
-            f'<a href="javascript:void(0)" onclick="document.getElementById(\'{anchor_id}\').scrollIntoView({{behavior:\'smooth\'}});return false;" '
-            f'style="display:inline-block;background:{link_bg};color:#fff;cursor:pointer;'
-            f'text-decoration:none;font-size:12px;font-weight:bold;padding:5px 10px;'
-            f'border-radius:16px;margin:3px 2px;white-space:nowrap">'
-            f'{date_str}（{weekday}）<span style="font-size:10px;opacity:0.9">…{count}件</span></a>'
-        )
-    toc_html = (
-        f'<div style="background:rgba(108,92,231,0.12);border-radius:10px;padding:10px 12px;'
-        f'margin-bottom:16px;text-align:center">'
-        f'<p style="font-size:13px;font-weight:bold;margin:0 0 6px;color:#a29bfe">'
-        f'📌 日付をタップで移動</p>'
-        f'{toc_items}'
-        f'</div>\n'
-    )
-
     # カレンダーHTML構築
     inner = ""
     for date_str in sorted_dates:
         infos = date_map[date_str]
         weekday = _get_weekday(date_str)
-        anchor_id = f"cal-{date_str.replace('/', '-')}"
         # 日付ヘッダー - 曜日で色分け
         if weekday == "日":
             header_bg = "linear-gradient(135deg, #ff6b6b, #ee5a24)"
@@ -1841,7 +1812,7 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         else:
             header_bg = "linear-gradient(135deg, #00b894, #00cec9)"
         inner += (
-            f'<div id="{anchor_id}" style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
+            f'<div style="margin-bottom:14px;border-radius:10px;overflow:hidden;'
             f'box-shadow:0 2px 8px rgba(0,0,0,0.15)">'
             f'<div style="background:{header_bg};padding:10px 14px">'
             f'<span style="font-size:15px;font-weight:bold;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.2)">'
@@ -1986,7 +1957,6 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         f'<p style="font-size:12px;color:rgba(255,255,255,0.8);margin:4px 0 0">'
         f'{now_str}</p>'
         f'</div>\n'
-        f'{toc_html}'
         f'{inner}'
         f'{CALENDAR_BLOCK_END}\n'
     )
