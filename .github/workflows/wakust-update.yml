@@ -4,8 +4,8 @@ on:
   schedule:
     # 毎日17:00 JSTに実行（UTC 08:00 = JST 17:00）
     - cron: '0 8 * * *'
-    # 毎日0:00 JSTに実行（UTC 15:00 = JST 0:00）回遊ラベル切替
-    - cron: '0 15 * * *'
+    # 毎日23:45 JSTに実行（UTC 14:45 = JST 23:45）回遊ラベル切替 ※0:00だと遅延するため前倒し
+    - cron: '45 14 * * *'
   workflow_dispatch:
     inputs:
       midnight_mode:
@@ -40,7 +40,7 @@ jobs:
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
-          MIDNIGHT_RUN: ${{ (github.event.schedule == '0 15 * * *' || inputs.midnight_mode == true) && '1' || '0' }}
+          MIDNIGHT_RUN: ${{ (github.event.schedule == '45 14 * * *' || inputs.midnight_mode == true) && '1' || '0' }}
           CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
