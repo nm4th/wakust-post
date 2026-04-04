@@ -146,7 +146,8 @@ SUMMARY_POSTS = {
 }
 SUMMARY_POST_IDS = set(SUMMARY_POSTS.keys())
 # 0時モードで再投稿するカテゴリー（17時モードでは再投稿しない）
-MIDNIGHT_REPOST_CATEGORIES = {"神奈川県", "埼玉県"}
+# → 全カテゴリ17時モードで再投稿に統一
+MIDNIGHT_REPOST_CATEGORIES: set[str] = set()
 # 全まとめ記事の対象カテゴリ（情報収集用）
 SUMMARY_ALL_CATEGORIES = set()
 # カテゴリ→カレンダー記事URL のマッピング
@@ -2607,12 +2608,9 @@ def run_update():
         posts_by_category[info["post"]["category"]].append(info)
 
     for category, infos in posts_by_category.items():
-        # 0時モードでは MIDNIGHT_REPOST_CATEGORIES のみ、17時モードではそれ以外を再投稿
-        if MIDNIGHT_RUN and category not in MIDNIGHT_REPOST_CATEGORIES:
-            log.info(f"  🌙 カテゴリー「{category}」: 0時モード対象外。スキップ")
-            continue
-        if not MIDNIGHT_RUN and category in MIDNIGHT_REPOST_CATEGORIES:
-            log.info(f"  🕐 カテゴリー「{category}」: 0時モードで再投稿するためスキップ")
+        # 再投稿は17時モードでのみ実行（全カテゴリ共通）
+        if MIDNIGHT_RUN:
+            log.info(f"  🌙 カテゴリー「{category}」: 0時モードのため再投稿スキップ")
             continue
 
         # 再投稿の基本条件: 上限未達 & 有料セクションURL由来 & まとめ記事でない
