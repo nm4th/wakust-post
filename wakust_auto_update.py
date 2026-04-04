@@ -2580,9 +2580,9 @@ def run_update():
 
         # 本日出勤 → 明日以降出勤 の優先順で選定
         primary = [i for i in eligible if i["is_today"]]
-        primary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+        primary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
         secondary = [i for i in eligible if not i["is_today"]]
-        secondary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+        secondary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
         primary_label, secondary_label = "本日", "明日以降"
 
         # 上限まで埋める
@@ -2600,8 +2600,8 @@ def run_update():
         for info in selected:
             repost_ids.add(info["post"]["id"])
             label = primary_label if info in primary else secondary_label
-            pv = info["post"].get("pv_total") or 0
-            log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, PV={pv}）")
+            sc = info["post"].get("sales_count") or 0
+            log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, 販売={sc}）")
 
         log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → {primary_label}{len(primary)}件+{secondary_label}{len(secondary)}件 → 選定{len(selected)}件")
 
