@@ -1,29 +1,21 @@
 """
-ワクスト 記事タイトル自動更新 ＋ 翌日出勤記事再投稿スクリプト
+ワクスト 記事タイトル自動更新 ＋ 出勤記事再投稿スクリプト
 ====================================================================
-毎日17:00 JSTと0:00 JSTに実行し、以下を行います。
+毎日23:45 JSTに実行し、以下を行います。
 
-■ 17:00モード（通常）:
   1. 記事一覧から全記事のURLとタイトルを取得
   2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
-  3. スケジュールページから翌日以降で最も近い出勤日を最大3件取得
+  3. スケジュールページから本日以降で最も近い出勤日を最大3件取得
   4. タイトルの【日付出勤】部分を更新
      - 同月: 【3/13,14,15出勤】  月またぎ: 【3/13,14|4/4出勤】
   5. 無料部分に「〇月〇日更新」を挿入
-  6. 無料部分の回遊リスト: 明日出勤(グループ1)・明後日以降出勤(グループ2)
-  7. 翌日出勤の記事を再投稿（カテゴリ上限4/4・無料部分URLの記事は除外）
+  6. 無料部分の回遊リスト: 本日出勤中(グループ1)・明日以降出勤予定(グループ2)
+  7. 本日出勤の記事を再投稿（カテゴリ上限4/4・無料部分URLの記事は除外）
   8. PVデータをCSVに記録
-
-■ 0:00モード（MIDNIGHT_RUN=1）:
-  - 17時に作成済みの回遊リストのラベルを文字置換:
-    明日出勤予定→本日出勤中、明後日以降出勤予定→明日以降出勤予定
-  - 神奈川県・埼玉県カテゴリーの記事を再投稿（17時モードではスキップ）
-  - 「〇月〇日更新」の書き換えもしない
 
 使い方:
   pip install requests beautifulsoup4
-  python wakust_auto_update.py                # 17:00モード
-  MIDNIGHT_RUN=1 python wakust_auto_update.py # 0:00モード
+  python wakust_auto_update.py
 """
 
 import requests
@@ -96,15 +88,6 @@ def jst_strftime(fmt):
     """time.strftimeのJST版"""
     return datetime.now(JST).strftime(fmt)
 
-# MIDNIGHT_RUN: 実際のJST時刻で自動判定（19:00-05:59 → 0時モード）
-# 環境変数での明示指定も可能（"1"=強制0時モード, "0"=強制通常モード）
-_midnight_env = os.environ.get("MIDNIGHT_RUN", "")
-if _midnight_env in ("0", "1"):
-    MIDNIGHT_RUN = _midnight_env == "1"
-else:
-    _jst_hour = datetime.now(JST).hour
-    MIDNIGHT_RUN = _jst_hour >= 19 or _jst_hour < 6
-
 # CALENDAR_ONLY: まとめ記事（出勤カレンダー）のみ更新
 CALENDAR_ONLY = os.environ.get("CALENDAR_ONLY", "0") == "1"
 
@@ -145,8 +128,6 @@ SUMMARY_POSTS = {
     "1657105": {"categories": {"埼玉県"},                 "area_label": "埼玉エリア"},
 }
 SUMMARY_POST_IDS = set(SUMMARY_POSTS.keys())
-# 0時モードで再投稿するカテゴリー（17時モードでは再投稿しない）
-MIDNIGHT_REPOST_CATEGORIES = {"神奈川県", "埼玉県"}
 # 全まとめ記事の対象カテゴリ（情報収集用）
 SUMMARY_ALL_CATEGORIES = set()
 # カテゴリ→カレンダー記事URL のマッピング
@@ -957,8 +938,8 @@ def fetch_next_date_from_schedule(schedule_url):
             _used_playwright = True
 
     today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-    # 17時モード: 翌日以降の出勤日のみ / 0時モード: 当日以降の出勤日
-    start_date   = today if MIDNIGHT_RUN else today + timedelta(days=1)
+    # 本日以降の出勤日を取得
+    start_date   = today
     current_year = today.year
     candidates   = []
 
@@ -1627,44 +1608,24 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     from datetime import datetime
     today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
-    if MIDNIGHT_RUN:
-        # 0時モード: グループ1=今日出勤(is_today)、グループ2=明日以降
-        group1 = [p for p in others if p.get("is_today")]
-        tomorrow_dt = today_dt + timedelta(days=1)
+    # グループ1=本日出勤(is_today)、グループ2=明日以降
+    group1 = [p for p in others if p.get("is_today")]
+    tomorrow_dt = today_dt + timedelta(days=1)
 
-        def is_tomorrow_or_later(info):
-            if info.get("is_today") or info["next_date"] is None:
-                return False
-            try:
-                first_date = info["next_date"].split(",")[0]
-                m, d = first_date.split("/")
-                dt = datetime(today_dt.year, int(m), int(d))
-                return dt >= tomorrow_dt
-            except Exception:
-                return False
+    def is_tomorrow_or_later(info):
+        if info.get("is_today") or info["next_date"] is None:
+            return False
+        try:
+            first_date = info["next_date"].split(",")[0]
+            m, d = first_date.split("/")
+            dt = datetime(today_dt.year, int(m), int(d))
+            return dt >= tomorrow_dt
+        except Exception:
+            return False
 
-        group2 = [p for p in others if is_tomorrow_or_later(p)]
-        label1 = "📅 本日出勤中の他の記事もチェック！"
-        label2 = "📆 明日以降出勤予定の他の記事もチェック！"
-    else:
-        # 17時モード: グループ1=明日出勤(is_tomorrow)、グループ2=明後日以降
-        group1 = [p for p in others if p["is_tomorrow"]]
-        day_after_tomorrow = today_dt + timedelta(days=2)
-
-        def is_after_tomorrow(info):
-            if info["is_tomorrow"] or info["next_date"] is None:
-                return False
-            try:
-                first_date = info["next_date"].split(",")[0]
-                m, d = first_date.split("/")
-                dt = datetime(today_dt.year, int(m), int(d))
-                return dt >= day_after_tomorrow
-            except Exception:
-                return False
-
-        group2 = [p for p in others if is_after_tomorrow(p)]
-        label1 = "📅 明日出勤予定の他の記事もチェック！"
-        label2 = "📆 明後日以降出勤予定の他の記事もチェック！"
+    group2 = [p for p in others if is_tomorrow_or_later(p)]
+    label1 = "📅 本日出勤中の他の記事もチェック！"
+    label2 = "📆 明日以降出勤予定の他の記事もチェック！"
 
     if not group1 and not group2:
         return ""
@@ -2276,18 +2237,11 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         else:
             log.warning(f"    ⚠️  unescape 5回でも安定しません")
         payload["edit_text_1"] = text
-        if not MIDNIGHT_RUN:
-            payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
+        payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         # まとめ記事には回遊リストを入れない
         if post["id"] not in SUMMARY_POST_IDS:
-            if MIDNIGHT_RUN:
-                # 0時モード: 既存ブロックを全除去してから本日ラベルで再生成
-                related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
-                payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
-                log.info(f"    📎 回遊リスト: 再生成（0時モード）")
-            else:
-                related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
-                payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
+            related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
+            payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
             all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
             # ログもカテゴリ回遊ルールに合わせてフィルタ
             cur_cat = post.get("category")
@@ -2296,10 +2250,10 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
                 all_others = [p for p in all_others if p["post"].get("category") == cur_cat]
             else:
                 all_others = [p for p in all_others if p["post"].get("category") not in LOCAL_ONLY]
-            tomorrow_count = len([p for p in all_others if p["is_tomorrow"]])
-            future_count   = len([p for p in all_others if not p["is_tomorrow"] and p["next_date"] is not None])
+            today_count  = len([p for p in all_others if p.get("is_today")])
+            future_count = len([p for p in all_others if not p.get("is_today") and p["next_date"] is not None])
             if all_others:
-                log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{future_count}件")
+                log.info(f"    📎 回遊リスト: 本日{today_count}件 / 明日以降{future_count}件")
             else:
                 log.info(f"    📎 回遊リストなし")
             # 有料パートプレビューを回遊リスト・カレンダー誘導の後に注入
@@ -2571,11 +2525,11 @@ def run_update():
             continue
 
         dates_str = ",".join(dates)
-        log.info(f"    📅 直近の出勤日: {dates_str} {'【明日出勤！】' if is_tomorrow else ''}")
+        log.info(f"    📅 直近の出勤日: {dates_str} {'【本日出勤！】' if is_today else ''}")
 
         new_title = build_new_title(post["title"], dates)
-        # 0時モード: 本日出勤の記事にハッシュタグを付与
-        if MIDNIGHT_RUN and is_today:
+        # 本日出勤の記事にハッシュタグを付与
+        if is_today:
             new_title = new_title.rstrip() + TODAY_TAG
         post_infos.append({
             "post":      post,
@@ -2589,14 +2543,12 @@ def run_update():
         })
         time.sleep(1)
 
-    # PVを記録＋比較レポート生成（0時モードのみ）
-    if MIDNIGHT_RUN:
-        log_pv(posts, post_infos=post_infos, state=state)
-        generate_pv_report(posts)
+    # PVを記録＋比較レポート生成
+    log_pv(posts, post_infos=post_infos, state=state)
+    generate_pv_report(posts)
 
     # 再投稿対象を決定
-    # カテゴリーごとに上限まで: 明日出勤(ID降順) → 明後日以降(PV降順) で補充
-    # 神奈川県・埼玉県は0時モードで再投稿、それ以外は17時モードで再投稿
+    # カテゴリーごとに上限まで: 本日出勤(PV降順) → 明日以降(PV降順) で補充
     repost_ids = set()
     log.info(f"\n{'─'*55}")
     log.info(f"📊 再投稿対象選定")
@@ -2607,14 +2559,6 @@ def run_update():
         posts_by_category[info["post"]["category"]].append(info)
 
     for category, infos in posts_by_category.items():
-        # 0時モードでは MIDNIGHT_REPOST_CATEGORIES のみ、17時モードではそれ以外を再投稿
-        if MIDNIGHT_RUN and category not in MIDNIGHT_REPOST_CATEGORIES:
-            log.info(f"  🌙 カテゴリー「{category}」: 0時モード対象外。スキップ")
-            continue
-        if not MIDNIGHT_RUN and category in MIDNIGHT_REPOST_CATEGORIES:
-            log.info(f"  🕐 カテゴリー「{category}」: 0時モードで再投稿するためスキップ")
-            continue
-
         # 再投稿の基本条件: 上限未達 & 有料セクションURL由来 & まとめ記事でない
         eligible = [i for i in infos
                     if not i["details"].get("at_limit", False)
@@ -2634,20 +2578,12 @@ def run_update():
             log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
             continue
 
-        if MIDNIGHT_RUN:
-            # 0時モード: 本日出勤 → 明日以降出勤 の優先順で選定
-            primary = [i for i in eligible if i["is_today"]]
-            primary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
-            secondary = [i for i in eligible if not i["is_today"]]
-            secondary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
-            primary_label, secondary_label = "本日", "明日以降"
-        else:
-            # 17時モード: 明日出勤 → 明後日以降出勤 の優先順で選定
-            primary = [i for i in eligible if i["is_tomorrow"]]
-            primary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
-            secondary = [i for i in eligible if not i["is_tomorrow"]]
-            secondary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
-            primary_label, secondary_label = "明日", "明後日以降"
+        # 本日出勤 → 明日以降出勤 の優先順で選定
+        primary = [i for i in eligible if i["is_today"]]
+        primary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+        secondary = [i for i in eligible if not i["is_today"]]
+        secondary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+        primary_label, secondary_label = "本日", "明日以降"
 
         # 上限まで埋める
         selected = []
@@ -2747,8 +2683,7 @@ def run_update():
             time.sleep(2)
             continue
 
-        # 0時モード: ラベル切替が未実施なら常に更新
-        midnight_needs_swap = MIDNIGHT_RUN and post_state.get("labels_swapped_date") != jst_strftime("%Y-%m-%d")
+        midnight_needs_swap = False  # モード統合により不要
 
         # next_date=Noneの記事はタイトル更新・再投稿しない（回遊リストのみ）
         if info["next_date"] is None:
@@ -2772,7 +2707,7 @@ def run_update():
                 "reposted_at": jst_strftime("%Y-%m-%d %H:%M:%S") if do_repost else state.get(post_id, {}).get("reposted_at", ""),
                 "all_ids":    all_ids_str,
                 "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
-                "labels_swapped_date": jst_strftime("%Y-%m-%d") if MIDNIGHT_RUN else "",
+                "updated_at_date": jst_strftime("%Y-%m-%d"),
             }
             save_state(state)
 
@@ -2790,7 +2725,5 @@ if __name__ == "__main__":
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
         run_calendar_only()
     else:
-        mode = "0時モード（回遊ラベル切替・神奈川/埼玉再投稿）" if MIDNIGHT_RUN else "17時モード（通常）"
-        log.info(f"🚀 ワクスト自動更新スクリプト起動 [{mode}]")
-        log.info(f"   MIDNIGHT_RUN={os.environ.get('MIDNIGHT_RUN', '(未設定)')}")
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [23:45統合モード]")
         run_update()
