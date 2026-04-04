@@ -133,6 +133,8 @@ _OLD_CALENDAR_BLOCK_START = "<!-- calendar_block_start -->"
 _OLD_CALENDAR_BLOCK_END   = "<!-- calendar_block_end -->"
 PAID_PREVIEW_START        = "<!-- paid_preview_start -->"
 PAID_PREVIEW_END          = "<!-- paid_preview_end -->"
+PAID_DISCLAIMER_START     = "<!-- paid_disclaimer_start -->"
+PAID_DISCLAIMER_END       = "<!-- paid_disclaimer_end -->"
 
 # まとめ記事（出勤カレンダー）: タイトル更新・再投稿をスキップ
 # {post_id: {"categories": set, "area_label": str}}
@@ -1846,6 +1848,32 @@ def inject_paid_preview_html(original_html, image_url=None):
     return original_html.rstrip() + "\n" + preview_html
 
 
+def inject_paid_disclaimer(text2):
+    """edit_text_2（有料パート）の末尾に注記を注入する。
+
+    既存ブロックがあれば置換する。
+    """
+    disclaimer_html = (
+        f"\n{PAID_DISCLAIMER_START}\n"
+        '<p style="margin-top:24px;font-size:13px;color:#888;">'
+        "※本記事は個人の体験をもとにした内容です。"
+        "同様の内容が必ず受けられるとは限りませんので、参考程度にご覧ください。"
+        "</p>"
+        f"\n{PAID_DISCLAIMER_END}\n"
+    )
+
+    # 既存ブロックを除去
+    if PAID_DISCLAIMER_START in text2:
+        text2 = re.sub(
+            rf"{re.escape(PAID_DISCLAIMER_START)}.*?{re.escape(PAID_DISCLAIMER_END)}\s*",
+            "",
+            text2,
+            flags=re.DOTALL,
+        )
+
+    return text2.rstrip() + "\n" + disclaimer_html
+
+
 def inject_related_html(original_html, related_html):
     # 旧形式の直近ブロックが残っていれば全て削除
     if RELATED_NEXT_BLOCK_START in original_html:
@@ -2300,6 +2328,10 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
                 flags=re.DOTALL,
             )
         payload["edit_text_2"] = text2
+
+    # 有料パート末尾に注記を注入
+    if "edit_text_2" in payload and payload["edit_text_2"].strip():
+        payload["edit_text_2"] = inject_paid_disclaimer(payload["edit_text_2"])
 
     # repostフィールドを明示的に制御（フォームHTMLから紛れ込み防止）
     payload.pop(REPOST_FIELD, None)
