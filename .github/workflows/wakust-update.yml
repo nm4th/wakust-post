@@ -2,8 +2,8 @@ name: Wakust Auto Update
 
 on:
   schedule:
-    # 毎日23:45 JSTに実行（UTC 14:45 = JST 23:45）
-    - cron: '45 14 * * *'
+    # 毎日23:40 JSTに実行（UTC 14:40 = JST 23:40）
+    - cron: '40 14 * * *'
   workflow_dispatch:
     inputs:
       calendar_only:
