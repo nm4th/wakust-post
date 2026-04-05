@@ -865,6 +865,16 @@ PLAYWRIGHT_PREFER_DOMAINS = {
     "liora2024",       # requests.getで接続タイムアウト
 }
 
+def _has_work_info(info):
+    """出勤情報テキストが有効な出勤エントリかどうかを判定する。
+    HH:MM時刻、「満枠」「出勤」「◯」「○」のいずれかがあればTrue。"""
+    if re.search(r"\d{1,2}:\d{2}", info):
+        return True
+    if "満枠" in info or "出勤" in info or "◯" in info or "○" in info:
+        return True
+    return False
+
+
 def fetch_next_date_from_schedule(schedule_url):
     try:
         _used_playwright = False
@@ -965,7 +975,7 @@ def fetch_next_date_from_schedule(schedule_url):
                 info = td.get_text(" ", strip=True)
                 if "お休み" in info or "未定" in info:
                     continue
-                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                if not _has_work_info(info):
                     continue
                 month, day = int(m.group(1)), int(m.group(2))
                 d = datetime(current_year, month, day)
@@ -984,7 +994,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     info = cell.get_text(strip=True)
                     if not info or "お休み" in info or "未定" in info:
                         continue
-                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                    if not _has_work_info(info):
                         continue
                     # 「3月5日」または「3/5(木)」形式どちらも対応
                     m = re.search(r"(\d+)月\s*(\d+)日", header.get_text())
@@ -1020,7 +1030,7 @@ def fetch_next_date_from_schedule(schedule_url):
                             info = col_infos[ci]
                             if "お休み" in info or "未定" in info:
                                 continue
-                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            if not _has_work_info(info):
                                 continue
                             month, day = int(m.group(1)), int(m.group(2))
                             d = datetime(current_year, month, day)
@@ -1051,7 +1061,7 @@ def fetch_next_date_from_schedule(schedule_url):
                             info = info_cells[i].get_text(" ", strip=True) if i < len(info_cells) else ""
                             if "未定" in info or "お休み" in info:
                                 continue
-                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            if not _has_work_info(info):
                                 continue
                             candidates.append((d, f"{month}/{day}"))
 
@@ -1089,7 +1099,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     continue
                 if "お休み" in info_text or "未定" in info_text:
                     continue
-                if re.search(r"\d{2}:\d{2}", info_text) or "満枠" in info_text:
+                if _has_work_info(info_text):
                     candidates.append((d, f"{month}/{day}"))
             if candidates:
                 break
@@ -1111,7 +1121,7 @@ def fetch_next_date_from_schedule(schedule_url):
                 info = info_p.get_text(strip=True) if info_p else ""
                 if "休み" in info or "未定" in info:
                     continue
-                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                if not _has_work_info(info):
                     continue
                 month, day = int(m.group(1)), int(m.group(2))
                 d = datetime(current_year, month, day)
@@ -1142,7 +1152,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     work_text = sch_work.get_text(strip=True)
                     m = re.search(r"(\d{1,2})/(\d{1,2})", date_text)
                     if m and ("休み" not in work_text and "未定" not in work_text):
-                        if re.search(r"\d{2}:\d{2}", work_text) or "満枠" in work_text:
+                        if _has_work_info(work_text):
                             month, day = int(m.group(1)), int(m.group(2))
                             d = datetime(current_year, month, day)
                             if d >= start_date:
@@ -1152,7 +1162,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     info = dd_el.get_text(strip=True)
                     if "休み" in info or "未定" in info:
                         continue
-                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                    if not _has_work_info(info):
                         continue
                     m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
                     if not m:
@@ -1174,7 +1184,7 @@ def fetch_next_date_from_schedule(schedule_url):
                 info = dd_el.get_text(strip=True)
                 if "休み" in info or "未定" in info:
                     continue
-                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                if not _has_work_info(info):
                     continue
                 m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
                 if not m:
@@ -1198,7 +1208,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     info = dd_el.get_text(strip=True)
                     if "休み" in info or "未定" in info:
                         continue
-                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                    if not _has_work_info(info):
                         continue
                     m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
                     if not m:
@@ -1221,7 +1231,7 @@ def fetch_next_date_from_schedule(schedule_url):
                 info = work_el.get_text(strip=True)
                 if "休み" in info or "未定" in info:
                     continue
-                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                if not _has_work_info(info):
                     continue
                 m = re.search(r"(\d{1,2})/(\d{1,2})", date_el.get_text())
                 if not m:
@@ -1250,7 +1260,7 @@ def fetch_next_date_from_schedule(schedule_url):
                 info = check_p.get_text(strip=True)
                 if info == "-" or "休み" in info or "未定" in info:
                     continue
-                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                if not _has_work_info(info):
                     continue
                 day = int(m.group(1))
                 # 月情報がないので当月を基準に、日が今日より小さければ翌月と推定
@@ -1280,7 +1290,7 @@ def fetch_next_date_from_schedule(schedule_url):
                     info = sche_divs[i].get_text(" ", strip=True)
                     if "未定" in info or "お休み" in info:
                         continue
-                    if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                    if not _has_work_info(info):
                         continue
                 candidates.append((d, f"{month}/{day}"))
 
@@ -1313,6 +1323,24 @@ def fetch_next_date_from_schedule(schedule_url):
             if d >= start_date:
                 candidates.append((d, f"{month}/{day}"))
 
+    # パターン6: 「4/5(土) 出勤」形式（時刻なし・出勤/◯のみ）
+    if not candidates:
+        text = soup.get_text()
+        for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
+            line_rest = m.group(3).strip()
+            if "休み" in line_rest or "未定" in line_rest:
+                continue
+            if not _has_work_info(line_rest) and line_rest:
+                continue
+            if not line_rest:
+                continue
+            month, day = int(m.group(1)), int(m.group(2))
+            d = datetime(current_year, month, day)
+            if d >= start_date:
+                candidates.append((d, f"{month}/{day}"))
+        if candidates:
+            log.info(f"    📅 パターン6(日付+出勤テキスト)でマッチ")
+
     # 全パーサー失敗 → Playwright未使用ならフォールバック再取得して再解析
     if not candidates and not _used_playwright:
         log.info(f"    🔧 全パーサー失敗 → Playwrightで再取得を試行")
@@ -1335,7 +1363,7 @@ def fetch_next_date_from_schedule(schedule_url):
                         work_text = sch_work.get_text(strip=True)
                         m = re.search(r"(\d{1,2})/(\d{1,2})", date_text)
                         if m and ("休み" not in work_text and "未定" not in work_text):
-                            if re.search(r"\d{2}:\d{2}", work_text) or "満枠" in work_text:
+                            if _has_work_info(work_text):
                                 month, day = int(m.group(1)), int(m.group(2))
                                 d = datetime(current_year, month, day)
                                 if d >= start_date:
@@ -1345,7 +1373,7 @@ def fetch_next_date_from_schedule(schedule_url):
                         info = dd_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
                             continue
-                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                        if not _has_work_info(info):
                             continue
                         m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
                         if m:
@@ -1363,7 +1391,7 @@ def fetch_next_date_from_schedule(schedule_url):
                         info = dd_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
                             continue
-                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                        if not _has_work_info(info):
                             continue
                         m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
                         if m:
@@ -1383,7 +1411,7 @@ def fetch_next_date_from_schedule(schedule_url):
                             info = dd_el.get_text(strip=True)
                             if "休み" in info or "未定" in info:
                                 continue
-                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            if not _has_work_info(info):
                                 continue
                             m = re.search(r"(\d{1,2})/(\d{1,2})", dt_el.get_text())
                             if m:
@@ -1401,7 +1429,7 @@ def fetch_next_date_from_schedule(schedule_url):
                         info = work_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
                             continue
-                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                        if not _has_work_info(info):
                             continue
                         m = re.search(r"(\d{1,2})/(\d{1,2})", date_el.get_text())
                         if m:
@@ -1425,7 +1453,7 @@ def fetch_next_date_from_schedule(schedule_url):
                         info = check_p.get_text(strip=True)
                         if info == "-" or "休み" in info or "未定" in info:
                             continue
-                        if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                        if not _has_work_info(info):
                             continue
                         day = int(m.group(1))
                         month = current_month
@@ -1448,7 +1476,7 @@ def fetch_next_date_from_schedule(schedule_url):
                             info = td.get_text(" ", strip=True)
                             if "お休み" in info or "未定" in info:
                                 continue
-                            if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                            if not _has_work_info(info):
                                 continue
                             month, day = int(m.group(1)), int(m.group(2))
                             d = datetime(current_year, month, day)
@@ -1467,7 +1495,7 @@ def fetch_next_date_from_schedule(schedule_url):
                                 info = cell.get_text(" ", strip=True)
                                 if "お休み" in info or "未定" in info:
                                     continue
-                                if not re.search(r"\d{2}:\d{2}", info) and "満枠" not in info:
+                                if not _has_work_info(info):
                                     continue
                                 month, day = int(m.group(1)), int(m.group(2))
                                 d = datetime(current_year, month, day)
@@ -1478,6 +1506,21 @@ def fetch_next_date_from_schedule(schedule_url):
             # テキスト正規表現
             if not candidates:
                 for m in re.finditer(r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)[^\n]{0,5}(\d{2}:\d{2})", soup.get_text()):
+                    month, day = int(m.group(1)), int(m.group(2))
+                    d = datetime(current_year, month, day)
+                    if d >= start_date:
+                        candidates.append((d, f"{month}/{day}"))
+            # パターン6: 時刻なし・出勤/◯のみ
+            if not candidates:
+                text = soup.get_text()
+                for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
+                    line_rest = m.group(3).strip()
+                    if "休み" in line_rest or "未定" in line_rest:
+                        continue
+                    if not _has_work_info(line_rest) and line_rest:
+                        continue
+                    if not line_rest:
+                        continue
                     month, day = int(m.group(1)), int(m.group(2))
                     d = datetime(current_year, month, day)
                     if d >= start_date:
@@ -2580,9 +2623,9 @@ def run_update():
 
         # 本日出勤 → 明日以降出勤 の優先順で選定
         primary = [i for i in eligible if i["is_today"]]
-        primary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+        primary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
         secondary = [i for i in eligible if not i["is_today"]]
-        secondary.sort(key=lambda x: x["post"].get("pv_total") or 0, reverse=True)
+        secondary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
         primary_label, secondary_label = "本日", "明日以降"
 
         # 上限まで埋める
@@ -2600,8 +2643,8 @@ def run_update():
         for info in selected:
             repost_ids.add(info["post"]["id"])
             label = primary_label if info in primary else secondary_label
-            pv = info["post"].get("pv_total") or 0
-            log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, PV={pv}）")
+            sc = info["post"].get("sales_count") or 0
+            log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, 販売={sc}）")
 
         log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → {primary_label}{len(primary)}件+{secondary_label}{len(secondary)}件 → 選定{len(selected)}件")
 
