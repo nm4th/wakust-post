@@ -90,6 +90,8 @@ def jst_strftime(fmt):
 
 # CALENDAR_ONLY: まとめ記事（出勤カレンダー）のみ更新
 CALENDAR_ONLY = os.environ.get("CALENDAR_ONLY", "0") == "1"
+# TITLE_ONLY: タイトル＋回遊リストのみ更新（16:30モード、再投稿・PVなし）
+TITLE_ONLY = os.environ.get("TITLE_ONLY", "0") == "1"
 
 
 # ============================================================
@@ -948,8 +950,8 @@ def fetch_next_date_from_schedule(schedule_url):
             _used_playwright = True
 
     today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-    # 本日以降の出勤日を取得
-    start_date   = today
+    # 明日以降の出勤日を取得（16:30/23:40共通）
+    start_date   = today + timedelta(days=1)
     current_year = today.year
     candidates   = []
 
@@ -1559,7 +1561,8 @@ def fetch_next_date_from_schedule(schedule_url):
     dates = [s for _, s in unique]
     tomorrow = today + timedelta(days=1)
     is_tomorrow = (unique[0][0].date() == tomorrow.date())
-    is_today = (unique[0][0].date() == today.date())
+    # start_dateが明日なのでis_todayは常にFalse
+    is_today = False
     return dates, is_tomorrow, is_today
 
 
@@ -1628,8 +1631,7 @@ def build_new_title(current_title, dates):
 def build_related_html(all_post_infos, current_post_id, current_category=None):
     """出勤グループ別の回遊リストを生成（更新した全記事対象）
 
-    17:00モード: グループ1=明日出勤、グループ2=明後日以降出勤
-    0:00モード:  グループ1=今日出勤、グループ2=明日以降出勤
+    グループ1=明日出勤、グループ2=明後日出勤
 
     カテゴリ回遊ルール:
       - 神奈川県: 神奈川県内のみで回遊
@@ -1650,25 +1652,25 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
 
     from datetime import datetime
     today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-
-    # グループ1=本日出勤(is_today)、グループ2=明日以降
-    group1 = [p for p in others if p.get("is_today")]
     tomorrow_dt = today_dt + timedelta(days=1)
+    day_after_dt = today_dt + timedelta(days=2)
 
-    def is_tomorrow_or_later(info):
-        if info.get("is_today") or info["next_date"] is None:
-            return False
+    def _first_date_dt(info):
+        """next_dateの最初の日付をdatetimeに変換"""
+        if info["next_date"] is None:
+            return None
         try:
             first_date = info["next_date"].split(",")[0]
             m, d = first_date.split("/")
-            dt = datetime(today_dt.year, int(m), int(d))
-            return dt >= tomorrow_dt
+            return datetime(today_dt.year, int(m), int(d))
         except Exception:
-            return False
+            return None
 
-    group2 = [p for p in others if is_tomorrow_or_later(p)]
-    label1 = "📅 本日出勤中の他の記事もチェック！"
-    label2 = "📆 明日以降出勤予定の他の記事もチェック！"
+    # グループ1=明日出勤、グループ2=明後日出勤
+    group1 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == tomorrow_dt.date()]
+    group2 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == day_after_dt.date()]
+    label1 = "📅 明日出勤予定の他の記事もチェック！"
+    label2 = "📆 明後日出勤予定の他の記事もチェック！"
 
     if not group1 and not group2:
         return ""
@@ -2293,10 +2295,10 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
                 all_others = [p for p in all_others if p["post"].get("category") == cur_cat]
             else:
                 all_others = [p for p in all_others if p["post"].get("category") not in LOCAL_ONLY]
-            today_count  = len([p for p in all_others if p.get("is_today")])
-            future_count = len([p for p in all_others if not p.get("is_today") and p["next_date"] is not None])
+            tomorrow_count = len([p for p in all_others if p.get("is_tomorrow")])
+            later_count    = len([p for p in all_others if not p.get("is_tomorrow") and p["next_date"] is not None])
             if all_others:
-                log.info(f"    📎 回遊リスト: 本日{today_count}件 / 明日以降{future_count}件")
+                log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{later_count}件")
             else:
                 log.info(f"    📎 回遊リストなし")
             # 有料パートプレビューを回遊リスト・カレンダー誘導の後に注入
@@ -2568,12 +2570,9 @@ def run_update():
             continue
 
         dates_str = ",".join(dates)
-        log.info(f"    📅 直近の出勤日: {dates_str} {'【本日出勤！】' if is_today else ''}")
+        log.info(f"    📅 直近の出勤日: {dates_str}")
 
         new_title = build_new_title(post["title"], dates)
-        # 本日出勤の記事にハッシュタグを付与
-        if is_today:
-            new_title = new_title.rstrip() + TODAY_TAG
         post_infos.append({
             "post":      post,
             "details":   details,
@@ -2591,7 +2590,7 @@ def run_update():
     generate_pv_report(posts)
 
     # 再投稿対象を決定
-    # カテゴリーごとに上限まで: 本日出勤(PV降順) → 明日以降(PV降順) で補充
+    # カテゴリーごとに上限まで: 明日出勤(販売数降順) → 明後日以降(販売数降順) で補充
     repost_ids = set()
     log.info(f"\n{'─'*55}")
     log.info(f"📊 再投稿対象選定")
@@ -2621,12 +2620,12 @@ def run_update():
             log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
             continue
 
-        # 本日出勤 → 明日以降出勤 の優先順で選定
-        primary = [i for i in eligible if i["is_today"]]
+        # 明日出勤 → 明後日以降出勤 の優先順で選定
+        primary = [i for i in eligible if i["is_tomorrow"]]
         primary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
-        secondary = [i for i in eligible if not i["is_today"]]
+        secondary = [i for i in eligible if not i["is_tomorrow"]]
         secondary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
-        primary_label, secondary_label = "本日", "明日以降"
+        primary_label, secondary_label = "明日", "明後日以降"
 
         # 上限まで埋める
         selected = []
@@ -2761,12 +2760,203 @@ def run_update():
 
 
 # ============================================================
+# タイトル＋回遊リストのみ更新（16:30モード）
+# ============================================================
+def run_title_only():
+    """タイトルの出勤日と回遊リストのみ更新する（再投稿・PVなし）。
+    16:30 JST に実行し、明日以降の出勤日でタイトルを更新する。
+    """
+    log.info(f"\n{'='*55}")
+    log.info(f"🔍 タイトル＋回遊リスト更新 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    session = login_wakust()
+    if not session:
+        return
+
+    posts = fetch_post_list(session)
+    if not posts:
+        log.warning("⚠️  記事が見つかりませんでした")
+        session.close()
+        return
+
+    state = load_state()
+
+    # 各記事の情報を収集
+    post_infos = []
+    for post in posts:
+        log.info(f"\n📄 [{post['id']}] {post['title']}")
+
+        if post.get("is_reserved"):
+            log.info(f"    ⏭️  予約投稿のためスキップ")
+            continue
+
+        try:
+            details = fetch_post_details(session, post)
+        except Exception as e:
+            log.error(f"    ❌ 記事詳細取得失敗: {e}")
+            continue
+        post["category"] = details["category"]
+
+        tags, image_url = fetch_post_tags(session, post["url"])
+
+        if not details["schedule_url"]:
+            log.warning(f"    ⚠️  スケジュールURLなし。回遊リストのみ対象")
+            post_infos.append({
+                "post":      post,
+                "details":   details,
+                "next_date": None,
+                "is_tomorrow":  False,
+                "is_today":    False,
+                "new_title": _strip_today_tag(post["title"]),
+                "tags":      tags,
+                "image_url": image_url,
+            })
+            continue
+
+        log.info(f"    🔗 {details['schedule_url']}")
+
+        dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+        if not dates:
+            log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
+            post_infos.append({
+                "post":      post,
+                "details":   details,
+                "next_date": None,
+                "is_tomorrow":  False,
+                "is_today":    False,
+                "new_title": _strip_today_tag(post["title"]),
+                "tags":      tags,
+                "image_url": image_url,
+            })
+            continue
+
+        dates_str = ",".join(dates)
+        log.info(f"    📅 直近の出勤日: {dates_str}")
+
+        new_title = build_new_title(post["title"], dates)
+        post_infos.append({
+            "post":      post,
+            "details":   details,
+            "next_date": dates_str,
+            "is_tomorrow":  is_tomorrow,
+            "is_today":    is_today,
+            "new_title": new_title,
+            "tags":      tags,
+            "image_url": image_url,
+        })
+        time.sleep(1)
+
+    # タイトル＋回遊リストのみ更新（再投稿なし）
+    log.info(f"\n{'─'*55}")
+    log.info("🚀 タイトル＋回遊リスト更新処理開始")
+    log.info(f"{'─'*55}")
+
+    all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
+
+    for info in post_infos:
+        post_id       = info["post"]["id"]
+        new_title     = info["new_title"]
+        post_state    = state.get(post_id, {})
+        title_changed = (new_title != info["post"]["title"])
+        date_changed  = (post_state.get("dates") != info["next_date"])
+        related_changed = post_state.get("all_ids") != all_ids_str
+
+        # まとめ記事: カレンダーのみ注入
+        if post_id in SUMMARY_POST_IDS:
+            area_label = SUMMARY_POSTS[post_id]["area_label"]
+            calendar_html = build_calendar_html(post_infos, summary_post_id=post_id)
+            if not calendar_html and not related_changed:
+                log.info(f"\n    ℹ️  [{post_id}] {area_label} まとめ記事: 変化なし。スキップ")
+                continue
+            log.info(f"\n📝 [{post_id}] {area_label} まとめ記事: 出勤カレンダー更新")
+            payload = dict(info["details"]["payload"])
+            payload["edit_title"] = info["post"]["title"]
+            if "edit_text_1" in payload:
+                text = payload["edit_text_1"]
+                for _round in range(5):
+                    decoded = html_module.unescape(text)
+                    if decoded == text:
+                        break
+                    text = decoded
+                payload["edit_text_1"] = text
+                payload["edit_text_1"] = inject_calendar_html(payload["edit_text_1"], calendar_html)
+            if "edit_text_2" in payload:
+                text2 = payload["edit_text_2"]
+                for _round in range(5):
+                    decoded = html_module.unescape(text2)
+                    if decoded == text2:
+                        break
+                    text2 = decoded
+                if RELATED_BLOCK_START in text2:
+                    text2 = re.sub(
+                        rf"{re.escape(RELATED_BLOCK_START)}.*?{re.escape(RELATED_BLOCK_END)}\s*",
+                        "", text2, flags=re.DOTALL,
+                    )
+                if RELATED_NEXT_BLOCK_START in text2:
+                    text2 = re.sub(
+                        rf"{re.escape(RELATED_NEXT_BLOCK_START)}.*?{re.escape(RELATED_NEXT_BLOCK_END)}\s*",
+                        "", text2, flags=re.DOTALL,
+                    )
+                payload["edit_text_2"] = text2
+            payload.pop(REPOST_FIELD, None)
+            res = session.post(EDIT_FORM_ACTION, data=payload)
+            if res.status_code == 200:
+                log.info(f"    ✅ {area_label} まとめ記事更新完了")
+                state[post_id] = {
+                    "dates":       None,
+                    "title":       info["post"]["title"],
+                    "reposted":   False,
+                    "all_ids":    all_ids_str,
+                    "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                save_state(state)
+            else:
+                log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
+            time.sleep(2)
+            continue
+
+        if info["next_date"] is None:
+            if not related_changed:
+                log.info(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
+                continue
+
+        if not title_changed and not date_changed and not related_changed:
+            log.info(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
+            continue
+
+        log.info(f"\n📝 [{post_id}] {info['post']['title']}")
+        log.info(f"    → {new_title}")
+
+        # 再投稿なしで更新
+        if update_post(session, info["post"], info["details"], new_title, False, post_infos, image_url=info.get("image_url")):
+            state[post_id] = {
+                "dates":       info["next_date"],
+                "title":      new_title,
+                "reposted":   state.get(post_id, {}).get("reposted", False),
+                "reposted_at": state.get(post_id, {}).get("reposted_at", ""),
+                "all_ids":    all_ids_str,
+                "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_at_date": jst_strftime("%Y-%m-%d"),
+            }
+            save_state(state)
+
+        time.sleep(2)
+
+    session.close()
+    log.info(f"\n✅ タイトル＋回遊リスト更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+
+
+# ============================================================
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
     if CALENDAR_ONLY:
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
         run_calendar_only()
+    elif TITLE_ONLY:
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [16:30タイトル更新モード]")
+        run_title_only()
     else:
-        log.info(f"🚀 ワクスト自動更新スクリプト起動 [23:45統合モード]")
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [23:40統合モード]")
         run_update()
