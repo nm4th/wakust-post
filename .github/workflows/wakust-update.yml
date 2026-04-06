@@ -2,12 +2,18 @@ name: Wakust Auto Update
 
 on:
   schedule:
-    # 毎日23:40 JSTに実行（UTC 14:40 = JST 23:40）
+    # 毎日16:30 JSTに実行（UTC 07:30 = JST 16:30）タイトル＋回遊リストのみ
+    - cron: '30 7 * * *'
+    # 毎日23:40 JSTに実行（UTC 14:40 = JST 23:40）全更新＋再投稿
     - cron: '40 14 * * *'
   workflow_dispatch:
     inputs:
       calendar_only:
         description: 'カレンダーのみ更新する'
+        type: boolean
+        default: false
+      title_only:
+        description: 'タイトル＋回遊リストのみ更新する（16:30モード）'
         type: boolean
         default: false
 
@@ -35,6 +41,7 @@ jobs:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
           CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
+          TITLE_ONLY: ${{ (github.event.schedule == '30 7 * * *' || inputs.title_only == true) && '1' || '0' }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
