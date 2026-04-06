@@ -1592,8 +1592,10 @@ def format_dates(dates):
 TODAY_TAG = " #本日出勤"
 
 def _strip_today_tag(title):
-    """タイトルから #本日出勤 タグを除去する（回遊リスト・カレンダー表示用）"""
-    return title.replace(TODAY_TAG, "").rstrip()
+    """タイトルから #本日出勤 タグと日付ハッシュタグを除去する（回遊リスト・カレンダー表示用）"""
+    title = title.replace(TODAY_TAG, "")
+    title = re.sub(r"\s*#[\d/,]+$", "", title)
+    return title.rstrip()
 
 
 def build_new_title(current_title, dates):
@@ -2573,6 +2575,8 @@ def run_update():
         log.info(f"    📅 直近の出勤日: {dates_str}")
 
         new_title = build_new_title(post["title"], dates)
+        # 検索用の日付ハッシュタグを末尾に追加（例: #4/5,4/7,4/9）
+        new_title = new_title.rstrip() + " #" + ",".join(dates)
         post_infos.append({
             "post":      post,
             "details":   details,
