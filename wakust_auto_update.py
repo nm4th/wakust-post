@@ -2847,7 +2847,58 @@ def run_title_only():
         })
         time.sleep(1)
 
-    # タイトル＋回遊リストのみ更新（再投稿なし）
+    # カテゴリ枠が余っていたら再投稿も行う
+    repost_ids = set()
+    log.info(f"\n{'─'*55}")
+    log.info(f"📊 再投稿対象選定（枠が余っている場合のみ）")
+
+    posts_by_category = defaultdict(list)
+    for info in post_infos:
+        posts_by_category[info["post"]["category"]].append(info)
+
+    for category, infos in posts_by_category.items():
+        eligible = [i for i in infos
+                    if not i["details"].get("at_limit", False)
+                    and not i["details"].get("schedule_from_free", False)
+                    and i["next_date"] is not None
+                    and i["post"]["id"] not in SUMMARY_POST_IDS]
+
+        if not eligible:
+            continue
+
+        cat_current = infos[0]["details"].get("category_current", 0)
+        cat_max     = infos[0]["details"].get("category_max", 4)
+        slots = max(0, cat_max - cat_current)
+
+        if slots == 0:
+            log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
+            continue
+
+        # 明日出勤 → 明後日以降 の優先順で選定
+        primary = [i for i in eligible if i["is_tomorrow"]]
+        primary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
+        secondary = [i for i in eligible if not i["is_tomorrow"]]
+        secondary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
+
+        selected = []
+        for info in primary:
+            if len(selected) >= slots:
+                break
+            selected.append(info)
+        for info in secondary:
+            if len(selected) >= slots:
+                break
+            selected.append(info)
+
+        for info in selected:
+            repost_ids.add(info["post"]["id"])
+            label = "明日" if info in primary else "明後日以降"
+            sc = info["post"].get("sales_count") or 0
+            log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, 販売={sc}）")
+
+        log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → 選定{len(selected)}件")
+
+    # タイトル＋回遊リスト更新（枠があれば再投稿も）
     log.info(f"\n{'─'*55}")
     log.info("🚀 タイトル＋回遊リスト更新処理開始")
     log.info(f"{'─'*55}")
@@ -2857,6 +2908,7 @@ def run_title_only():
     for info in post_infos:
         post_id       = info["post"]["id"]
         new_title     = info["new_title"]
+        do_repost     = post_id in repost_ids
         post_state    = state.get(post_id, {})
         title_changed = (new_title != info["post"]["title"])
         date_changed  = (post_state.get("dates") != info["next_date"])
@@ -2917,24 +2969,24 @@ def run_title_only():
             continue
 
         if info["next_date"] is None:
+            do_repost = False
             if not related_changed:
                 log.info(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
                 continue
 
-        if not title_changed and not date_changed and not related_changed:
+        if not title_changed and not date_changed and not do_repost and not related_changed:
             log.info(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
             continue
 
         log.info(f"\n📝 [{post_id}] {info['post']['title']}")
         log.info(f"    → {new_title}")
 
-        # 再投稿なしで更新
-        if update_post(session, info["post"], info["details"], new_title, False, post_infos, image_url=info.get("image_url")):
+        if update_post(session, info["post"], info["details"], new_title, do_repost, post_infos, image_url=info.get("image_url")):
             state[post_id] = {
                 "dates":       info["next_date"],
                 "title":      new_title,
-                "reposted":   state.get(post_id, {}).get("reposted", False),
-                "reposted_at": state.get(post_id, {}).get("reposted_at", ""),
+                "reposted":   do_repost,
+                "reposted_at": jst_strftime("%Y-%m-%d %H:%M:%S") if do_repost else state.get(post_id, {}).get("reposted_at", ""),
                 "all_ids":    all_ids_str,
                 "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
                 "updated_at_date": jst_strftime("%Y-%m-%d"),
