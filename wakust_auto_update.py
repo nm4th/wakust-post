@@ -9,8 +9,8 @@
   4. タイトルの【日付出勤】部分を更新
      - 同月: 【3/13,14,15出勤】  月またぎ: 【3/13,14|4/4出勤】
   5. 無料部分に「〇月〇日更新」を挿入
-  6. 無料部分の回遊リスト: 本日出勤中(グループ1)・明日以降出勤予定(グループ2)
-  7. 本日出勤の記事を再投稿（カテゴリ上限4/4・無料部分URLの記事は除外）
+  6. 無料部分の回遊リスト: 明日出勤(グループ1)・明後日出勤(グループ2)
+  7. 明日出勤の記事を優先的に再投稿（カテゴリ上限4/4・無料部分URLの記事は除外）
   8. PVデータをCSVに記録
 
 使い方:
@@ -1669,8 +1669,8 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
     # グループ1=明日出勤、グループ2=明後日出勤
     group1 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == tomorrow_dt.date()]
     group2 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == day_after_dt.date()]
-    label1 = "📅 明日出勤予定の他の記事もチェック！"
-    label2 = "📆 明後日出勤予定の他の記事もチェック！"
+    label1 = f"📅 明日{tomorrow_dt.month}/{tomorrow_dt.day}出勤予定の他の記事もチェック！"
+    label2 = f"📆 明後日{day_after_dt.month}/{day_after_dt.day}出勤予定の他の記事もチェック！"
 
     if not group1 and not group2:
         return ""
