@@ -2865,9 +2865,8 @@ def run_title_only():
             dates_str = None
             new_title = _strip_today_tag(post["title"])
 
-        # 本日出勤タグの付与/除去
-        if is_today:
-            new_title = new_title.rstrip() + TODAY_TAG
+        # 17時モードは明日・明後日の更新なので #本日出勤 は付けない
+        new_title = _strip_today_tag(new_title)
         post_infos.append({
             "post":      post,
             "details":   details,
