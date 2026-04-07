@@ -2861,12 +2861,12 @@ def run_title_only():
             dates_str = ",".join(dates)
             log.info(f"    📅 直近の出勤日: {dates_str}")
             new_title = build_new_title(post["title"], dates)
+            # 検索用の日付ハッシュタグを末尾に追加（例: #4/5,4/7,4/9）
+            new_title = _strip_today_tag(new_title)
+            new_title = new_title.rstrip() + " #" + ",".join(dates)
         else:
             dates_str = None
             new_title = _strip_today_tag(post["title"])
-
-        # 17時モードは明日・明後日の更新なので #本日出勤 は付けない
-        new_title = _strip_today_tag(new_title)
         post_infos.append({
             "post":      post,
             "details":   details,
