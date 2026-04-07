@@ -950,8 +950,8 @@ def fetch_next_date_from_schedule(schedule_url):
             _used_playwright = True
 
     today        = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-    # 明日以降の出勤日を取得（16:30/23:40共通）
-    start_date   = today + timedelta(days=1)
+    # 本日以降の出勤日を取得（本日出勤の判定を含む）
+    start_date   = today
     current_year = today.year
     candidates   = []
 
@@ -1548,21 +1548,28 @@ def fetch_next_date_from_schedule(schedule_url):
         return [], False, False
 
     candidates.sort(key=lambda x: x[0])
-    # 重複除去しつつ直近3件まで取得
+    # 重複除去
     seen = set()
     unique = []
     for dt, s in candidates:
         if s not in seen:
             seen.add(s)
             unique.append((dt, s))
-        if len(unique) >= 3:
-            break
 
-    dates = [s for _, s in unique]
+    # 本日出勤の判定
+    is_today = any(dt.date() == today.date() for dt, _ in unique)
+
+    # タイトル用の日付は明日以降のみ（直近3件まで）
     tomorrow = today + timedelta(days=1)
-    is_tomorrow = (unique[0][0].date() == tomorrow.date())
-    # start_dateが明日なのでis_todayは常にFalse
-    is_today = False
+    future = [(dt, s) for dt, s in unique if dt.date() >= tomorrow.date()]
+    future = future[:3]
+
+    if not future:
+        # 本日のみ出勤の場合、日付リストは空だがis_todayはTrue
+        return [], False, is_today
+
+    dates = [s for _, s in future]
+    is_tomorrow = (future[0][0].date() == tomorrow.date())
     return dates, is_tomorrow, is_today
 
 
@@ -2424,6 +2431,14 @@ def run_calendar_only():
             for part in dates.split(","):
                 dates_list_raw.append(part)
             new_title = build_new_title(post["title"], dates_list_raw)
+        else:
+            new_title = _strip_today_tag(new_title)
+
+        # 本日出勤タグの付与/除去
+        if is_today:
+            new_title = new_title.rstrip() + TODAY_TAG
+        else:
+            new_title = _strip_today_tag(new_title)
 
         post_infos.append({
             "post":      post,
@@ -2556,7 +2571,7 @@ def run_update():
         log.info(f"    🔗 {details['schedule_url']}")
 
         dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
-        if not dates:
+        if not dates and not is_today:
             log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
             # 出勤日不明でもタイトル更新・回遊リスト対象として追加
             post_infos.append({
@@ -2571,12 +2586,19 @@ def run_update():
             })
             continue
 
-        dates_str = ",".join(dates)
-        log.info(f"    📅 直近の出勤日: {dates_str}")
+        if dates:
+            dates_str = ",".join(dates)
+            log.info(f"    📅 直近の出勤日: {dates_str}")
+            new_title = build_new_title(post["title"], dates)
+            # 検索用の日付ハッシュタグを末尾に追加（例: #4/5,4/7,4/9）
+            new_title = new_title.rstrip() + " #" + ",".join(dates)
+        else:
+            dates_str = None
+            new_title = _strip_today_tag(post["title"])
 
-        new_title = build_new_title(post["title"], dates)
-        # 検索用の日付ハッシュタグを末尾に追加（例: #4/5,4/7,4/9）
-        new_title = new_title.rstrip() + " #" + ",".join(dates)
+        # 本日出勤タグの付与/除去
+        if is_today:
+            new_title = new_title.rstrip() + TODAY_TAG
         post_infos.append({
             "post":      post,
             "details":   details,
@@ -2821,7 +2843,7 @@ def run_title_only():
         log.info(f"    🔗 {details['schedule_url']}")
 
         dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
-        if not dates:
+        if not dates and not is_today:
             log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
             post_infos.append({
                 "post":      post,
@@ -2835,10 +2857,17 @@ def run_title_only():
             })
             continue
 
-        dates_str = ",".join(dates)
-        log.info(f"    📅 直近の出勤日: {dates_str}")
+        if dates:
+            dates_str = ",".join(dates)
+            log.info(f"    📅 直近の出勤日: {dates_str}")
+            new_title = build_new_title(post["title"], dates)
+        else:
+            dates_str = None
+            new_title = _strip_today_tag(post["title"])
 
-        new_title = build_new_title(post["title"], dates)
+        # 本日出勤タグの付与/除去
+        if is_today:
+            new_title = new_title.rstrip() + TODAY_TAG
         post_infos.append({
             "post":      post,
             "details":   details,
