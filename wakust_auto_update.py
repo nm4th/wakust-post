@@ -1559,16 +1559,16 @@ def fetch_next_date_from_schedule(schedule_url):
     # 本日出勤の判定
     is_today = any(dt.date() == today.date() for dt, _ in unique)
 
-    # タイトル用の日付は明日以降のみ（直近3件まで）
-    tomorrow = today + timedelta(days=1)
-    future = [(dt, s) for dt, s in unique if dt.date() >= tomorrow.date()]
+    # タイトル用の日付は本日以降（直近3件まで）
+    # ※ 23:40 JST cron は実際には0時過ぎに実行されるため、本日=当日
+    future = [(dt, s) for dt, s in unique if dt.date() >= today.date()]
     future = future[:3]
 
     if not future:
-        # 本日のみ出勤の場合、日付リストは空だがis_todayはTrue
         return [], False, is_today
 
     dates = [s for _, s in future]
+    tomorrow = today + timedelta(days=1)
     is_tomorrow = (future[0][0].date() == tomorrow.date())
     return dates, is_tomorrow, is_today
 
@@ -2867,6 +2867,10 @@ def run_title_only():
         else:
             dates_str = None
             new_title = _strip_today_tag(post["title"])
+
+        # 本日出勤タグの付与/除去
+        if is_today:
+            new_title = new_title.rstrip() + TODAY_TAG
         post_infos.append({
             "post":      post,
             "details":   details,
