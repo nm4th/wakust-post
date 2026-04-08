@@ -877,7 +877,7 @@ def _has_work_info(info):
     return False
 
 
-def fetch_next_date_from_schedule(schedule_url):
+def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
     try:
         _used_playwright = False
         _parsed_host = urlparse(schedule_url).hostname or ""
@@ -1559,9 +1559,11 @@ def fetch_next_date_from_schedule(schedule_url):
     # 本日出勤の判定
     is_today = any(dt.date() == today.date() for dt, _ in unique)
 
-    # タイトル用の日付は本日以降（直近3件まで）
-    # ※ 23:40 JST cron は実際には0時過ぎに実行されるため、本日=当日
-    future = [(dt, s) for dt, s in unique if dt.date() >= today.date()]
+    # タイトル用の日付（直近3件まで）
+    # start_from_tomorrow=True (16:30モード): 明日以降
+    # start_from_tomorrow=False (23:40モード): 本日以降
+    cutoff = (today + timedelta(days=1)).date() if start_from_tomorrow else today.date()
+    future = [(dt, s) for dt, s in unique if dt.date() >= cutoff]
     future = future[:3]
 
     if not future:
@@ -2790,7 +2792,7 @@ def run_update():
 # ============================================================
 def run_title_only():
     """タイトルの出勤日と回遊リストのみ更新する（再投稿・PVなし）。
-    16:30 JST に実行し、明日以降の出勤日でタイトルを更新する。
+    16:30 JST に実行し、明日以降の出勤日でタイトルを更新する（本日分は含めない）。
     """
     log.info(f"\n{'='*55}")
     log.info(f"🔍 タイトル＋回遊リスト更新 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
@@ -2842,7 +2844,7 @@ def run_title_only():
 
         log.info(f"    🔗 {details['schedule_url']}")
 
-        dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+        dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"], start_from_tomorrow=True)
         if not dates and not is_today:
             log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
             post_infos.append({
