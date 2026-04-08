@@ -447,19 +447,32 @@ def save_state(state):
 # ログイン
 # ============================================================
 def login_wakust():
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        session = requests.Session()
+        session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
 
-    res = session.post(LOGIN_AJAX_URL, data={
-        "login_email":    WAKUST_EMAIL,
-        "login_password": WAKUST_PASSWORD,
-    })
+        try:
+            res = session.post(LOGIN_AJAX_URL, data={
+                "login_email":    WAKUST_EMAIL,
+                "login_password": WAKUST_PASSWORD,
+            })
 
-    if res.status_code == 200 and "loginok" in res.text:
-        log.info("✅ ログイン成功")
-        return session
+            if res.status_code == 200 and "loginok" in res.text:
+                log.info("✅ ログイン成功")
+                return session
 
-    log.error(f"❌ ログイン失敗: {res.text[:100]}")
+            log.warning(f"⚠️ ログイン失敗 (試行 {attempt}/{max_retries}): {res.text[:100]}")
+        except requests.RequestException as e:
+            log.warning(f"⚠️ ログインリクエスト例外 (試行 {attempt}/{max_retries}): {e}")
+
+        session.close()
+        if attempt < max_retries:
+            wait = 2 * attempt
+            log.info(f"🔄 {wait}秒後にリトライします...")
+            time.sleep(wait)
+
+    log.error("❌ ログイン失敗: 全リトライ失敗")
     return None
 
 
