@@ -1701,10 +1701,11 @@ def build_new_title(current_title, dates):
 # ============================================================
 # 回遊リスト（本日・直近出勤の他記事リンク）の生成・注入
 # ============================================================
-def build_related_html(all_post_infos, current_post_id, current_category=None):
+def build_related_html(all_post_infos, current_post_id, current_category=None, title_only=False):
     """出勤グループ別の回遊リストを生成（更新した全記事対象）
 
-    グループ1=明日出勤、グループ2=明後日出勤
+    title_only=False (0時モード): グループ1=本日出勤、グループ2=明日出勤
+    title_only=True (16:30モード): グループ1=明日出勤、グループ2=明後日出勤
 
     カテゴリ回遊ルール:
       - 神奈川県: 神奈川県内のみで回遊
@@ -1739,11 +1740,21 @@ def build_related_html(all_post_infos, current_post_id, current_category=None):
         except Exception:
             return None
 
-    # グループ1=明日出勤、グループ2=明後日出勤
-    group1 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == tomorrow_dt.date()]
-    group2 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == day_after_dt.date()]
-    label1 = f"📅 明日{tomorrow_dt.month}/{tomorrow_dt.day}出勤予定の他の記事もチェック！"
-    label2 = f"📆 明後日{day_after_dt.month}/{day_after_dt.day}出勤予定の他の記事もチェック！"
+    # title_only=False (0時モード): グループ1=本日、グループ2=明日
+    # title_only=True (16:30モード): グループ1=明日、グループ2=明後日
+    if title_only:
+        group1_dt = tomorrow_dt
+        group2_dt = day_after_dt
+        label1 = f"📅 明日{tomorrow_dt.month}/{tomorrow_dt.day}出勤予定の他の記事もチェック！"
+        label2 = f"📆 明後日{day_after_dt.month}/{day_after_dt.day}出勤予定の他の記事もチェック！"
+    else:
+        group1_dt = today_dt
+        group2_dt = tomorrow_dt
+        label1 = f"📅 本日{today_dt.month}/{today_dt.day}出勤予定の他の記事もチェック！"
+        label2 = f"📆 明日{tomorrow_dt.month}/{tomorrow_dt.day}出勤予定の他の記事もチェック！"
+
+    group1 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == group1_dt.date()]
+    group2 = [p for p in others if _first_date_dt(p) is not None and _first_date_dt(p).date() == group2_dt.date()]
 
     if not group1 and not group2:
         return ""
@@ -2401,7 +2412,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         payload["edit_text_1"] = inject_updated_date(payload["edit_text_1"])
         # まとめ記事には回遊リストを入れない
         if post["id"] not in SUMMARY_POST_IDS:
-            related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"))
+            related_html = build_related_html(all_post_infos or [], post["id"], post.get("category"), title_only=TITLE_ONLY)
             payload["edit_text_1"] = inject_related_html(payload["edit_text_1"], related_html)
             all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
             # ログもカテゴリ回遊ルールに合わせてフィルタ
@@ -2411,10 +2422,16 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
                 all_others = [p for p in all_others if p["post"].get("category") == cur_cat]
             else:
                 all_others = [p for p in all_others if p["post"].get("category") not in LOCAL_ONLY]
-            tomorrow_count = len([p for p in all_others if p.get("is_tomorrow")])
-            later_count    = len([p for p in all_others if not p.get("is_tomorrow") and p["next_date"] is not None])
+            if TITLE_ONLY:
+                g1_label, g2_label = "明日", "明後日以降"
+                g1_count = len([p for p in all_others if p.get("is_tomorrow")])
+                g2_count = len([p for p in all_others if not p.get("is_tomorrow") and p["next_date"] is not None])
+            else:
+                g1_label, g2_label = "本日", "明日以降"
+                g1_count = len([p for p in all_others if p.get("is_today")])
+                g2_count = len([p for p in all_others if not p.get("is_today") and p["next_date"] is not None])
             if all_others:
-                log.info(f"    📎 回遊リスト: 明日{tomorrow_count}件 / 明後日以降{later_count}件")
+                log.info(f"    📎 回遊リスト: {g1_label}{g1_count}件 / {g2_label}{g2_count}件")
             else:
                 log.info(f"    📎 回遊リストなし")
             # 有料パートプレビューを回遊リスト・カレンダー誘導の後に注入
@@ -2699,6 +2716,14 @@ def run_update():
             new_title = build_new_title(post["title"], dates)
             # 検索用の日付ハッシュタグを末尾に追加（例: #4/5,4/7,4/9）
             new_title = new_title.rstrip() + " #" + ",".join(dates)
+        elif is_today:
+            # 本日のみ出勤（明日以降の出勤なし）: カレンダー・ハッシュタグ用に本日の日付を設定
+            today_now = datetime.now(JST)
+            today_date_str = f"{today_now.month}/{today_now.day}"
+            dates_str = today_date_str
+            new_title = _strip_today_tag(post["title"])
+            new_title = new_title.rstrip() + " #" + today_date_str
+            log.info(f"    📅 本日のみ出勤: {today_date_str}")
         else:
             dates_str = None
             new_title = _strip_today_tag(post["title"])
@@ -2976,6 +3001,14 @@ def run_title_only():
             # 検索用の日付ハッシュタグを末尾に追加（例: #4/5,4/7,4/9）
             new_title = _strip_today_tag(new_title)
             new_title = new_title.rstrip() + " #" + ",".join(dates)
+        elif is_today:
+            # 本日のみ出勤（明日以降の出勤なし）: カレンダー・ハッシュタグ用に本日の日付を設定
+            today_now = datetime.now(JST)
+            today_date_str = f"{today_now.month}/{today_now.day}"
+            dates_str = today_date_str
+            new_title = _strip_today_tag(post["title"])
+            new_title = new_title.rstrip() + " #" + today_date_str
+            log.info(f"    📅 本日のみ出勤: {today_date_str}")
         else:
             dates_str = None
             new_title = _strip_today_tag(post["title"])
