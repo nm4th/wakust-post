@@ -140,6 +140,26 @@ for _sp_id, _sp in SUMMARY_POSTS.items():
     for _cat in _sp["categories"]:
         CATEGORY_CALENDAR_URL[_cat] = {"url": _cal_url, "label": _sp["area_label"]}
 
+# 販売ポイント（値段）の自動調整設定
+# 1000スタートで販売回数が1回増えるごとに100ポイント上げ、上限は2000
+POINT_BASE = 1000  # 基準ポイント（販売0回時）
+POINT_STEP = 100   # 販売1回あたりの増加ポイント
+POINT_MAX  = 2000  # 上限ポイント
+
+
+def calculate_sales_point(sales_count):
+    """販売回数から販売ポイントを計算する。
+
+    販売0回: 1000、1回: 1100、... 10回以上: 2000（上限）
+    """
+    try:
+        sc = int(sales_count or 0)
+    except (TypeError, ValueError):
+        sc = 0
+    if sc < 0:
+        sc = 0
+    return min(POINT_BASE + POINT_STEP * sc, POINT_MAX)
+
 
 
 # ============================================================
@@ -600,6 +620,27 @@ def fetch_post_list(session):
     return all_posts
 
 
+def _find_point_field_name(form):
+    """編集フォーム内の「販売ポイント」入力欄のname属性を返す。
+
+    「販売ポイント」というラベルテキストを含む要素の次に現れる
+    input 要素のname属性を取得する。見つからない場合はNoneを返す。
+    """
+    if form is None:
+        return None
+    for el in form.find_all(string=lambda s: s and "販売ポイント" in s):
+        parent = el.parent
+        if parent is None:
+            continue
+        next_input = parent.find_next("input")
+        if next_input is not None and next_input.get("name"):
+            # type=hidden や checkbox/radio/file は除外
+            t = (next_input.get("type") or "").lower()
+            if t in ("", "text", "number", "tel"):
+                return next_input.get("name")
+    return None
+
+
 def _unwrap_redirect_url(url):
     """リダイレクトラッパーURL（link.php?url=... 等）から実際のURLを展開する"""
     parsed = urlparse(url)
@@ -700,6 +741,13 @@ def fetch_post_details(session, post):
 
     # post_stはHTMLのselected属性から取得済み（上記selectループで処理）
 
+    # 販売ポイント入力欄のname属性を検出
+    point_field = _find_point_field_name(form)
+    if point_field:
+        log.info(f"    🔧 販売ポイント field: name={point_field} current={payload.get(point_field)!r}")
+    else:
+        log.warning(f"    ⚠️  販売ポイント フィールドが見つかりません")
+
     # デバッグ: payloadのキーとテキストフィールドの内容量
     text_fields = {k: len(v) for k, v in payload.items() if k.startswith("edit_text")}
     log.info(f"    🔧 payload keys={list(payload.keys())}")
@@ -764,6 +812,7 @@ def fetch_post_details(session, post):
         "at_limit":           category_at_limit,
         "category_current":   category_current,
         "category_max":       category_max,
+        "point_field":        point_field,
     }
 
 
@@ -2286,12 +2335,47 @@ def inject_updated_date(html):
 
 
 # ============================================================
+# 販売ポイント変更の検出
+# ============================================================
+def compute_point_change(post, details):
+    """現在の販売ポイントと販売回数から算出した新しいポイントを返す。
+
+    戻り値: (current_point, new_point, changed)
+    - current_point: 現在フォームに入っている販売ポイント（int）。取得不能ならNone
+    - new_point: 販売回数から計算した新しいポイント（int）。検出不能ならNone
+    - changed: current_point != new_point の場合True
+    """
+    point_field = (details or {}).get("point_field")
+    if not point_field:
+        return None, None, False
+    payload = (details or {}).get("payload", {}) or {}
+    current_raw = payload.get(point_field, "")
+    m = re.search(r"\d+", str(current_raw))
+    current_point = int(m.group(0)) if m else None
+    sales_count = (post or {}).get("sales_count") or 0
+    new_point = calculate_sales_point(sales_count)
+    changed = (current_point != new_point)
+    return current_point, new_point, changed
+
+
+# ============================================================
 # 記事の更新
 # ============================================================
 def update_post(session, post, details, new_title, do_repost=False, all_post_infos=None, image_url=None):
     payload = dict(details["payload"])
 
     payload["edit_title"] = new_title
+
+    # 販売ポイントを販売回数に応じて更新
+    # （1000スタート、販売1回ごとに+100、上限2000）
+    point_field = details.get("point_field")
+    if point_field and point_field in payload:
+        sales_count = post.get("sales_count") or 0
+        new_point = calculate_sales_point(sales_count)
+        old_point_raw = payload.get(point_field)
+        if str(old_point_raw) != str(new_point):
+            log.info(f"    💰 販売ポイント: {old_point_raw} → {new_point} (販売{sales_count}回)")
+        payload[point_field] = str(new_point)
 
     if "edit_text_1" in payload:
         # decode_contents()がHTMLエンティティを返し、さらにWordPress側で
@@ -2704,6 +2788,8 @@ def run_update():
         date_changed  = (post_state.get("dates") != info["next_date"])
         # 更新記事の顔ぶれが変わっていたら回遊リストも更新が必要
         related_changed = post_state.get("all_ids") != all_ids_str
+        # 販売回数に応じて販売ポイントを値上げする必要があるか
+        _cp, _np, price_changed = compute_point_change(info["post"], info["details"])
 
         # ── まとめ記事: タイトル更新・再投稿スキップ、カレンダーのみ注入 ──
         if post_id in SUMMARY_POST_IDS:
@@ -2768,16 +2854,19 @@ def run_update():
 
         midnight_needs_swap = False  # モード統合により不要
 
-        # next_date=Noneの記事はタイトル更新・再投稿しない（回遊リストのみ）
+        # next_date=Noneの記事はタイトル更新・再投稿しない（回遊リスト・値段更新のみ）
         if info["next_date"] is None:
             do_repost = False
-            if not related_changed and not midnight_needs_swap:
+            if not related_changed and not midnight_needs_swap and not price_changed:
                 log.info(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
                 continue
 
-        if not title_changed and not date_changed and not do_repost and not related_changed and not midnight_needs_swap:
+        if not title_changed and not date_changed and not do_repost and not related_changed and not midnight_needs_swap and not price_changed:
             log.info(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
             continue
+
+        if price_changed:
+            log.info(f"    💰 販売ポイント更新予定: {_cp} → {_np} (販売{info['post'].get('sales_count') or 0}回)")
 
         log.info(f"\n📝 [{post_id}] {info['post']['title']}")
         log.info(f"    → {new_title}")
@@ -2964,6 +3053,8 @@ def run_title_only():
         title_changed = (new_title != info["post"]["title"])
         date_changed  = (post_state.get("dates") != info["next_date"])
         related_changed = post_state.get("all_ids") != all_ids_str
+        # 販売回数に応じて販売ポイントを値上げする必要があるか
+        _cp, _np, price_changed = compute_point_change(info["post"], info["details"])
 
         # まとめ記事: カレンダーのみ注入
         if post_id in SUMMARY_POST_IDS:
@@ -3021,13 +3112,16 @@ def run_title_only():
 
         if info["next_date"] is None:
             do_repost = False
-            if not related_changed:
+            if not related_changed and not price_changed:
                 log.info(f"\n    ℹ️  [{post_id}] 出勤日不明・変化なし。スキップ")
                 continue
 
-        if not title_changed and not date_changed and not do_repost and not related_changed:
+        if not title_changed and not date_changed and not do_repost and not related_changed and not price_changed:
             log.info(f"\n    ℹ️  [{post_id}] 変化なし。スキップ")
             continue
+
+        if price_changed:
+            log.info(f"    💰 販売ポイント更新予定: {_cp} → {_np} (販売{info['post'].get('sales_count') or 0}回)")
 
         log.info(f"\n📝 [{post_id}] {info['post']['title']}")
         log.info(f"    → {new_title}")
