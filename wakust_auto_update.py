@@ -786,7 +786,7 @@ def fetch_post_details(session, post):
 
         if not schedule_url:
             # フォールバック: プレーンテキストURLを探す
-            last_lines = list(reversed(text.splitlines()))[:5]
+            last_lines = list(reversed(text.splitlines()))
             for line in last_lines:
                 clean = re.sub(r"<[^>]+>", "", line).strip()
                 if re.match(r"https?://", clean) and "wakust.com" not in clean:
