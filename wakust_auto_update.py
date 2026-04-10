@@ -2315,13 +2315,21 @@ def inject_calendar_html(original_html, calendar_html):
 # 更新日の注入
 # ============================================================
 def inject_updated_date(html):
-    """edit_text_1の冒頭に「〇月〇日更新」を注入（既存があれば置換）"""
+    """edit_text_1の冒頭に「〇月〇日更新」と値上げ告知を注入（既存があれば置換）"""
     now = datetime.now(JST)
-    date_html = f'{UPDATED_DATE_START}<p><strong>{now.month}月{now.day}日更新</strong></p><br/>{UPDATED_DATE_END}'
+    date_html = (
+        f'{UPDATED_DATE_START}'
+        f'<p><strong>{now.month}月{now.day}日更新</strong></p>'
+        f'<p>※販売回数が1回増えるごとに{POINT_STEP}pt値上げします</p>'
+        f'<br/>{UPDATED_DATE_END}'
+    )
 
     # マーカー無しの既存「〇月〇日更新」テキストを除去（重複防止）
     bare_pattern = r'<p>\s*<strong>\s*\d{1,2}月\d{1,2}日更新\s*</strong>\s*</p>\s*(?:<br\s*/?>)?\s*'
     html = re.sub(bare_pattern, '', html)
+    # マーカー無しの既存値上げ告知テキストを除去（重複防止）
+    bare_notice_pattern = r'<p>\s*※?\s*販売回数が1回増えるごとに\d+pt値上げします\s*</p>\s*(?:<br\s*/?>)?\s*'
+    html = re.sub(bare_notice_pattern, '', html)
 
     # マーカー付きの既存テキストがあれば全除去してから先頭に追加
     if UPDATED_DATE_START in html:
