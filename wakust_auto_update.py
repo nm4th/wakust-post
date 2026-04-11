@@ -1669,6 +1669,89 @@ def _strip_today_tag(title):
     return title.rstrip()
 
 
+def _extract_dates_from_title(title):
+    """タイトルの【日付出勤】部分から日付リストを抽出するフォールバック。
+
+    例: "【4/12.13出勤Iカップ】名前" → ["4/12", "4/13"]
+    例: "【3/28 | 4/3.4出勤】名前" → ["3/28", "4/3", "4/4"]
+    日付が見つからない場合は空リストを返す。
+    """
+    m = re.search(r"【([\d/.,｜|\s]+)出勤", title)
+    if not m:
+        return []
+    raw = m.group(1).strip()
+    dates = []
+    groups = re.split(r"[|｜]", raw)
+    for group in groups:
+        group = group.strip()
+        if "/" not in group:
+            continue
+        m_group = re.match(r"(\d+)/([\d.]+)", group)
+        if m_group:
+            month = m_group.group(1)
+            days_str = m_group.group(2)
+            days = [d for d in days_str.split(".") if d]
+            for d in days:
+                dates.append(f"{month}/{d}")
+    return dates
+
+
+def _fallback_dates_from_title_or_state(title, post_id, state):
+    """スケジュール取得失敗時にタイトルまたはstateから日付を復元する。
+
+    優先順位:
+      1. タイトルの【日付出勤】から抽出（最新のタイトルが最も信頼できる）
+      2. stateファイルの前回保存日付
+    戻り値: (dates_str, dates_list) - dates_strはカンマ区切り文字列、dates_listはリスト
+            日付が見つからない場合は (None, [])
+    """
+    # 1. タイトルから抽出
+    title_dates = _extract_dates_from_title(title)
+    if title_dates:
+        # 過去の日付を除外（今日以降のみ）
+        today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        current_year = today_dt.year
+        future_dates = []
+        for d in title_dates:
+            try:
+                parts = d.split("/")
+                m, dy = int(parts[0]), int(parts[1])
+                dt = datetime(current_year, m, dy)
+                if dt >= today_dt:
+                    future_dates.append(d)
+            except (ValueError, IndexError):
+                continue
+        if future_dates:
+            dates_str = ",".join(future_dates)
+            log.info(f"    📋 タイトルから日付を復元: {dates_str}")
+            return dates_str, future_dates
+
+    # 2. stateから復元
+    post_state = state.get(post_id, {})
+    saved_dates = post_state.get("dates")
+    if saved_dates:
+        # 過去の日付を除外
+        today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        current_year = today_dt.year
+        date_list = [d.strip() for d in saved_dates.split(",") if "/" in d]
+        future_dates = []
+        for d in date_list:
+            try:
+                parts = d.split("/")
+                m, dy = int(parts[0]), int(parts[1])
+                dt = datetime(current_year, m, dy)
+                if dt >= today_dt:
+                    future_dates.append(d)
+            except (ValueError, IndexError):
+                continue
+        if future_dates:
+            dates_str = ",".join(future_dates)
+            log.info(f"    📋 前回のstateから日付を復元: {dates_str}")
+            return dates_str, future_dates
+
+    return None, []
+
+
 def build_new_title(current_title, dates):
     # dates: リスト（例: ["3/13", "3/14", "3/15"]）
     # 【】内に日付+出勤パターンがあれば置換（カップ数等は保持）
@@ -1993,8 +2076,10 @@ def inject_related_html(original_html, related_html):
 # ============================================================
 # まとめ記事: 出勤カレンダーHTML生成
 # ============================================================
-def build_calendar_html(all_post_infos, summary_post_id=None):
-    """指定まとめ記事の対象カテゴリの記事を日付別にまとめた出勤カレンダーHTMLを生成する。"""
+def build_calendar_html(all_post_infos, summary_post_id=None, start_from_tomorrow=False):
+    """指定まとめ記事の対象カテゴリの記事を日付別にまとめた出勤カレンダーHTMLを生成する。
+    start_from_tomorrow=True の場合（16:30モード）、明日以降の日付のみ表示。
+    """
     from datetime import datetime as _dt
 
     if summary_post_id is None:
@@ -2028,23 +2113,39 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         # 日付なし記事のみの場合
         pass
 
-    # 過去の日付を除外（今日以降のみ表示）
+    # 過去の日付を除外（モードに応じて今日以降 or 明日以降のみ表示）
     today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    if start_from_tomorrow:
+        cutoff_dt = today_dt + timedelta(days=1)
+    else:
+        cutoff_dt = today_dt
     current_year = today_dt.year
 
     def _is_future_date(date_str):
-        """今日以降の日付かどうかを判定"""
+        """カットオフ日以降の日付かどうかを判定"""
         try:
             parts = date_str.split("/")
             m, d = int(parts[0]), int(parts[1])
             dt = _dt(current_year, m, d)
-            return dt >= today_dt
+            return dt >= cutoff_dt
         except (ValueError, IndexError):
             return False
 
+    # カットオフより前の日付のみ持つ記事を特定（未定セクションに回す）
+    past_only_infos = []
+    for info in target:
+        next_date = info.get("next_date")
+        if not next_date:
+            continue
+        dates = [d.strip() for d in next_date.split(",") if "/" in d]
+        if dates and not any(_is_future_date(d) for d in dates):
+            past_only_infos.append(info)
+
     date_map = {d: infos for d, infos in date_map.items() if _is_future_date(d)}
 
-    if not date_map:
+    # 未定セクションに回す記事があるかチェック
+    _no_date_candidates = [i for i in target if not i.get("next_date")]
+    if not date_map and not past_only_infos and not _no_date_candidates:
         return ""
 
     # 日付をソート（月/日の数値順）
@@ -2163,11 +2264,11 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
             inner += '</tr>'
         inner += '</tbody></table></div>\n'
 
-    # 日付なしの記事（出勤日不明）
+    # 日付なし or カットオフ前の日付しかない記事（出勤日未定扱い）
     no_date = [
         info for info in target
         if not info.get("next_date")
-    ]
+    ] + past_only_infos
     if no_date:
         sorted_no_date = sorted(no_date, key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
         inner += (
@@ -2679,14 +2780,20 @@ def run_update():
         tags, image_url = fetch_post_tags(session, post["url"])
 
         if not details["schedule_url"]:
-            log.warning(f"    ⚠️  スケジュールURLなし。回遊リストのみ対象")
+            log.warning(f"    ⚠️  スケジュールURLなし。タイトル/stateから日付復元を試行")
+            fb_dates_str, fb_dates_list = _fallback_dates_from_title_or_state(post["title"], post["id"], state)
+            if fb_dates_list:
+                new_title = build_new_title(post["title"], fb_dates_list)
+                new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
+            else:
+                new_title = _strip_today_tag(post["title"])
             post_infos.append({
                 "post":      post,
                 "details":   details,
-                "next_date": None,
+                "next_date": fb_dates_str,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": new_title,
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -2696,15 +2803,20 @@ def run_update():
 
         dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
         if not dates and not is_today:
-            log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
-            # 出勤日不明でもタイトル更新・回遊リスト対象として追加
+            log.warning(f"    ⚠️  出勤日取得失敗。タイトル/stateから日付復元を試行")
+            fb_dates_str, fb_dates_list = _fallback_dates_from_title_or_state(post["title"], post["id"], state)
+            if fb_dates_list:
+                new_title = build_new_title(post["title"], fb_dates_list)
+                new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
+            else:
+                new_title = _strip_today_tag(post["title"])
             post_infos.append({
                 "post":      post,
                 "details":   details,
-                "next_date": None,
+                "next_date": fb_dates_str,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": new_title,
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -2964,14 +3076,21 @@ def run_title_only():
         tags, image_url = fetch_post_tags(session, post["url"])
 
         if not details["schedule_url"]:
-            log.warning(f"    ⚠️  スケジュールURLなし。回遊リストのみ対象")
+            log.warning(f"    ⚠️  スケジュールURLなし。タイトル/stateから日付復元を試行")
+            fb_dates_str, fb_dates_list = _fallback_dates_from_title_or_state(post["title"], post["id"], state)
+            if fb_dates_list:
+                new_title = build_new_title(post["title"], fb_dates_list)
+                new_title = _strip_today_tag(new_title)
+                new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
+            else:
+                new_title = _strip_today_tag(post["title"])
             post_infos.append({
                 "post":      post,
                 "details":   details,
-                "next_date": None,
+                "next_date": fb_dates_str,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": new_title,
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -2981,14 +3100,21 @@ def run_title_only():
 
         dates, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"], start_from_tomorrow=True)
         if not dates and not is_today:
-            log.warning(f"    ⚠️  出勤日取得失敗。回遊リストのみ対象")
+            log.warning(f"    ⚠️  出勤日取得失敗。タイトル/stateから日付復元を試行")
+            fb_dates_str, fb_dates_list = _fallback_dates_from_title_or_state(post["title"], post["id"], state)
+            if fb_dates_list:
+                new_title = build_new_title(post["title"], fb_dates_list)
+                new_title = _strip_today_tag(new_title)
+                new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
+            else:
+                new_title = _strip_today_tag(post["title"])
             post_infos.append({
                 "post":      post,
                 "details":   details,
-                "next_date": None,
+                "next_date": fb_dates_str,
                 "is_tomorrow":  False,
                 "is_today":    False,
-                "new_title": _strip_today_tag(post["title"]),
+                "new_title": new_title,
                 "tags":      tags,
                 "image_url": image_url,
             })
@@ -3097,10 +3223,10 @@ def run_title_only():
         # 販売回数に応じて販売ポイントを値上げする必要があるか
         _cp, _np, price_changed = compute_point_change(info["post"], info["details"])
 
-        # まとめ記事: カレンダーのみ注入
+        # まとめ記事: カレンダーのみ注入（16:30モードは明日以降）
         if post_id in SUMMARY_POST_IDS:
             area_label = SUMMARY_POSTS[post_id]["area_label"]
-            calendar_html = build_calendar_html(post_infos, summary_post_id=post_id)
+            calendar_html = build_calendar_html(post_infos, summary_post_id=post_id, start_from_tomorrow=True)
             if not calendar_html and not related_changed:
                 log.info(f"\n    ℹ️  [{post_id}] {area_label} まとめ記事: 変化なし。スキップ")
                 continue
