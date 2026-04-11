@@ -463,6 +463,11 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def _to_multipart(payload):
+    """dict を multipart/form-data 用の files 形式に変換する"""
+    return {k: (None, v) for k, v in payload.items()}
+
+
 # ============================================================
 # ログイン
 # ============================================================
@@ -473,9 +478,9 @@ def login_wakust():
         session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
 
         try:
-            res = session.post(LOGIN_AJAX_URL, data={
-                "login_email":    WAKUST_EMAIL,
-                "login_password": WAKUST_PASSWORD,
+            res = session.post(LOGIN_AJAX_URL, files={
+                "login_email":    (None, WAKUST_EMAIL),
+                "login_password": (None, WAKUST_PASSWORD),
             })
 
             if res.status_code == 200 and "loginok" in res.text:
@@ -2572,7 +2577,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         payload[REPOST_FIELD] = "on"
         log.info(f"    🔄 再投稿チェックON")
 
-    res = session.post(EDIT_FORM_ACTION, data=payload)
+    res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
     if res.status_code == 200:
         action_str = "再投稿＋タイトル更新" if do_repost else "タイトル更新（編集のみ）"
         log.info(f"    ✅ {action_str}: {new_title}")
@@ -2727,7 +2732,7 @@ def run_calendar_only():
             payload["edit_text_2"] = text2
         payload.pop(REPOST_FIELD, None)
 
-        res = session.post(EDIT_FORM_ACTION, data=payload)
+        res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
         if res.status_code == 200:
             log.info(f"    ✅ {area_label} まとめ記事更新完了")
         else:
@@ -2981,7 +2986,7 @@ def run_update():
                 payload["edit_text_2"] = text2
             # 再投稿しない
             payload.pop(REPOST_FIELD, None)
-            res = session.post(EDIT_FORM_ACTION, data=payload)
+            res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
             if res.status_code == 200:
                 log.info(f"    ✅ {area_label} まとめ記事更新完了")
                 state[post_id] = {
@@ -3261,7 +3266,7 @@ def run_title_only():
                     )
                 payload["edit_text_2"] = text2
             payload.pop(REPOST_FIELD, None)
-            res = session.post(EDIT_FORM_ACTION, data=payload)
+            res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
             if res.status_code == 200:
                 log.info(f"    ✅ {area_label} まとめ記事更新完了")
                 state[post_id] = {
