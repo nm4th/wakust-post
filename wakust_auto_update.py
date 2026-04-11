@@ -2076,8 +2076,10 @@ def inject_related_html(original_html, related_html):
 # ============================================================
 # まとめ記事: 出勤カレンダーHTML生成
 # ============================================================
-def build_calendar_html(all_post_infos, summary_post_id=None):
-    """指定まとめ記事の対象カテゴリの記事を日付別にまとめた出勤カレンダーHTMLを生成する。"""
+def build_calendar_html(all_post_infos, summary_post_id=None, start_from_tomorrow=False):
+    """指定まとめ記事の対象カテゴリの記事を日付別にまとめた出勤カレンダーHTMLを生成する。
+    start_from_tomorrow=True の場合（16:30モード）、明日以降の日付のみ表示。
+    """
     from datetime import datetime as _dt
 
     if summary_post_id is None:
@@ -2111,23 +2113,39 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
         # 日付なし記事のみの場合
         pass
 
-    # 過去の日付を除外（今日以降のみ表示）
+    # 過去の日付を除外（モードに応じて今日以降 or 明日以降のみ表示）
     today_dt = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    if start_from_tomorrow:
+        cutoff_dt = today_dt + timedelta(days=1)
+    else:
+        cutoff_dt = today_dt
     current_year = today_dt.year
 
     def _is_future_date(date_str):
-        """今日以降の日付かどうかを判定"""
+        """カットオフ日以降の日付かどうかを判定"""
         try:
             parts = date_str.split("/")
             m, d = int(parts[0]), int(parts[1])
             dt = _dt(current_year, m, d)
-            return dt >= today_dt
+            return dt >= cutoff_dt
         except (ValueError, IndexError):
             return False
 
+    # カットオフより前の日付のみ持つ記事を特定（未定セクションに回す）
+    past_only_infos = []
+    for info in target:
+        next_date = info.get("next_date")
+        if not next_date:
+            continue
+        dates = [d.strip() for d in next_date.split(",") if "/" in d]
+        if dates and not any(_is_future_date(d) for d in dates):
+            past_only_infos.append(info)
+
     date_map = {d: infos for d, infos in date_map.items() if _is_future_date(d)}
 
-    if not date_map:
+    # 未定セクションに回す記事があるかチェック
+    _no_date_candidates = [i for i in target if not i.get("next_date")]
+    if not date_map and not past_only_infos and not _no_date_candidates:
         return ""
 
     # 日付をソート（月/日の数値順）
@@ -2246,11 +2264,11 @@ def build_calendar_html(all_post_infos, summary_post_id=None):
             inner += '</tr>'
         inner += '</tbody></table></div>\n'
 
-    # 日付なしの記事（出勤日不明）
+    # 日付なし or カットオフ前の日付しかない記事（出勤日未定扱い）
     no_date = [
         info for info in target
         if not info.get("next_date")
-    ]
+    ] + past_only_infos
     if no_date:
         sorted_no_date = sorted(no_date, key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
         inner += (
@@ -3205,10 +3223,10 @@ def run_title_only():
         # 販売回数に応じて販売ポイントを値上げする必要があるか
         _cp, _np, price_changed = compute_point_change(info["post"], info["details"])
 
-        # まとめ記事: カレンダーのみ注入
+        # まとめ記事: カレンダーのみ注入（16:30モードは明日以降）
         if post_id in SUMMARY_POST_IDS:
             area_label = SUMMARY_POSTS[post_id]["area_label"]
-            calendar_html = build_calendar_html(post_infos, summary_post_id=post_id)
+            calendar_html = build_calendar_html(post_infos, summary_post_id=post_id, start_from_tomorrow=True)
             if not calendar_html and not related_changed:
                 log.info(f"\n    ℹ️  [{post_id}] {area_label} まとめ記事: 変化なし。スキップ")
                 continue
