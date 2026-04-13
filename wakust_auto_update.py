@@ -141,17 +141,17 @@ for _sp_id, _sp in SUMMARY_POSTS.items():
         CATEGORY_CALENDAR_URL[_cat] = {"url": _cal_url, "label": _sp["area_label"]}
 
 # 販売ポイント（値段）の自動調整設定
-# 1000スタートで販売回数が2回増えるごとに100ポイント上げ、上限は1500
+# 1000スタートで販売回数が2回増えるごとに100ポイント上げ、上限は2000
 POINT_BASE = 1000  # 基準ポイント（販売0回時）
 POINT_STEP = 100   # 増加ポイント
 POINT_SALES_PER_STEP = 2  # 何回販売ごとに値上げするか
-POINT_MAX  = 1500  # 上限ポイント
+POINT_MAX  = 2000  # 上限ポイント
 
 
 def calculate_sales_point(sales_count):
     """販売回数から販売ポイントを計算する。
 
-    販売0-1回: 1000、2-3回: 1100、... 10回以上: 1500（上限）
+    販売0-1回: 1000、2-3回: 1100、... 20回以上: 2000（上限）
     """
     try:
         sc = int(sales_count or 0)
@@ -2494,7 +2494,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     # 販売ポイントを販売回数に応じて更新
-    # （1000スタート、販売2回ごとに+100、上限1500）
+    # （1000スタート、販売2回ごとに+100、上限2000）
     point_field = details.get("point_field")
     if point_field and point_field in payload:
         sales_count = post.get("sales_count") or 0
