@@ -141,17 +141,17 @@ for _sp_id, _sp in SUMMARY_POSTS.items():
         CATEGORY_CALENDAR_URL[_cat] = {"url": _cal_url, "label": _sp["area_label"]}
 
 # 販売ポイント（値段）の自動調整設定
-# 1000スタートで販売回数が2回増えるごとに100ポイント上げ、上限は1500
+# 1000スタートで販売回数が1回増えるごとに100ポイント上げ、上限は2000
 POINT_BASE = 1000  # 基準ポイント（販売0回時）
 POINT_STEP = 100   # 増加ポイント
-POINT_SALES_PER_STEP = 2  # 何回販売ごとに値上げするか
-POINT_MAX  = 1500  # 上限ポイント
+POINT_SALES_PER_STEP = 1  # 何回販売ごとに値上げするか
+POINT_MAX  = 2000  # 上限ポイント
 
 
 def calculate_sales_point(sales_count):
     """販売回数から販売ポイントを計算する。
 
-    販売0-1回: 1000、2-3回: 1100、... 10回以上: 1500（上限）
+    販売0回: 1000、1回: 1100、2回: 1200、... 10回以上: 2000（上限）
     """
     try:
         sc = int(sales_count or 0)
@@ -1799,14 +1799,15 @@ def build_related_html(all_post_infos, current_post_id, current_category=None, t
     カテゴリ回遊ルール:
       - 神奈川県: 神奈川県内のみで回遊
       - 埼玉県: 埼玉県内のみで回遊
+      - 千葉県: 千葉県内のみで回遊
       - 多摩: 多摩内のみで回遊
       - 東京都/池袋/新宿: 互いに回遊OK
     """
     others = [p for p in all_post_infos if p["post"]["id"] != current_post_id]
 
     # カテゴリ別回遊フィルタリング
-    # 神奈川県/埼玉県: 同県同士のみ / それ以外: 神奈川県・埼玉県以外すべてで回遊
-    LOCAL_ONLY_CATEGORIES = {"神奈川県", "埼玉県", "多摩"}
+    # 神奈川県/埼玉県/千葉県: 同県同士のみ / それ以外: 神奈川県・埼玉県・千葉県以外すべてで回遊
+    LOCAL_ONLY_CATEGORIES = {"神奈川県", "埼玉県", "千葉県", "多摩"}
     if current_category:
         if current_category in LOCAL_ONLY_CATEGORIES:
             others = [p for p in others if p["post"].get("category") == current_category]
@@ -2493,7 +2494,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     # 販売ポイントを販売回数に応じて更新
-    # （1000スタート、販売2回ごとに+100、上限1500）
+    # （1000スタート、販売1回ごとに+100、上限2000）
     point_field = details.get("point_field")
     if point_field and point_field in payload:
         sales_count = post.get("sales_count") or 0
@@ -2524,7 +2525,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
             all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
             # ログもカテゴリ回遊ルールに合わせてフィルタ
             cur_cat = post.get("category")
-            LOCAL_ONLY = {"神奈川県", "埼玉県", "多摩"}
+            LOCAL_ONLY = {"神奈川県", "埼玉県", "千葉県", "多摩"}
             if cur_cat in LOCAL_ONLY:
                 all_others = [p for p in all_others if p["post"].get("category") == cur_cat]
             else:
