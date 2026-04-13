@@ -141,16 +141,17 @@ for _sp_id, _sp in SUMMARY_POSTS.items():
         CATEGORY_CALENDAR_URL[_cat] = {"url": _cal_url, "label": _sp["area_label"]}
 
 # 販売ポイント（値段）の自動調整設定
-# 1000スタートで販売回数が1回増えるごとに100ポイント上げ、上限は2000
+# 1000スタートで販売回数が2回増えるごとに100ポイント上げ、上限は1500
 POINT_BASE = 1000  # 基準ポイント（販売0回時）
-POINT_STEP = 100   # 販売1回あたりの増加ポイント
-POINT_MAX  = 2000  # 上限ポイント
+POINT_STEP = 100   # 増加ポイント
+POINT_SALES_PER_STEP = 2  # 何回販売ごとに値上げするか
+POINT_MAX  = 1500  # 上限ポイント
 
 
 def calculate_sales_point(sales_count):
     """販売回数から販売ポイントを計算する。
 
-    販売0回: 1000、1回: 1100、... 10回以上: 2000（上限）
+    販売0-1回: 1000、2-3回: 1100、... 10回以上: 1500（上限）
     """
     try:
         sc = int(sales_count or 0)
@@ -158,7 +159,7 @@ def calculate_sales_point(sales_count):
         sc = 0
     if sc < 0:
         sc = 0
-    return min(POINT_BASE + POINT_STEP * sc, POINT_MAX)
+    return min(POINT_BASE + POINT_STEP * (sc // POINT_SALES_PER_STEP), POINT_MAX)
 
 
 
@@ -2437,7 +2438,7 @@ def inject_updated_date(html):
     date_html = (
         f'{UPDATED_DATE_START}'
         f'<p><strong>{now.month}月{now.day}日更新</strong></p>'
-        f'<p>※販売回数が1回増えるごとに{POINT_STEP}pt値上げします</p>'
+        f'<p>※販売回数が{POINT_SALES_PER_STEP}回増えるごとに{POINT_STEP}pt値上げします</p>'
         f'<br/>{UPDATED_DATE_END}'
     )
 
@@ -2445,7 +2446,7 @@ def inject_updated_date(html):
     bare_pattern = r'<p>\s*<strong>\s*\d{1,2}月\d{1,2}日更新\s*</strong>\s*</p>\s*(?:<br\s*/?>)?\s*'
     html = re.sub(bare_pattern, '', html)
     # マーカー無しの既存値上げ告知テキストを除去（重複防止）
-    bare_notice_pattern = r'<p>\s*※?\s*販売回数が1回増えるごとに\d+pt値上げします\s*</p>\s*(?:<br\s*/?>)?\s*'
+    bare_notice_pattern = r'<p>\s*※?\s*販売回数が\d+回増えるごとに\d+pt値上げします\s*</p>\s*(?:<br\s*/?>)?\s*'
     html = re.sub(bare_notice_pattern, '', html)
 
     # マーカー付きの既存テキストがあれば全除去してから先頭に追加
@@ -2492,7 +2493,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
     payload["edit_title"] = new_title
 
     # 販売ポイントを販売回数に応じて更新
-    # （1000スタート、販売1回ごとに+100、上限2000）
+    # （1000スタート、販売2回ごとに+100、上限1500）
     point_field = details.get("point_field")
     if point_field and point_field in payload:
         sales_count = post.get("sales_count") or 0
