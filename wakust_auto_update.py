@@ -1799,14 +1799,15 @@ def build_related_html(all_post_infos, current_post_id, current_category=None, t
     カテゴリ回遊ルール:
       - 神奈川県: 神奈川県内のみで回遊
       - 埼玉県: 埼玉県内のみで回遊
+      - 千葉県: 千葉県内のみで回遊
       - 多摩: 多摩内のみで回遊
       - 東京都/池袋/新宿: 互いに回遊OK
     """
     others = [p for p in all_post_infos if p["post"]["id"] != current_post_id]
 
     # カテゴリ別回遊フィルタリング
-    # 神奈川県/埼玉県: 同県同士のみ / それ以外: 神奈川県・埼玉県以外すべてで回遊
-    LOCAL_ONLY_CATEGORIES = {"神奈川県", "埼玉県", "多摩"}
+    # 神奈川県/埼玉県/千葉県: 同県同士のみ / それ以外: 神奈川県・埼玉県・千葉県以外すべてで回遊
+    LOCAL_ONLY_CATEGORIES = {"神奈川県", "埼玉県", "千葉県", "多摩"}
     if current_category:
         if current_category in LOCAL_ONLY_CATEGORIES:
             others = [p for p in others if p["post"].get("category") == current_category]
@@ -2524,7 +2525,7 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
             all_others = [p for p in (all_post_infos or []) if p["post"]["id"] != post["id"]]
             # ログもカテゴリ回遊ルールに合わせてフィルタ
             cur_cat = post.get("category")
-            LOCAL_ONLY = {"神奈川県", "埼玉県", "多摩"}
+            LOCAL_ONLY = {"神奈川県", "埼玉県", "千葉県", "多摩"}
             if cur_cat in LOCAL_ONLY:
                 all_others = [p for p in all_others if p["post"].get("category") == cur_cat]
             else:
