@@ -934,6 +934,7 @@ PLAYWRIGHT_PREFER_DOMAINS = {
     "mens-este",       # omiya-mens-este.net 等
     "bed-of-roses",    # Alpine.js (x-for/x-text) でJSレンダリング必須
     "liora2024",       # requests.getで接続タイムアウト
+    "muchispa",        # muchispa-room.com (men-este系SaaS・Bot対策あり)
 }
 
 def _has_work_info(info):
