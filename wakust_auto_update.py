@@ -1669,10 +1669,13 @@ def format_dates(dates):
 
 
 TODAY_TAG = " #本日出勤"
+TOKYO_AREA_TAG = " #東京都内"
+TOKYO_AREA_CATEGORIES = {"東京都", "新宿", "池袋"}
 
 def _strip_today_tag(title):
-    """タイトルから #本日出勤 タグと日付ハッシュタグを除去する（回遊リスト・カレンダー表示用）"""
+    """タイトルから #本日出勤 タグと日付ハッシュタグ、地域タグを除去する"""
     title = title.replace(TODAY_TAG, "")
+    title = re.sub(r"\s*#東京都内", "", title)
     title = re.sub(r"\s*#[\d/,]+$", "", title)
     return title.rstrip()
 
@@ -2788,6 +2791,8 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
             new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
         else:
             new_title = _strip_today_tag(post["title"])
+        if post.get("category") in TOKYO_AREA_CATEGORIES:
+            new_title = new_title.rstrip() + TOKYO_AREA_TAG
         return {
             "post":      post,
             "details":   details,
@@ -2815,6 +2820,8 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
             new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
         else:
             new_title = _strip_today_tag(post["title"])
+        if post.get("category") in TOKYO_AREA_CATEGORIES:
+            new_title = new_title.rstrip() + TOKYO_AREA_TAG
         return {
             "post":      post,
             "details":   details,
@@ -2846,6 +2853,9 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
 
     if is_today:
         new_title = new_title.rstrip() + TODAY_TAG
+
+    if post.get("category") in TOKYO_AREA_CATEGORIES:
+        new_title = new_title.rstrip() + TOKYO_AREA_TAG
 
     return {
         "post":      post,
