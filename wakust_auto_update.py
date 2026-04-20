@@ -1669,13 +1669,22 @@ def format_dates(dates):
 
 
 TODAY_TAG = " #本日出勤"
-TOKYO_AREA_TAG = " #東京都内"
-TOKYO_AREA_CATEGORIES = {"東京都", "新宿", "池袋"}
+# カテゴリ → タイトル末尾に付与する地域タグ
+CATEGORY_AREA_TAG = {
+    "東京都":   " #東京都内",
+    "新宿":     " #東京都内",
+    "池袋":     " #東京都内",
+    "神奈川県": " #神奈川",
+    "千葉県":   " #千葉",
+    "埼玉県":   " #埼玉",
+}
+# _strip_today_tag で除去する地域タグ（重複防止用）
+_AREA_TAG_STRIP_RE = re.compile(r"\s*#(?:東京都内|神奈川|千葉|埼玉)")
 
 def _strip_today_tag(title):
     """タイトルから #本日出勤 タグと日付ハッシュタグ、地域タグを除去する"""
     title = title.replace(TODAY_TAG, "")
-    title = re.sub(r"\s*#東京都内", "", title)
+    title = _AREA_TAG_STRIP_RE.sub("", title)
     title = re.sub(r"\s*#[\d/,]+$", "", title)
     return title.rstrip()
 
@@ -2791,8 +2800,9 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
             new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
         else:
             new_title = _strip_today_tag(post["title"])
-        if post.get("category") in TOKYO_AREA_CATEGORIES:
-            new_title = new_title.rstrip() + TOKYO_AREA_TAG
+        _area_tag = CATEGORY_AREA_TAG.get(post.get("category"))
+        if _area_tag:
+            new_title = new_title.rstrip() + _area_tag
         return {
             "post":      post,
             "details":   details,
@@ -2820,8 +2830,9 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
             new_title = new_title.rstrip() + " #" + ",".join(fb_dates_list)
         else:
             new_title = _strip_today_tag(post["title"])
-        if post.get("category") in TOKYO_AREA_CATEGORIES:
-            new_title = new_title.rstrip() + TOKYO_AREA_TAG
+        _area_tag = CATEGORY_AREA_TAG.get(post.get("category"))
+        if _area_tag:
+            new_title = new_title.rstrip() + _area_tag
         return {
             "post":      post,
             "details":   details,
@@ -2854,8 +2865,9 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
     if is_today:
         new_title = new_title.rstrip() + TODAY_TAG
 
-    if post.get("category") in TOKYO_AREA_CATEGORIES:
-        new_title = new_title.rstrip() + TOKYO_AREA_TAG
+    _area_tag = CATEGORY_AREA_TAG.get(post.get("category"))
+    if _area_tag:
+        new_title = new_title.rstrip() + _area_tag
 
     return {
         "post":      post,
