@@ -2961,12 +2961,14 @@ def run_update():
             log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
             continue
 
-        # 明日出勤 → 明後日以降出勤 の優先順で選定
-        primary = [i for i in eligible if i["is_tomorrow"]]
+        # 本日出勤 → 明日出勤 → それ以降 の優先順で選定
+        primary = [i for i in eligible if i["is_today"]]
         primary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
-        secondary = [i for i in eligible if not i["is_tomorrow"]]
+        secondary = [i for i in eligible if not i["is_today"] and i["is_tomorrow"]]
         secondary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
-        primary_label, secondary_label = "明日", "明後日以降"
+        tertiary = [i for i in eligible if not i["is_today"] and not i["is_tomorrow"]]
+        tertiary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
+        primary_label, secondary_label, tertiary_label = "本日", "明日", "明後日以降"
 
         # 上限まで埋める
         selected = []
@@ -2980,13 +2982,23 @@ def run_update():
                 break
             selected.append(info)
 
+        for info in tertiary:
+            if len(selected) >= slots:
+                break
+            selected.append(info)
+
         for info in selected:
             repost_ids.add(info["post"]["id"])
-            label = primary_label if info in primary else secondary_label
+            if info in primary:
+                label = primary_label
+            elif info in secondary:
+                label = secondary_label
+            else:
+                label = tertiary_label
             sc = info["post"].get("sales_count") or 0
             log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, 販売={sc}）")
 
-        log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → {primary_label}{len(primary)}件+{secondary_label}{len(secondary)}件 → 選定{len(selected)}件")
+        log.info(f"  🏷️  カテゴリー「{category}」: 空き{slots}枠 → {primary_label}{len(primary)}件+{secondary_label}{len(secondary)}件+{tertiary_label}{len(tertiary)}件 → 選定{len(selected)}件")
 
     # 全記事更新＋再投稿
     log.info(f"\n{'─'*55}")
@@ -3158,11 +3170,13 @@ def run_title_only():
             log.info(f"  🏷️  カテゴリー「{category}」: 上限{cat_current}/{cat_max} → 空き枠なし")
             continue
 
-        # 明日出勤 → 明後日以降 の優先順で選定
-        primary = [i for i in eligible if i["is_tomorrow"]]
+        # 本日出勤 → 明日出勤 → それ以降 の優先順で選定
+        primary = [i for i in eligible if i["is_today"]]
         primary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
-        secondary = [i for i in eligible if not i["is_tomorrow"]]
+        secondary = [i for i in eligible if not i["is_today"] and i["is_tomorrow"]]
         secondary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
+        tertiary = [i for i in eligible if not i["is_today"] and not i["is_tomorrow"]]
+        tertiary.sort(key=lambda x: x["post"].get("sales_count") or 0, reverse=True)
 
         selected = []
         for info in primary:
@@ -3173,10 +3187,19 @@ def run_title_only():
             if len(selected) >= slots:
                 break
             selected.append(info)
+        for info in tertiary:
+            if len(selected) >= slots:
+                break
+            selected.append(info)
 
         for info in selected:
             repost_ids.add(info["post"]["id"])
-            label = "明日" if info in primary else "明後日以降"
+            if info in primary:
+                label = "本日"
+            elif info in secondary:
+                label = "明日"
+            else:
+                label = "明後日以降"
             sc = info["post"].get("sales_count") or 0
             log.info(f"    [{info['post']['id']}] 再投稿対象（{label}, 販売={sc}）")
 
