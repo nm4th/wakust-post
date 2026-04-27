@@ -1,7 +1,7 @@
 """
 ワクスト 記事タイトル自動更新 ＋ 出勤記事再投稿スクリプト
 ====================================================================
-毎日23:40 JSTに実行し、以下を行います。
+毎日0:00 JSTに実行し、以下を行います。
 
   1. 記事一覧から全記事のURLとタイトルを取得
   2. 各記事の編集画面(edit_text_2)からスケジュールURLを取得
@@ -1631,7 +1631,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
 
     # タイトル用の日付（直近3件まで）
     # start_from_tomorrow=True (16:30モード): 明日以降
-    # start_from_tomorrow=False (23:40モード): 本日以降
+    # start_from_tomorrow=False (0時モード): 本日以降
     cutoff = (today + timedelta(days=1)).date() if start_from_tomorrow else today.date()
     future = [(dt, s) for dt, s in unique if dt.date() >= cutoff]
     future = future[:3]
@@ -3322,5 +3322,5 @@ if __name__ == "__main__":
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [16:30タイトル更新モード]")
         run_title_only()
     else:
-        log.info(f"🚀 ワクスト自動更新スクリプト起動 [23:40統合モード]")
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [0時統合モード]")
         run_update()

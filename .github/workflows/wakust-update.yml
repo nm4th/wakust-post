@@ -4,8 +4,6 @@ on:
   schedule:
     # 毎日16:30 JSTに実行（UTC 07:30 = JST 16:30）タイトル＋回遊リストのみ
     - cron: '30 7 * * *'
-    # 毎日23:40 JSTに実行（UTC 14:40 = JST 23:40）全更新＋再投稿
-    - cron: '40 14 * * *'
   workflow_dispatch:
     inputs:
       calendar_only:
@@ -16,6 +14,8 @@ on:
         description: 'タイトル＋回遊リストのみ更新する（16:30モード）'
         type: boolean
         default: false
+  repository_dispatch:
+    types: [midnight-update]
 
 jobs:
   update:
