@@ -2593,14 +2593,23 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
         payload[REPOST_FIELD] = "on"
         log.info(f"    🔄 再投稿チェックON")
 
-    res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
-    if res.status_code == 200:
-        action_str = "再投稿＋タイトル更新" if do_repost else "タイトル更新（編集のみ）"
-        log.info(f"    ✅ {action_str}: {new_title}")
-        return True
-
-    log.error(f"    ❌ 更新失敗 (status: {res.status_code})")
-    return False
+    for attempt in range(3):
+        try:
+            res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+            if res.status_code == 200:
+                action_str = "再投稿＋タイトル更新" if do_repost else "タイトル更新（編集のみ）"
+                log.info(f"    ✅ {action_str}: {new_title}")
+                return True
+            log.error(f"    ❌ 更新失敗 (status: {res.status_code})")
+            return False
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < 2:
+                wait = [2, 5][attempt]
+                log.warning(f"    ⚠️  通信エラー (試行{attempt+1}/3), {wait}秒後にリトライ: {e}")
+                time.sleep(wait)
+            else:
+                log.error(f"    ❌ 通信エラー (3回失敗): {e}")
+                return False
 
 
 # ============================================================
@@ -2747,12 +2756,22 @@ def run_calendar_only():
             payload["edit_text_2"] = text2
         payload.pop(REPOST_FIELD, None)
 
-        res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
-        if res.status_code == 200:
-            log.info(f"    ✅ {area_label} まとめ記事更新完了")
-        else:
-            log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
-        time.sleep(0.3)
+        for _attempt in range(3):
+            try:
+                res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+                if res.status_code == 200:
+                    log.info(f"    ✅ {area_label} まとめ記事更新完了")
+                else:
+                    log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
+                break
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if _attempt < 2:
+                    _wait = [2, 5][_attempt]
+                    log.warning(f"    ⚠️  まとめ記事通信エラー (試行{_attempt+1}/3), {_wait}秒後にリトライ: {e}")
+                    time.sleep(_wait)
+                else:
+                    log.error(f"    ❌ まとめ記事通信エラー (3回失敗): {e}")
+        time.sleep(1)
 
     session.close()
     log.info(f"\n✅ カレンダー更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
@@ -3064,20 +3083,30 @@ def run_update():
                 payload["edit_text_2"] = text2
             # 再投稿しない
             payload.pop(REPOST_FIELD, None)
-            res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
-            if res.status_code == 200:
-                log.info(f"    ✅ {area_label} まとめ記事更新完了")
-                state[post_id] = {
-                    "dates":       None,
-                    "title":       info["post"]["title"],
-                    "reposted":   False,
-                    "all_ids":    all_ids_str,
-                    "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                save_state(state)
-            else:
-                log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
-            time.sleep(0.3)
+            for _attempt in range(3):
+                try:
+                    res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+                    if res.status_code == 200:
+                        log.info(f"    ✅ {area_label} まとめ記事更新完了")
+                        state[post_id] = {
+                            "dates":       None,
+                            "title":       info["post"]["title"],
+                            "reposted":   False,
+                            "all_ids":    all_ids_str,
+                            "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                        save_state(state)
+                    else:
+                        log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
+                    break
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                    if _attempt < 2:
+                        _wait = [2, 5][_attempt]
+                        log.warning(f"    ⚠️  まとめ記事通信エラー (試行{_attempt+1}/3), {_wait}秒後にリトライ: {e}")
+                        time.sleep(_wait)
+                    else:
+                        log.error(f"    ❌ まとめ記事通信エラー (3回失敗): {e}")
+            time.sleep(1)
             continue
 
         midnight_needs_swap = False  # モード統合により不要
@@ -3111,7 +3140,7 @@ def run_update():
             }
             save_state(state)
 
-        time.sleep(0.3)
+        time.sleep(1)
 
     session.close()
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
@@ -3261,20 +3290,30 @@ def run_title_only():
                     )
                 payload["edit_text_2"] = text2
             payload.pop(REPOST_FIELD, None)
-            res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload))
-            if res.status_code == 200:
-                log.info(f"    ✅ {area_label} まとめ記事更新完了")
-                state[post_id] = {
-                    "dates":       None,
-                    "title":       info["post"]["title"],
-                    "reposted":   False,
-                    "all_ids":    all_ids_str,
-                    "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                save_state(state)
-            else:
-                log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
-            time.sleep(0.3)
+            for _attempt in range(3):
+                try:
+                    res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+                    if res.status_code == 200:
+                        log.info(f"    ✅ {area_label} まとめ記事更新完了")
+                        state[post_id] = {
+                            "dates":       None,
+                            "title":       info["post"]["title"],
+                            "reposted":   False,
+                            "all_ids":    all_ids_str,
+                            "updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                        save_state(state)
+                    else:
+                        log.warning(f"    ⚠️  {area_label} まとめ記事更新失敗 (HTTP {res.status_code})")
+                    break
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                    if _attempt < 2:
+                        _wait = [2, 5][_attempt]
+                        log.warning(f"    ⚠️  まとめ記事通信エラー (試行{_attempt+1}/3), {_wait}秒後にリトライ: {e}")
+                        time.sleep(_wait)
+                    else:
+                        log.error(f"    ❌ まとめ記事通信エラー (3回失敗): {e}")
+            time.sleep(1)
             continue
 
         if info["next_date"] is None:
@@ -3305,7 +3344,7 @@ def run_title_only():
             }
             save_state(state)
 
-        time.sleep(0.3)
+        time.sleep(1)
 
     session.close()
     log.info(f"\n✅ タイトル＋回遊リスト更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
