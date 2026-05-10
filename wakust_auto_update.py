@@ -940,10 +940,10 @@ PLAYWRIGHT_PREFER_DOMAINS = {
 
 def _has_work_info(info):
     """出勤情報テキストが有効な出勤エントリかどうかを判定する。
-    HH:MM時刻、「満枠」「出勤」「◯」「○」のいずれかがあればTrue。"""
+    HH:MM時刻、「満枠」「満了」「出勤」「◯」「○」のいずれかがあればTrue。"""
     if re.search(r"\d{1,2}:\d{2}", info):
         return True
-    if "満枠" in info or "出勤" in info or "◯" in info or "○" in info:
+    if any(kw in info for kw in ("満枠", "満了", "出勤", "◯", "○")):
         return True
     return False
 
