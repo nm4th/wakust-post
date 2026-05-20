@@ -936,6 +936,7 @@ PLAYWRIGHT_PREFER_DOMAINS = {
     "liora2024",       # requests.getで接続タイムアウト
     "muchispa",        # muchispa-room.com (men-este系SaaS・Bot対策あり)
     "offsuit",         # offsuit.site (Bot対策で403)
+    "mirrorsspa",      # mirrorsspa.com (JSレンダリング必須)
 }
 
 def _has_work_info(info):
