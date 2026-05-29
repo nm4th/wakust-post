@@ -883,7 +883,10 @@ def _fetch_with_playwright(url):
         from playwright.sync_api import sync_playwright
         import time as _time
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 locale="ja-JP",
@@ -891,6 +894,13 @@ def _fetch_with_playwright(url):
                 java_script_enabled=True,
             )
             page = context.new_page()
+            # ヘッドレスブラウザ検出回避
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = {runtime: {}};
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['ja', 'en-US', 'en']});
+            """)
             # まずdomcontentloadedで高速ロード
             response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
             if response and response.status == 403:
@@ -904,7 +914,7 @@ def _fetch_with_playwright(url):
                 page.wait_for_load_state("networkidle", timeout=15000)
             # スケジュール要素が表示されるまで追加で待機
             try:
-                page.wait_for_selector(".sch-date, .sch-work, .sch-tbl, .weekSchedule, table, dl", timeout=5000)
+                page.wait_for_selector(".sch-date, .sch-work, .sch-tbl, .weekSchedule, .prof_table, table, dl", timeout=5000)
             except Exception:
                 pass  # タイムアウトでも続行
             js_html = page.content()
