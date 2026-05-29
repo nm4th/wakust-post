@@ -567,6 +567,17 @@ def _parse_post_list_page(soup):
                     else:
                         edited_at = dt_m.group(1)
 
+        # 公開ステータス
+        is_published = True
+        if tr:
+            status_sel = tr.find("select", class_=re.compile(r"select_post_st"))
+            if status_sel:
+                sel_opt = status_sel.find("option", selected=True)
+                if not sel_opt:
+                    sel_opt = status_sel.find("option", attrs={"selected": ""})
+                if sel_opt and sel_opt.get("value") != "0":
+                    is_published = False
+
         posts.append({
             "id":          post_id,
             "title":       title,
@@ -582,6 +593,7 @@ def _parse_post_list_page(soup):
             "posted_at":   posted_at,
             "edited_at":   edited_at,
             "is_reserved": is_reserved,
+            "is_published": is_published,
         })
     return posts
 
@@ -2944,11 +2956,16 @@ def run_update():
     if not session:
         return
 
-    posts = fetch_post_list(session)
-    if not posts:
+    all_posts = fetch_post_list(session)
+    if not all_posts:
         log.warning("⚠️  記事が見つかりませんでした")
         session.close()
         return
+
+    unpublished = [p for p in all_posts if not p.get("is_published", True)]
+    if unpublished:
+        log.info(f"⏭️  非公開/下書き記事をスキップ: {len(unpublished)}件 ({', '.join(p['id'] for p in unpublished)})")
+    posts = [p for p in all_posts if p.get("is_published", True)]
 
     # PV記録は記事情報収集後に実行（0時モードのみ）
 
@@ -2957,9 +2974,9 @@ def run_update():
     # 各記事の情報を並列収集（HTTP/Playwrightが並列で走る）
     post_infos = _collect_post_infos_parallel(session, posts, state, start_from_tomorrow=False)
 
-    # PVを記録＋比較レポート生成
-    log_pv(posts, post_infos=post_infos, state=state)
-    generate_pv_report(posts)
+    # PVを記録＋比較レポート生成（非公開含む全記事）
+    log_pv(all_posts, post_infos=post_infos, state=state)
+    generate_pv_report(all_posts)
 
     # 再投稿対象を決定
     # カテゴリーごとに上限まで: 明日出勤(販売数降順) → 明後日以降(販売数降順) で補充
@@ -3173,11 +3190,16 @@ def run_title_only():
     if not session:
         return
 
-    posts = fetch_post_list(session)
-    if not posts:
+    all_posts = fetch_post_list(session)
+    if not all_posts:
         log.warning("⚠️  記事が見つかりませんでした")
         session.close()
         return
+
+    unpublished = [p for p in all_posts if not p.get("is_published", True)]
+    if unpublished:
+        log.info(f"⏭️  非公開/下書き記事をスキップ: {len(unpublished)}件 ({', '.join(p['id'] for p in unpublished)})")
+    posts = [p for p in all_posts if p.get("is_published", True)]
 
     state = load_state()
 
