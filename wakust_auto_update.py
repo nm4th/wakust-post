@@ -152,7 +152,7 @@ POINT_MAX  = 1500  # 上限ポイント
 def calculate_sales_point(sales_count):
     """販売回数から販売ポイントを計算する。
 
-    販売0回: 1000、1-2回: 1100、3-4回: 1200、... 9回以上: 1500（上限）
+    販売0-1回: 1000、2-3回: 1100、4-5回: 1200、... 10回以上: 1500（上限）
     """
     try:
         sc = int(sales_count or 0)
@@ -160,8 +160,7 @@ def calculate_sales_point(sales_count):
         sc = 0
     if sc < 0:
         sc = 0
-    steps = (sc + POINT_SALES_PER_STEP - 1) // POINT_SALES_PER_STEP if sc > 0 else 0
-    return min(POINT_BASE + POINT_STEP * steps, POINT_MAX)
+    return min(POINT_BASE + POINT_STEP * (sc // POINT_SALES_PER_STEP), POINT_MAX)
 
 
 
