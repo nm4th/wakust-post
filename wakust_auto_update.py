@@ -959,6 +959,7 @@ PLAYWRIGHT_PREFER_DOMAINS = {
     "muchispa",        # muchispa-room.com (men-este系SaaS・Bot対策あり)
     "offsuit",         # offsuit.site (Bot対策で403)
     "mirrorsspa",      # mirrorsspa.com (JSレンダリング必須)
+    "resortlanikai",   # resortlanikai.com (403/JSレンダリング)
 }
 
 def _has_work_info(info):
