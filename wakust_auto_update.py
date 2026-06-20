@@ -142,17 +142,17 @@ for _sp_id, _sp in SUMMARY_POSTS.items():
         CATEGORY_CALENDAR_URL[_cat] = {"url": _cal_url, "label": _sp["area_label"]}
 
 # 販売ポイント（値段）の自動調整設定
-# 1000スタートで販売回数が1回増えるごとに100ポイント上げ、上限は2000
+# 1000スタートで販売回数が2回増えるごとに100ポイント上げ、上限は1500
 POINT_BASE = 1000  # 基準ポイント（販売0回時）
 POINT_STEP = 100   # 増加ポイント
-POINT_SALES_PER_STEP = 1  # 何回販売ごとに値上げするか
-POINT_MAX  = 2000  # 上限ポイント
+POINT_SALES_PER_STEP = 2  # 何回販売ごとに値上げするか
+POINT_MAX  = 1500  # 上限ポイント
 
 
 def calculate_sales_point(sales_count):
     """販売回数から販売ポイントを計算する。
 
-    販売0回: 1000、1回: 1100、2回: 1200、... 10回以上: 2000（上限）
+    販売0-1回: 1000、2-3回: 1100、4-5回: 1200、... 10回以上: 1500（上限）
     """
     try:
         sc = int(sales_count or 0)
@@ -567,6 +567,17 @@ def _parse_post_list_page(soup):
                     else:
                         edited_at = dt_m.group(1)
 
+        # 公開ステータス
+        is_published = True
+        if tr:
+            status_sel = tr.find("select", class_=re.compile(r"select_post_st"))
+            if status_sel:
+                sel_opt = status_sel.find("option", selected=True)
+                if not sel_opt:
+                    sel_opt = status_sel.find("option", attrs={"selected": ""})
+                if sel_opt and sel_opt.get("value") != "0":
+                    is_published = False
+
         posts.append({
             "id":          post_id,
             "title":       title,
@@ -582,6 +593,7 @@ def _parse_post_list_page(soup):
             "posted_at":   posted_at,
             "edited_at":   edited_at,
             "is_reserved": is_reserved,
+            "is_published": is_published,
         })
     return posts
 
@@ -883,7 +895,10 @@ def _fetch_with_playwright(url):
         from playwright.sync_api import sync_playwright
         import time as _time
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 locale="ja-JP",
@@ -891,6 +906,13 @@ def _fetch_with_playwright(url):
                 java_script_enabled=True,
             )
             page = context.new_page()
+            # ヘッドレスブラウザ検出回避
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = {runtime: {}};
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['ja', 'en-US', 'en']});
+            """)
             # まずdomcontentloadedで高速ロード
             response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
             if response and response.status == 403:
@@ -904,7 +926,7 @@ def _fetch_with_playwright(url):
                 page.wait_for_load_state("networkidle", timeout=15000)
             # スケジュール要素が表示されるまで追加で待機
             try:
-                page.wait_for_selector(".sch-date, .sch-work, .sch-tbl, .weekSchedule, table, dl", timeout=5000)
+                page.wait_for_selector(".sch-date, .sch-work, .sch-tbl, .weekSchedule, .prof_table, table, dl", timeout=5000)
             except Exception:
                 pass  # タイムアウトでも続行
             js_html = page.content()
@@ -2934,11 +2956,16 @@ def run_update():
     if not session:
         return
 
-    posts = fetch_post_list(session)
-    if not posts:
+    all_posts = fetch_post_list(session)
+    if not all_posts:
         log.warning("⚠️  記事が見つかりませんでした")
         session.close()
         return
+
+    unpublished = [p for p in all_posts if not p.get("is_published", True)]
+    if unpublished:
+        log.info(f"⏭️  非公開/下書き記事をスキップ: {len(unpublished)}件 ({', '.join(p['id'] for p in unpublished)})")
+    posts = [p for p in all_posts if p.get("is_published", True)]
 
     # PV記録は記事情報収集後に実行（0時モードのみ）
 
@@ -2947,9 +2974,9 @@ def run_update():
     # 各記事の情報を並列収集（HTTP/Playwrightが並列で走る）
     post_infos = _collect_post_infos_parallel(session, posts, state, start_from_tomorrow=False)
 
-    # PVを記録＋比較レポート生成
-    log_pv(posts, post_infos=post_infos, state=state)
-    generate_pv_report(posts)
+    # PVを記録＋比較レポート生成（非公開含む全記事）
+    log_pv(all_posts, post_infos=post_infos, state=state)
+    generate_pv_report(all_posts)
 
     # 再投稿対象を決定
     # カテゴリーごとに上限まで: 明日出勤(販売数降順) → 明後日以降(販売数降順) で補充
@@ -3163,11 +3190,16 @@ def run_title_only():
     if not session:
         return
 
-    posts = fetch_post_list(session)
-    if not posts:
+    all_posts = fetch_post_list(session)
+    if not all_posts:
         log.warning("⚠️  記事が見つかりませんでした")
         session.close()
         return
+
+    unpublished = [p for p in all_posts if not p.get("is_published", True)]
+    if unpublished:
+        log.info(f"⏭️  非公開/下書き記事をスキップ: {len(unpublished)}件 ({', '.join(p['id'] for p in unpublished)})")
+    posts = [p for p in all_posts if p.get("is_published", True)]
 
     state = load_state()
 
