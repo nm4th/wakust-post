@@ -108,6 +108,13 @@ POST_LIST_URL       = f"{BASE_URL}/mypage/?post_list"
 EDIT_FORM_ACTION    = f"{BASE_URL}/useredit/"
 SETPRICE_LIST_URL   = f"{BASE_URL}/mypage/?setprice"
 EDIT_SET_URL        = f"{BASE_URL}/wp-content/themes/wakust/user_edit/edit_set.php"
+SETLIST_URL_FMT     = f"{BASE_URL}/setlist/?set_id={{}}"
+USERPROFILE_URL     = f"{BASE_URL}/mypage/?userprofile"
+EDIT_PROFILE_URL    = f"{BASE_URL}/wp-content/themes/wakust/user_edit/edit_profile.php"
+# プロフィールのフリーリンク1〜5に対応するフィールド番号
+PROFILE_LINK_SLOTS  = [6, 7, 8, 11, 12]
+# フリーリンクに載せる本日出勤セットの地域（順序=表示順）
+PROFILE_LINK_AREAS  = ["東京都内", "新宿", "池袋", "神奈川", "埼玉"]
 REPOST_FIELD        = "repost"
 RELATED_BLOCK_START       = "<!-- related_posts_start -->"
 RELATED_BLOCK_END         = "<!-- related_posts_end -->"
@@ -162,16 +169,24 @@ CATEGORY_TO_SET_AREA = {
     "多摩":     "多摩",
 }
 SET_TAG_PRIORITY   = ["NN", "NS", "HR", "PZ"]  # 先勝ちで1記事1タグ
-SET_PRICE_RATIO    = 0.70   # 合計 × 70% = 30%引き
 SET_MIN_POSTS      = 2      # 最低記事数
+SET_MAX_OFF_PCT    = 45     # 割引上限(%)
 SET_POST_INTERVAL  = 0.5    # セット作成間隔(秒)
 
 
-def _calc_set_price(total_pt):
-    """合計pt × 70%（=30%引き）を100pt単位で切り上げ"""
+def _calc_set_price(total_pt, post_count):
+    """件数に応じた割引を適用して100pt単位で切り上げ
+
+    2件=25%, 3-4件=30%, 5-6件=35%, 7-8件=40%, 9件以上=45%引き（上限）
+    """
     if total_pt <= 0:
         return 0
-    return int(math.ceil(total_pt * SET_PRICE_RATIO / 100)) * 100
+    if post_count <= 2:
+        off_pct = 25
+    else:
+        off_pct = min(30 + 5 * ((post_count - 3) // 2), SET_MAX_OFF_PCT)
+    ratio = (100 - off_pct) / 100
+    return int(math.ceil(total_pt * ratio / 100)) * 100
 
 
 def calculate_sales_point(sales_count):
@@ -2665,8 +2680,8 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 # ============================================================
 # セット販売の再構築
 # ============================================================
-def fetch_set_list_ids(session):
-    """現在の全セットIDを取得"""
+def fetch_set_list_full(session):
+    """現在の全セットの [(set_id, title)] を返す"""
     try:
         res = session.get(SETPRICE_LIST_URL, timeout=30)
     except requests.RequestException as e:
@@ -2676,12 +2691,22 @@ def fetch_set_list_ids(session):
         log.warning(f"    ⚠️ セット一覧取得失敗 (HTTP {res.status_code})")
         return []
     soup = BeautifulSoup(res.text, "html.parser")
-    ids = []
-    for i_del in soup.find_all("i", class_=re.compile(r"delete_set")):
+    result = []
+    for tr in soup.find_all("tr"):
+        i_del = tr.find("i", class_=re.compile(r"delete_set"))
+        if not i_del:
+            continue
         sid = i_del.get("data-id")
+        a = tr.find("a", href=re.compile(r"setlist/\?set_id="))
+        title = a.get_text(strip=True) if a else ""
         if sid:
-            ids.append(sid)
-    return ids
+            result.append((sid, title))
+    return result
+
+
+def fetch_set_list_ids(session):
+    """現在の全セットIDを取得（後方互換用）"""
+    return [sid for sid, _ in fetch_set_list_full(session)]
 
 
 def delete_one_set(session, set_id):
@@ -2764,48 +2789,150 @@ def _organize_sets(post_infos):
         sales_count = post.get("sales_count") or 0
         unit_price  = calculate_sales_point(sales_count)
 
-        if info.get("is_today"):
+        is_today = bool(info.get("is_today"))
+        has_future = bool(info.get("next_date"))
+
+        # 出勤情報が全くない記事はセット化しない
+        if not is_today and not has_future:
+            continue
+
+        # A. 本日出勤×地域
+        if is_today:
             today_groups[area].append((pid, unit_price))
-            continue
-        # 本日出勤ではない → 明日以降に出勤日があるものだけ対象
-        if not info.get("next_date"):
-            continue
+
+        # B. 地域×プレイタグ（本日出勤も明日以降出勤も含む）
         tags = info.get("tags") or []
         matched = next((t for t in SET_TAG_PRIORITY if t in tags), None)
-        if not matched:
-            continue
-        tagged_groups[(area, matched)].append((pid, unit_price))
+        if matched:
+            tagged_groups[(area, matched)].append((pid, unit_price))
+
+    def _build(base_name, items):
+        total = sum(p for _, p in items)
+        price = _calc_set_price(total, len(items))
+        diff = total - price
+        name = f"{base_name} {total}pt→{price}pt({diff}pt引)"
+        return name, price, [pid for pid, _ in items]
 
     sets = []
-    # A. 本日出勤×地域
+    # A. 本日出勤×地域（先に作成）
     for area in sorted(today_groups.keys()):
         items = today_groups[area]
         if len(items) < SET_MIN_POSTS:
             continue
-        total = sum(p for _, p in items)
-        sets.append((
-            f"本日出勤{date_label}{area}セット",
-            _calc_set_price(total),
-            [pid for pid, _ in items],
-        ))
+        sets.append(_build(f"本日出勤{date_label}{area}セット", items))
 
     # B. 地域×プレイタグ
     for (area, tag) in sorted(tagged_groups.keys()):
         items = tagged_groups[(area, tag)]
         if len(items) < SET_MIN_POSTS:
             continue
-        total = sum(p for _, p in items)
-        sets.append((
-            f"{area}{tag}セット",
-            _calc_set_price(total),
-            [pid for pid, _ in items],
-        ))
+        sets.append(_build(f"{area}{tag}セット", items))
 
     return sets
 
 
+def fetch_profile_form(session):
+    """プロフィール編集フォームの現在値を取得"""
+    try:
+        res = session.get(USERPROFILE_URL, timeout=30)
+    except requests.RequestException as e:
+        log.warning(f"    ⚠️ プロフィール取得エラー: {e}")
+        return None
+    if res.status_code != 200:
+        log.warning(f"    ⚠️ プロフィール取得失敗 (HTTP {res.status_code})")
+        return None
+    soup = BeautifulSoup(res.text, "html.parser")
+    # フォーム特定: action属性で判定、なければu_p_textを含むフォームを探す
+    form = soup.find("form", action=lambda a: a and "edit_profile" in a)
+    if form is None:
+        text_area = soup.find("textarea", {"name": "u_p_text"})
+        if text_area:
+            form = text_area.find_parent("form")
+    if form is None:
+        log.warning(f"    ⚠️ プロフィールフォームが見つかりません")
+        return None
+    payload = {}
+    for el in form.find_all(["input", "textarea", "select"]):
+        name = el.get("name")
+        if not name:
+            continue
+        if el.name == "textarea":
+            payload[name] = el.get_text() or ""
+        elif el.name == "select":
+            sel_opt = el.find("option", selected=True)
+            payload[name] = (sel_opt.get("value") if sel_opt else "") or ""
+        else:
+            itype = (el.get("type") or "text").lower()
+            if itype in ("file", "submit", "button", "reset", "image"):
+                continue
+            if itype in ("checkbox", "radio") and not el.has_attr("checked"):
+                continue
+            payload[name] = el.get("value") or ""
+    return payload
+
+
+def update_profile_links(session, links):
+    """プロフィールのフリーリンク5枠を更新する。
+
+    links: [(text, url), ...] 最大5件。不足分は空でクリア。
+    """
+    payload = fetch_profile_form(session)
+    if payload is None:
+        return False
+    for i, slot in enumerate(PROFILE_LINK_SLOTS):
+        text = links[i][0] if i < len(links) else ""
+        url  = links[i][1] if i < len(links) else ""
+        payload[f"u_l_{slot}_1"] = text
+        payload[f"u_l_{slot}_2"] = url
+    # multipart/form-dataとして送信（値はutf-8のstrのままでOK）
+    files = [(k, (None, v)) for k, v in payload.items()]
+    for attempt in range(3):
+        try:
+            res = session.post(EDIT_PROFILE_URL, files=files, timeout=30,
+                               allow_redirects=False)
+            return res.status_code in (200, 302)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < 2:
+                time.sleep([2, 5][attempt])
+            else:
+                log.error(f"    ❌ プロフィール更新通信エラー: {e}")
+                return False
+
+
+def _update_profile_with_today_sets(session):
+    """本日出勤セットのURLをプロフィールのフリーリンクに設定"""
+    now = datetime.now(JST)
+    date_label = f"{now.month}/{now.day}"
+
+    set_list = fetch_set_list_full(session)
+    log.info(f"\n🔗 プロフィールフリーリンクを更新")
+    log.info(f"  📋 現在のセット総数: {len(set_list)}件")
+
+    links = []
+    for area in PROFILE_LINK_AREAS:
+        prefix = f"本日出勤{date_label}{area}セット"
+        matched = next(((sid, title) for sid, title in set_list
+                        if title.startswith(prefix)), None)
+        if matched:
+            sid, title = matched
+            # "本日出勤7/20新宿セット 3900pt→2800pt(1100pt引)"
+            #  → "本日出勤7/20新宿セット(1100pt引)"
+            link_name = re.sub(r"\s*\d+pt→\d+pt\((\d+pt引)\)\s*$",
+                               r"(\1)", title)
+            url = SETLIST_URL_FMT.format(sid)
+            links.append((link_name, url))
+            log.info(f"  ✅ {area}: {link_name} → {url}")
+        else:
+            log.info(f"  ⏭️  {area}: 本日出勤セットなし（空欄化）")
+
+    if update_profile_links(session, links):
+        log.info(f"  ✅ プロフィール更新完了 ({len(links)}件のリンク設定)")
+    else:
+        log.warning(f"  ⚠️ プロフィール更新失敗")
+
+
 def run_organize_sets(session, post_infos):
-    """既存セット全削除→新規セット組成"""
+    """既存セット全削除→新規セット組成→プロフィールフリーリンク更新"""
     log.info(f"\n{'='*55}")
     log.info(f"📦 セット販売の再構築 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
@@ -2817,19 +2944,23 @@ def run_organize_sets(session, post_infos):
     for name, price, pids in sets:
         log.info(f"  - {name} ({price}pt, {len(pids)}件)")
 
-    if not sets:
-        return
+    if sets:
+        log.info(f"\n🚀 セット作成開始")
+        ok = 0
+        for name, price, pids in sets:
+            if create_one_set(session, name, price, pids):
+                log.info(f"  ✅ 作成: {name}  {price}pt  記事{len(pids)}件")
+                ok += 1
+            else:
+                log.warning(f"  ❌ 作成失敗: {name}")
+            time.sleep(SET_POST_INTERVAL)
+        log.info(f"\n📊 セット組成完了: {ok}/{len(sets)}件")
 
-    log.info(f"\n🚀 セット作成開始")
-    ok = 0
-    for name, price, pids in sets:
-        if create_one_set(session, name, price, pids):
-            log.info(f"  ✅ 作成: {name}  {price}pt  記事{len(pids)}件")
-            ok += 1
-        else:
-            log.warning(f"  ❌ 作成失敗: {name}")
-        time.sleep(SET_POST_INTERVAL)
-    log.info(f"\n📊 セット組成完了: {ok}/{len(sets)}件")
+    # 本日出勤セットのURLをプロフィールに反映
+    try:
+        _update_profile_with_today_sets(session)
+    except Exception as e:
+        log.error(f"❌ プロフィールリンク更新エラー: {e}", exc_info=True)
 
 
 # ============================================================
