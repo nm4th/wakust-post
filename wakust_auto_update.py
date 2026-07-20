@@ -2797,19 +2797,22 @@ def _organize_sets(post_infos):
         return name, price, [pid for pid, _ in items]
 
     sets = []
-    # A. 本日出勤×地域
-    for area in sorted(today_groups.keys()):
-        items = today_groups[area]
-        if len(items) < SET_MIN_POSTS:
-            continue
-        sets.append(_build(f"本日出勤{date_label}{area}セット", items))
+    # 一覧では新しく作成したセットが上に表示されるため、
+    # 本日出勤セットを上位に出すには「タグセット → 本日出勤セット」の順に作成する。
 
-    # B. 地域×プレイタグ
+    # B. 地域×プレイタグ（先に作成 → 一覧では下側）
     for (area, tag) in sorted(tagged_groups.keys()):
         items = tagged_groups[(area, tag)]
         if len(items) < SET_MIN_POSTS:
             continue
         sets.append(_build(f"{area}{tag}セット", items))
+
+    # A. 本日出勤×地域（あとに作成 → 一覧では上側）
+    for area in sorted(today_groups.keys()):
+        items = today_groups[area]
+        if len(items) < SET_MIN_POSTS:
+            continue
+        sets.append(_build(f"本日出勤{date_label}{area}セット", items))
 
     return sets
 
