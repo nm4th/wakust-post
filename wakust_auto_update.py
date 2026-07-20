@@ -2784,30 +2784,27 @@ def _organize_sets(post_infos):
             continue
         tagged_groups[(area, matched)].append((pid, unit_price))
 
+    def _build(base_name, items):
+        total = sum(p for _, p in items)
+        price = _calc_set_price(total, len(items))
+        off_pct = int(round((1 - price / total) * 100)) if total > 0 else 0
+        name = f"{base_name} {total}pt→{price}pt({off_pct}%引)"
+        return name, price, [pid for pid, _ in items]
+
     sets = []
     # A. 本日出勤×地域
     for area in sorted(today_groups.keys()):
         items = today_groups[area]
         if len(items) < SET_MIN_POSTS:
             continue
-        total = sum(p for _, p in items)
-        sets.append((
-            f"本日出勤{date_label}{area}セット",
-            _calc_set_price(total, len(items)),
-            [pid for pid, _ in items],
-        ))
+        sets.append(_build(f"本日出勤{date_label}{area}セット", items))
 
     # B. 地域×プレイタグ
     for (area, tag) in sorted(tagged_groups.keys()):
         items = tagged_groups[(area, tag)]
         if len(items) < SET_MIN_POSTS:
             continue
-        total = sum(p for _, p in items)
-        sets.append((
-            f"{area}{tag}セット",
-            _calc_set_price(total, len(items)),
-            [pid for pid, _ in items],
-        ))
+        sets.append(_build(f"{area}{tag}セット", items))
 
     return sets
 
