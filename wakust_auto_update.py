@@ -2772,23 +2772,28 @@ def _organize_sets(post_infos):
         sales_count = post.get("sales_count") or 0
         unit_price  = calculate_sales_point(sales_count)
 
-        if info.get("is_today"):
+        is_today = bool(info.get("is_today"))
+        has_future = bool(info.get("next_date"))
+
+        # 出勤情報が全くない記事はセット化しない
+        if not is_today and not has_future:
+            continue
+
+        # A. 本日出勤×地域
+        if is_today:
             today_groups[area].append((pid, unit_price))
-            continue
-        # 本日出勤ではない → 明日以降に出勤日があるものだけ対象
-        if not info.get("next_date"):
-            continue
+
+        # B. 地域×プレイタグ（本日出勤も明日以降出勤も含む）
         tags = info.get("tags") or []
         matched = next((t for t in SET_TAG_PRIORITY if t in tags), None)
-        if not matched:
-            continue
-        tagged_groups[(area, matched)].append((pid, unit_price))
+        if matched:
+            tagged_groups[(area, matched)].append((pid, unit_price))
 
     def _build(base_name, items):
         total = sum(p for _, p in items)
         price = _calc_set_price(total, len(items))
-        off_pct = int(round((1 - price / total) * 100)) if total > 0 else 0
-        name = f"{base_name} {total}pt→{price}pt({off_pct}%引)"
+        diff = total - price
+        name = f"{base_name} {total}pt→{price}pt({diff}pt引)"
         return name, price, [pid for pid, _ in items]
 
     sets = []
