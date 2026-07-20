@@ -2915,9 +2915,13 @@ def _update_profile_with_today_sets(session):
                         if title.startswith(prefix)), None)
         if matched:
             sid, title = matched
+            # "本日出勤7/20新宿セット 3900pt→2800pt(1100pt引)"
+            #  → "本日出勤7/20新宿セット(1100pt引)"
+            link_name = re.sub(r"\s*\d+pt→\d+pt\((\d+pt引)\)\s*$",
+                               r"(\1)", title)
             url = SETLIST_URL_FMT.format(sid)
-            links.append((title, url))
-            log.info(f"  ✅ {area}: {title} → {url}")
+            links.append((link_name, url))
+            log.info(f"  ✅ {area}: {link_name} → {url}")
         else:
             log.info(f"  ⏭️  {area}: 本日出勤セットなし（空欄化）")
 
