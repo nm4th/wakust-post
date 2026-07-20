@@ -163,18 +163,21 @@ CATEGORY_TO_SET_AREA = {
 }
 SET_TAG_PRIORITY   = ["NN", "NS", "HR", "PZ"]  # 先勝ちで1記事1タグ
 SET_MIN_POSTS      = 2      # 最低記事数
-SET_MAX_OFF_PCT    = 50     # 割引上限(%)
+SET_MAX_OFF_PCT    = 45     # 割引上限(%)
 SET_POST_INTERVAL  = 0.5    # セット作成間隔(秒)
 
 
 def _calc_set_price(total_pt, post_count):
     """件数に応じた割引を適用して100pt単位で切り上げ
 
-    2件=25%, 3件=30%, 4件=35%, 5件=40%, 6件=45%, 7件以上=50%引き（上限）
+    2件=25%, 3-4件=30%, 5-6件=35%, 7-8件=40%, 9件以上=45%引き（上限）
     """
     if total_pt <= 0:
         return 0
-    off_pct = min(25 + 5 * max(post_count - 2, 0), SET_MAX_OFF_PCT)
+    if post_count <= 2:
+        off_pct = 25
+    else:
+        off_pct = min(30 + 5 * ((post_count - 3) // 2), SET_MAX_OFF_PCT)
     ratio = (100 - off_pct) / 100
     return int(math.ceil(total_pt * ratio / 100)) * 100
 
