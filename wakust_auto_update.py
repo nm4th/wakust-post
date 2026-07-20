@@ -162,16 +162,16 @@ CATEGORY_TO_SET_AREA = {
     "多摩":     "多摩",
 }
 SET_TAG_PRIORITY   = ["NN", "NS", "HR", "PZ"]  # 先勝ちで1記事1タグ
-SET_DISCOUNT_RATE  = 0.30   # 合計 × 30% = 70%引き
+SET_PRICE_RATIO    = 0.70   # 合計 × 70% = 30%引き
 SET_MIN_POSTS      = 2      # 最低記事数
 SET_POST_INTERVAL  = 0.5    # セット作成間隔(秒)
 
 
 def _calc_set_price(total_pt):
-    """合計pt × 30%（=70%引き）を100pt単位で切り上げ"""
+    """合計pt × 70%（=30%引き）を100pt単位で切り上げ"""
     if total_pt <= 0:
         return 0
-    return int(math.ceil(total_pt * SET_DISCOUNT_RATE / 100)) * 100
+    return int(math.ceil(total_pt * SET_PRICE_RATIO / 100)) * 100
 
 
 def calculate_sales_point(sales_count):
