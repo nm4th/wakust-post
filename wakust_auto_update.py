@@ -28,6 +28,7 @@ import sys
 import csv
 import html as html_module
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from urllib.parse import urlparse, parse_qs, unquote
@@ -105,6 +106,8 @@ BASE_URL            = "https://wakust.com"
 LOGIN_AJAX_URL      = "https://wakust.com/wp-content/themes/wakust/user_edit/login_mypage.php"
 POST_LIST_URL       = f"{BASE_URL}/mypage/?post_list"
 EDIT_FORM_ACTION    = f"{BASE_URL}/useredit/"
+SETPRICE_LIST_URL   = f"{BASE_URL}/mypage/?setprice"
+EDIT_SET_URL        = f"{BASE_URL}/wp-content/themes/wakust/user_edit/edit_set.php"
 REPOST_FIELD        = "repost"
 RELATED_BLOCK_START       = "<!-- related_posts_start -->"
 RELATED_BLOCK_END         = "<!-- related_posts_end -->"
@@ -147,6 +150,28 @@ POINT_BASE = 1000  # 基準ポイント（販売0回時）
 POINT_STEP = 100   # 増加ポイント
 POINT_SALES_PER_STEP = 2  # 何回販売ごとに値上げするか
 POINT_MAX  = 1500  # 上限ポイント
+
+# セット販売の構成ルール
+CATEGORY_TO_SET_AREA = {
+    "東京都":   "東京都内",
+    "新宿":     "新宿",
+    "池袋":     "池袋",
+    "神奈川県": "神奈川",
+    "千葉県":   "千葉",
+    "埼玉県":   "埼玉",
+    "多摩":     "多摩",
+}
+SET_TAG_PRIORITY   = ["NN", "NS", "HR", "PZ"]  # 先勝ちで1記事1タグ
+SET_PRICE_RATIO    = 0.70   # 合計 × 70% = 30%引き
+SET_MIN_POSTS      = 2      # 最低記事数
+SET_POST_INTERVAL  = 0.5    # セット作成間隔(秒)
+
+
+def _calc_set_price(total_pt):
+    """合計pt × 70%（=30%引き）を100pt単位で切り上げ"""
+    if total_pt <= 0:
+        return 0
+    return int(math.ceil(total_pt * SET_PRICE_RATIO / 100)) * 100
 
 
 def calculate_sales_point(sales_count):
@@ -2638,6 +2663,176 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 
 
 # ============================================================
+# セット販売の再構築
+# ============================================================
+def fetch_set_list_ids(session):
+    """現在の全セットIDを取得"""
+    try:
+        res = session.get(SETPRICE_LIST_URL, timeout=30)
+    except requests.RequestException as e:
+        log.warning(f"    ⚠️ セット一覧取得エラー: {e}")
+        return []
+    if res.status_code != 200:
+        log.warning(f"    ⚠️ セット一覧取得失敗 (HTTP {res.status_code})")
+        return []
+    soup = BeautifulSoup(res.text, "html.parser")
+    ids = []
+    for i_del in soup.find_all("i", class_=re.compile(r"delete_set")):
+        sid = i_del.get("data-id")
+        if sid:
+            ids.append(sid)
+    return ids
+
+
+def delete_one_set(session, set_id):
+    """指定IDのセットを削除する（3回リトライ）"""
+    headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": SETPRICE_LIST_URL,
+        "Origin": BASE_URL,
+    }
+    for attempt in range(3):
+        try:
+            res = session.post(EDIT_SET_URL, data={"delete_set_id": str(set_id)},
+                               headers=headers, timeout=30)
+            return res.status_code == 200
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < 2:
+                time.sleep([2, 5][attempt])
+            else:
+                log.error(f"    ❌ セット削除通信エラー [id={set_id}]: {e}")
+                return False
+
+
+def delete_all_sets(session):
+    """既存の全セットを削除する"""
+    ids = fetch_set_list_ids(session)
+    log.info(f"🗑️  既存セット削除: {len(ids)}件")
+    ok = 0
+    for sid in ids:
+        if delete_one_set(session, sid):
+            log.info(f"  ✅ 削除 [{sid}]")
+            ok += 1
+        else:
+            log.warning(f"  ❌ 削除失敗 [{sid}]")
+        time.sleep(SET_POST_INTERVAL)
+    log.info(f"  📊 削除完了: {ok}/{len(ids)}件")
+
+
+def create_one_set(session, name, price, post_ids):
+    """1件のセットを作成する（3回リトライ）"""
+    headers = {
+        "Referer": f"{SETPRICE_LIST_URL}&newitem",
+        "Origin": BASE_URL,
+    }
+    data = [("s_n_1", name), ("post_price", str(price))]
+    for pid in post_ids:
+        data.append(("inpost_ck[]", str(pid)))
+    for pid in post_ids:
+        data.append(("add_setpost[]", str(pid)))
+    data.append(("post_price_aff", "0"))
+    data.append(("add_setprice", "true"))
+    for attempt in range(3):
+        try:
+            res = session.post(EDIT_SET_URL, data=data, headers=headers,
+                               timeout=30, allow_redirects=False)
+            return res.status_code in (200, 302)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < 2:
+                time.sleep([2, 5][attempt])
+            else:
+                log.error(f"    ❌ セット作成通信エラー [{name}]: {e}")
+                return False
+
+
+def _organize_sets(post_infos):
+    """post_infosを分類して (name, price, [post_ids]) のリストを返す"""
+    now = datetime.now(JST)
+    date_label = f"{now.month}/{now.day}"
+
+    today_groups   = defaultdict(list)   # area -> [(pid, unit_price)]
+    tagged_groups  = defaultdict(list)   # (area, tag) -> [(pid, unit_price)]
+
+    for info in post_infos:
+        post = info["post"]
+        pid = post["id"]
+        if pid in SUMMARY_POST_IDS:
+            continue
+        area = CATEGORY_TO_SET_AREA.get(post.get("category"))
+        if not area:
+            continue
+        sales_count = post.get("sales_count") or 0
+        unit_price  = calculate_sales_point(sales_count)
+
+        if info.get("is_today"):
+            today_groups[area].append((pid, unit_price))
+            continue
+        # 本日出勤ではない → 明日以降に出勤日があるものだけ対象
+        if not info.get("next_date"):
+            continue
+        tags = info.get("tags") or []
+        matched = next((t for t in SET_TAG_PRIORITY if t in tags), None)
+        if not matched:
+            continue
+        tagged_groups[(area, matched)].append((pid, unit_price))
+
+    sets = []
+    # A. 本日出勤×地域
+    for area in sorted(today_groups.keys()):
+        items = today_groups[area]
+        if len(items) < SET_MIN_POSTS:
+            continue
+        total = sum(p for _, p in items)
+        sets.append((
+            f"本日出勤{date_label}{area}セット",
+            _calc_set_price(total),
+            [pid for pid, _ in items],
+        ))
+
+    # B. 地域×プレイタグ
+    for (area, tag) in sorted(tagged_groups.keys()):
+        items = tagged_groups[(area, tag)]
+        if len(items) < SET_MIN_POSTS:
+            continue
+        total = sum(p for _, p in items)
+        sets.append((
+            f"{area}{tag}セット",
+            _calc_set_price(total),
+            [pid for pid, _ in items],
+        ))
+
+    return sets
+
+
+def run_organize_sets(session, post_infos):
+    """既存セット全削除→新規セット組成"""
+    log.info(f"\n{'='*55}")
+    log.info(f"📦 セット販売の再構築 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    delete_all_sets(session)
+
+    sets = _organize_sets(post_infos)
+    log.info(f"\n📝 作成予定セット: {len(sets)}件")
+    for name, price, pids in sets:
+        log.info(f"  - {name} ({price}pt, {len(pids)}件)")
+
+    if not sets:
+        return
+
+    log.info(f"\n🚀 セット作成開始")
+    ok = 0
+    for name, price, pids in sets:
+        if create_one_set(session, name, price, pids):
+            log.info(f"  ✅ 作成: {name}  {price}pt  記事{len(pids)}件")
+            ok += 1
+        else:
+            log.warning(f"  ❌ 作成失敗: {name}")
+        time.sleep(SET_POST_INTERVAL)
+    log.info(f"\n📊 セット組成完了: {ok}/{len(sets)}件")
+
+
+# ============================================================
 # カレンダーのみ更新モード
 # ============================================================
 def run_calendar_only():
@@ -3171,6 +3366,12 @@ def run_update():
             save_state(state)
 
         time.sleep(1)
+
+    # 記事更新完了後にセット販売を再構築
+    try:
+        run_organize_sets(session, post_infos)
+    except Exception as e:
+        log.error(f"❌ セット再構築でエラー: {e}", exc_info=True)
 
     session.close()
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
