@@ -162,16 +162,21 @@ CATEGORY_TO_SET_AREA = {
     "多摩":     "多摩",
 }
 SET_TAG_PRIORITY   = ["NN", "NS", "HR", "PZ"]  # 先勝ちで1記事1タグ
-SET_PRICE_RATIO    = 0.70   # 合計 × 70% = 30%引き
 SET_MIN_POSTS      = 2      # 最低記事数
+SET_MAX_OFF_PCT    = 50     # 割引上限(%)
 SET_POST_INTERVAL  = 0.5    # セット作成間隔(秒)
 
 
-def _calc_set_price(total_pt):
-    """合計pt × 70%（=30%引き）を100pt単位で切り上げ"""
+def _calc_set_price(total_pt, post_count):
+    """件数に応じた割引を適用して100pt単位で切り上げ
+
+    2件=25%, 3件=30%, 4件=35%, 5件=40%, 6件=45%, 7件以上=50%引き（上限）
+    """
     if total_pt <= 0:
         return 0
-    return int(math.ceil(total_pt * SET_PRICE_RATIO / 100)) * 100
+    off_pct = min(25 + 5 * max(post_count - 2, 0), SET_MAX_OFF_PCT)
+    ratio = (100 - off_pct) / 100
+    return int(math.ceil(total_pt * ratio / 100)) * 100
 
 
 def calculate_sales_point(sales_count):
@@ -2785,7 +2790,7 @@ def _organize_sets(post_infos):
         total = sum(p for _, p in items)
         sets.append((
             f"本日出勤{date_label}{area}セット",
-            _calc_set_price(total),
+            _calc_set_price(total, len(items)),
             [pid for pid, _ in items],
         ))
 
@@ -2797,7 +2802,7 @@ def _organize_sets(post_infos):
         total = sum(p for _, p in items)
         sets.append((
             f"{area}{tag}セット",
-            _calc_set_price(total),
+            _calc_set_price(total, len(items)),
             [pid for pid, _ in items],
         ))
 
