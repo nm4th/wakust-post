@@ -514,28 +514,51 @@ def _to_multipart(payload):
 # ログイン
 # ============================================================
 def login_wakust():
-    max_retries = 3
+    max_retries = 5
+    # 30秒 → 60秒 → 120秒 → 300秒 → 600秒 (最大約17分粘る)
+    wait_intervals = [30, 60, 120, 300, 600]
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+    browser_headers = {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
     for attempt in range(1, max_retries + 1):
         session = requests.Session()
-        session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        session.headers.update(browser_headers)
 
         try:
+            # トップページを先にGETしてCookie(PHPSESSID等)を確立
+            # Bot判定回避のため
+            try:
+                warm = session.get(f"{BASE_URL}/", timeout=15)
+                log.info(f"    🔧 ウォームアップGET: HTTP {warm.status_code}")
+            except requests.RequestException as e:
+                log.info(f"    🔧 ウォームアップGET失敗（続行）: {e}")
+
             res = session.post(LOGIN_AJAX_URL, files={
                 "login_email":    (None, WAKUST_EMAIL),
                 "login_password": (None, WAKUST_PASSWORD),
-            })
+            }, headers={"Referer": f"{BASE_URL}/mypage/", "Origin": BASE_URL},
+               timeout=30)
 
             if res.status_code == 200 and "loginok" in res.text:
                 log.info("✅ ログイン成功")
                 return session
 
-            log.warning(f"⚠️ ログイン失敗 (試行 {attempt}/{max_retries}): {res.text[:100]}")
+            snippet = res.text[:500].replace("\n", " ")
+            log.warning(f"⚠️ ログイン失敗 (試行 {attempt}/{max_retries}): "
+                        f"HTTP {res.status_code} body先頭500字: {snippet}")
         except requests.RequestException as e:
             log.warning(f"⚠️ ログインリクエスト例外 (試行 {attempt}/{max_retries}): {e}")
 
         session.close()
         if attempt < max_retries:
-            wait = 2 * attempt
+            wait = wait_intervals[attempt - 1]
             log.info(f"🔄 {wait}秒後にリトライします...")
             time.sleep(wait)
 
@@ -3006,7 +3029,8 @@ def run_calendar_only():
 
     session = login_wakust()
     if not session:
-        return
+        log.error("❌ ログイン失敗のため処理を中断します（GitHub Actionsで失敗扱い）")
+        sys.exit(1)
 
     posts = fetch_post_list(session)
     if not posts:
@@ -3313,7 +3337,8 @@ def run_update():
 
     session = login_wakust()
     if not session:
-        return
+        log.error("❌ ログイン失敗のため処理を中断します（GitHub Actionsで失敗扱い）")
+        sys.exit(1)
 
     all_posts = fetch_post_list(session)
     if not all_posts:
@@ -3553,7 +3578,8 @@ def run_title_only():
 
     session = login_wakust()
     if not session:
-        return
+        log.error("❌ ログイン失敗のため処理を中断します（GitHub Actionsで失敗扱い）")
+        sys.exit(1)
 
     all_posts = fetch_post_list(session)
     if not all_posts:
