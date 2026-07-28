@@ -514,28 +514,51 @@ def _to_multipart(payload):
 # ログイン
 # ============================================================
 def login_wakust():
-    max_retries = 3
+    max_retries = 5
+    # 30秒 → 60秒 → 120秒 → 300秒 → 600秒 (最大約17分粘る)
+    wait_intervals = [30, 60, 120, 300, 600]
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+    browser_headers = {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
     for attempt in range(1, max_retries + 1):
         session = requests.Session()
-        session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        session.headers.update(browser_headers)
 
         try:
+            # トップページを先にGETしてCookie(PHPSESSID等)を確立
+            # Bot判定回避のため
+            try:
+                warm = session.get(f"{BASE_URL}/", timeout=15)
+                log.info(f"    🔧 ウォームアップGET: HTTP {warm.status_code}")
+            except requests.RequestException as e:
+                log.info(f"    🔧 ウォームアップGET失敗（続行）: {e}")
+
             res = session.post(LOGIN_AJAX_URL, files={
                 "login_email":    (None, WAKUST_EMAIL),
                 "login_password": (None, WAKUST_PASSWORD),
-            })
+            }, headers={"Referer": f"{BASE_URL}/mypage/", "Origin": BASE_URL},
+               timeout=30)
 
             if res.status_code == 200 and "loginok" in res.text:
                 log.info("✅ ログイン成功")
                 return session
 
-            log.warning(f"⚠️ ログイン失敗 (試行 {attempt}/{max_retries}): {res.text[:100]}")
+            snippet = res.text[:500].replace("\n", " ")
+            log.warning(f"⚠️ ログイン失敗 (試行 {attempt}/{max_retries}): "
+                        f"HTTP {res.status_code} body先頭500字: {snippet}")
         except requests.RequestException as e:
             log.warning(f"⚠️ ログインリクエスト例外 (試行 {attempt}/{max_retries}): {e}")
 
         session.close()
         if attempt < max_retries:
-            wait = 2 * attempt
+            wait = wait_intervals[attempt - 1]
             log.info(f"🔄 {wait}秒後にリトライします...")
             time.sleep(wait)
 
@@ -2778,13 +2801,22 @@ def _organize_sets(post_infos):
     today_groups   = defaultdict(list)   # area -> [(pid, unit_price)]
     tagged_groups  = defaultdict(list)   # (area, tag) -> [(pid, unit_price)]
 
+    # 除外理由の集計（診断用）
+    excluded = defaultdict(list)  # reason -> [(pid, title, extra)]
+    in_any = set()  # A or Bグループに入ったpid
+
     for info in post_infos:
         post = info["post"]
         pid = post["id"]
+        title = post.get("title", "")[:40]
+        cat = post.get("category")
+
         if pid in SUMMARY_POST_IDS:
+            excluded["summary"].append((pid, title, cat))
             continue
-        area = CATEGORY_TO_SET_AREA.get(post.get("category"))
+        area = CATEGORY_TO_SET_AREA.get(cat)
         if not area:
+            excluded["カテゴリ対象外"].append((pid, title, cat))
             continue
         sales_count = post.get("sales_count") or 0
         unit_price  = calculate_sales_point(sales_count)
@@ -2792,19 +2824,34 @@ def _organize_sets(post_infos):
         is_today = bool(info.get("is_today"))
         has_future = bool(info.get("next_date"))
 
-        # 出勤情報が全くない記事はセット化しない
         if not is_today and not has_future:
+            excluded["出勤情報なし"].append((pid, title, cat))
             continue
 
         # A. 本日出勤×地域
         if is_today:
             today_groups[area].append((pid, unit_price))
+            in_any.add(pid)
 
-        # B. 地域×プレイタグ（本日出勤も明日以降出勤も含む）
+        # B. 地域×プレイタグ
         tags = info.get("tags") or []
         matched = next((t for t in SET_TAG_PRIORITY if t in tags), None)
         if matched:
             tagged_groups[(area, matched)].append((pid, unit_price))
+            in_any.add(pid)
+        else:
+            if not is_today:
+                excluded[f"タグなし(地域={area})"].append((pid, title, tags))
+
+    # 除外理由サマリをログ
+    if excluded:
+        log.info(f"\n📋 セット組成: 除外理由サマリ")
+        for reason, items in sorted(excluded.items()):
+            log.info(f"  • {reason}: {len(items)}件")
+            for pid, title, extra in items[:10]:
+                log.info(f"      [{pid}] {title}  ({extra})")
+            if len(items) > 10:
+                log.info(f"      ... 他 {len(items)-10}件")
 
     def _build(base_name, items):
         total = sum(p for _, p in items)
@@ -2814,10 +2861,12 @@ def _organize_sets(post_infos):
         return name, price, [pid for pid, _ in items]
 
     sets = []
+    dropped_small = []
     # A. 本日出勤×地域（先に作成）
     for area in sorted(today_groups.keys()):
         items = today_groups[area]
         if len(items) < SET_MIN_POSTS:
+            dropped_small.append((f"本日出勤{area}", [pid for pid, _ in items]))
             continue
         sets.append(_build(f"本日出勤{date_label}{area}セット", items))
 
@@ -2825,8 +2874,14 @@ def _organize_sets(post_infos):
     for (area, tag) in sorted(tagged_groups.keys()):
         items = tagged_groups[(area, tag)]
         if len(items) < SET_MIN_POSTS:
+            dropped_small.append((f"{area}{tag}", [pid for pid, _ in items]))
             continue
         sets.append(_build(f"{area}{tag}セット", items))
+
+    if dropped_small:
+        log.info(f"\n📋 セット組成: 2件未満で見送ったグループ")
+        for label, pids in dropped_small:
+            log.info(f"  • {label}: {len(pids)}件  記事ID={pids}")
 
     return sets
 
@@ -2974,7 +3029,8 @@ def run_calendar_only():
 
     session = login_wakust()
     if not session:
-        return
+        log.error("❌ ログイン失敗のため処理を中断します（GitHub Actionsで失敗扱い）")
+        sys.exit(1)
 
     posts = fetch_post_list(session)
     if not posts:
@@ -3281,7 +3337,8 @@ def run_update():
 
     session = login_wakust()
     if not session:
-        return
+        log.error("❌ ログイン失敗のため処理を中断します（GitHub Actionsで失敗扱い）")
+        sys.exit(1)
 
     all_posts = fetch_post_list(session)
     if not all_posts:
@@ -3521,7 +3578,8 @@ def run_title_only():
 
     session = login_wakust()
     if not session:
-        return
+        log.error("❌ ログイン失敗のため処理を中断します（GitHub Actionsで失敗扱い）")
+        sys.exit(1)
 
     all_posts = fetch_post_list(session)
     if not all_posts:
