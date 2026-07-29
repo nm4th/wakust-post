@@ -513,6 +513,116 @@ def _to_multipart(payload):
 # ============================================================
 # ログイン
 # ============================================================
+def _warm_cookies_via_playwright():
+    """Playwrightで実ブラウザとしてアクセスし、年齢認証やチャレンジを通過して
+    Cookieを取得する。戻り値: [{'name':..,'value':..,'domain':..}, ...] or None
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        import time as _time
+        log.info("    🔧 Playwrightで年齢認証/チャレンジ通過を試行中...")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            context = browser.new_context(
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/131.0.0.0 Safari/537.36"),
+                locale="ja-JP",
+                timezone_id="Asia/Tokyo",
+            )
+            page = context.new_page()
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = {runtime: {}};
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['ja', 'en-US', 'en']});
+            """)
+            # トップページにアクセス
+            page.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=60000)
+            _time.sleep(2)
+
+            # ページ状態を判定
+            content = page.content()
+            AGE_CLICK_CANDIDATES = [
+                'text="はい"',
+                'text="18歳以上"',
+                'text="同意する"',
+                'text="同意"',
+                'text="Enter"',
+                'text="入場"',
+                'a:has-text("はい")',
+                'button:has-text("はい")',
+                'a:has-text("18歳以上")',
+                'button:has-text("18歳以上")',
+                'a[href*="age"]',
+                '.age-yes, #age_ok, .age_ok, #age-yes',
+            ]
+
+            def _find_age_button():
+                for sel in AGE_CLICK_CANDIDATES:
+                    try:
+                        el = page.locator(sel).first
+                        if el.count() > 0 and el.is_visible(timeout=500):
+                            return sel, el
+                    except Exception:
+                        continue
+                return None, None
+
+            age_sel, age_el = _find_age_button()
+            is_challenge = ("少々お待ち" in content
+                            or "window.location.reload" in content)
+
+            if age_sel:
+                # 【ケースA】年齢認証画面 → ボタンクリック
+                log.info(f"    🔧 年齢認証画面を検出 → クリック: {age_sel}")
+                try:
+                    age_el.click(timeout=5000)
+                    _time.sleep(3)
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception as e:
+                    log.warning(f"    ⚠️ 年齢認証クリック後の待機失敗: {e}")
+            elif is_challenge:
+                # 【ケースB】少々お待ちください等のチャレンジ → reload待機
+                log.info("    🔧 チャレンジページを検出 → 自動reload待機")
+                _time.sleep(8)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
+                # まだチャレンジならもう一度
+                if "少々お待ち" in page.content():
+                    log.info("    🔧 チャレンジ継続中 → 追加reload+待機")
+                    _time.sleep(10)
+                    try:
+                        page.reload(wait_until="networkidle", timeout=30000)
+                    except Exception:
+                        pass
+                # reload後に年齢認証が出てくることもあるので再チェック
+                age_sel2, age_el2 = _find_age_button()
+                if age_sel2:
+                    log.info(f"    🔧 reload後に年齢認証を検出 → クリック: {age_sel2}")
+                    try:
+                        age_el2.click(timeout=5000)
+                        _time.sleep(3)
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                    except Exception:
+                        pass
+            else:
+                # 【ケースC】通常ページ（既に認証済み等） → 即Cookie取得
+                log.info("    🔧 通常ページ検出（年齢認証/チャレンジなし）")
+
+            cookies = context.cookies()
+            log.info(f"    🔧 Playwright取得Cookie: {[c['name'] for c in cookies]}")
+            browser.close()
+        return cookies
+    except Exception as e:
+        log.warning(f"    ⚠️ Playwrightチャレンジ通過失敗: {e}")
+        return None
+
+
 def login_wakust():
     max_retries = 5
     # 30秒 → 60秒 → 120秒 → 300秒 → 600秒 (最大約17分粘る)
@@ -528,11 +638,31 @@ def login_wakust():
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     }
+    def _is_challenge_page(text):
+        """「少々お待ちください」等のチャレンジページか判定"""
+        return ("少々お待ち" in text or "spinner" in text.lower()
+                or "window.location.reload" in text)
+
+    warmed_cookies = None  # Playwrightで取得したCookieをキャッシュ
+
     for attempt in range(1, max_retries + 1):
         session = requests.Session()
         session.headers.update(browser_headers)
         # 年齢認証済み扱いにする（成人サイト向け）
         session.cookies.set("age_verified_true", "true", domain="wakust.com")
+        # Playwrightで取得済みのCookieがあれば注入
+        if warmed_cookies:
+            for c in warmed_cookies:
+                try:
+                    session.cookies.set(
+                        c["name"], c["value"],
+                        domain=c.get("domain", "wakust.com"),
+                        path=c.get("path", "/"),
+                    )
+                except Exception:
+                    pass
+            log.info(f"    🔧 Playwright済Cookieを注入: "
+                     f"{list(session.cookies.keys())}")
 
         try:
             # トップページを先にGETしてCookie(PHPSESSID等)を確立
@@ -541,6 +671,14 @@ def login_wakust():
                 warm = session.get(f"{BASE_URL}/", timeout=15)
                 log.info(f"    🔧 ウォームアップGET: HTTP {warm.status_code} "
                          f"cookies={list(session.cookies.keys())}")
+                # チャレンジページが返ってきたらPlaywrightにフォールバック
+                if _is_challenge_page(warm.text) and not warmed_cookies:
+                    log.info("    🔧 チャレンジページ検出、Playwrightで通過を試みる")
+                    warmed_cookies = _warm_cookies_via_playwright()
+                    if warmed_cookies:
+                        # 次のループでリトライする
+                        session.close()
+                        continue
             except requests.RequestException as e:
                 log.info(f"    🔧 ウォームアップGET失敗（続行）: {e}")
 
@@ -552,7 +690,20 @@ def login_wakust():
 
             if res.status_code == 200 and "loginok" in res.text:
                 log.info(f"✅ ログイン成功 cookies={list(session.cookies.keys())}")
+                # ログイン後に/mypage/をGETして認証フローを完結
+                # (is_login_mid等の追加Cookieを取得するため)
+                try:
+                    follow = session.get(f"{BASE_URL}/mypage/", timeout=15)
+                    log.info(f"    🔧 マイページGET: HTTP {follow.status_code} "
+                             f"cookies={list(session.cookies.keys())}")
+                except requests.RequestException as e:
+                    log.warning(f"    ⚠️ マイページGET失敗: {e}")
                 return session
+
+            # ログインレスポンスがチャレンジページならPlaywrightで通過
+            if _is_challenge_page(res.text) and not warmed_cookies:
+                log.info("    🔧 ログインレスポンスがチャレンジページ、Playwrightで通過を試みる")
+                warmed_cookies = _warm_cookies_via_playwright()
 
             snippet = res.text[:500].replace("\n", " ")
             log.warning(f"⚠️ ログイン失敗 (試行 {attempt}/{max_retries}): "
@@ -672,12 +823,21 @@ def fetch_post_list(session):
     while True:
         url = f"{POST_LIST_URL}&cp={page}" if page > 1 else POST_LIST_URL
         res = session.get(url)
+        # レスポンスの文字コードを補正 (ISO-8859-1をデフォルトにされる対策)
+        if res.encoding is None or res.encoding.lower() == "iso-8859-1":
+            res.encoding = res.apparent_encoding or "utf-8"
         soup = BeautifulSoup(res.text, "html.parser")
         posts = _parse_post_list_page(soup)
         if not posts:
             if page == 1:
                 # 1ページ目で0件は異常。診断ログを出す
                 log.warning(f"    🔧 1ページ目で0件: HTTP {res.status_code} URL={res.url}")
+                log.warning(f"    🔧 encoding={res.encoding} "
+                            f"content-type={res.headers.get('content-type')} "
+                            f"content-encoding={res.headers.get('content-encoding')} "
+                            f"content-length={res.headers.get('content-length')} "
+                            f"actual-len={len(res.content)}")
+                log.warning(f"    🔧 cookies={list(session.cookies.keys())}")
                 log.warning(f"    🔧 body先頭800字: {res.text[:800]!r}")
                 # td_2要素の数もログ出力
                 td2s = soup.find_all(class_="td_2")
