@@ -552,6 +552,14 @@ def login_wakust():
 
             if res.status_code == 200 and "loginok" in res.text:
                 log.info(f"✅ ログイン成功 cookies={list(session.cookies.keys())}")
+                # ログイン後に/mypage/をGETして認証フローを完結
+                # (is_login_mid等の追加Cookieを取得するため)
+                try:
+                    follow = session.get(f"{BASE_URL}/mypage/", timeout=15)
+                    log.info(f"    🔧 マイページGET: HTTP {follow.status_code} "
+                             f"cookies={list(session.cookies.keys())}")
+                except requests.RequestException as e:
+                    log.warning(f"    ⚠️ マイページGET失敗: {e}")
                 return session
 
             snippet = res.text[:500].replace("\n", " ")
@@ -672,12 +680,21 @@ def fetch_post_list(session):
     while True:
         url = f"{POST_LIST_URL}&cp={page}" if page > 1 else POST_LIST_URL
         res = session.get(url)
+        # レスポンスの文字コードを補正 (ISO-8859-1をデフォルトにされる対策)
+        if res.encoding is None or res.encoding.lower() == "iso-8859-1":
+            res.encoding = res.apparent_encoding or "utf-8"
         soup = BeautifulSoup(res.text, "html.parser")
         posts = _parse_post_list_page(soup)
         if not posts:
             if page == 1:
                 # 1ページ目で0件は異常。診断ログを出す
                 log.warning(f"    🔧 1ページ目で0件: HTTP {res.status_code} URL={res.url}")
+                log.warning(f"    🔧 encoding={res.encoding} "
+                            f"content-type={res.headers.get('content-type')} "
+                            f"content-encoding={res.headers.get('content-encoding')} "
+                            f"content-length={res.headers.get('content-length')} "
+                            f"actual-len={len(res.content)}")
+                log.warning(f"    🔧 cookies={list(session.cookies.keys())}")
                 log.warning(f"    🔧 body先頭800字: {res.text[:800]!r}")
                 # td_2要素の数もログ出力
                 td2s = soup.find_all(class_="td_2")
