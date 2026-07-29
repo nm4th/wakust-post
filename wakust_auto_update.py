@@ -523,7 +523,8 @@ def login_wakust():
         "User-Agent": ua,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
-        "Accept-Encoding": "gzip, deflate, br",
+        # Accept-Encodingはrequestsが自動設定するので上書きしない
+        # (brotliを明示するとrequestsが復号できず文字化けする)
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     }
