@@ -542,10 +542,11 @@ def _warm_cookies_via_playwright():
             """)
             # トップページにアクセス
             page.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=60000)
-            _time.sleep(3)
-            # 年齢認証「はい」ボタンを探してクリック
-            # 複数の候補セレクタを順に試す
-            click_candidates = [
+            _time.sleep(2)
+
+            # ページ状態を判定
+            content = page.content()
+            AGE_CLICK_CANDIDATES = [
                 'text="はい"',
                 'text="18歳以上"',
                 'text="同意する"',
@@ -559,39 +560,60 @@ def _warm_cookies_via_playwright():
                 'a[href*="age"]',
                 '.age-yes, #age_ok, .age_ok, #age-yes',
             ]
-            clicked = False
-            for sel in click_candidates:
+
+            def _find_age_button():
+                for sel in AGE_CLICK_CANDIDATES:
+                    try:
+                        el = page.locator(sel).first
+                        if el.count() > 0 and el.is_visible(timeout=500):
+                            return sel, el
+                    except Exception:
+                        continue
+                return None, None
+
+            age_sel, age_el = _find_age_button()
+            is_challenge = ("少々お待ち" in content
+                            or "window.location.reload" in content)
+
+            if age_sel:
+                # 【ケースA】年齢認証画面 → ボタンクリック
+                log.info(f"    🔧 年齢認証画面を検出 → クリック: {age_sel}")
                 try:
-                    el = page.locator(sel).first
-                    if el.count() > 0 and el.is_visible(timeout=1000):
-                        log.info(f"    🔧 年齢認証ボタンをクリック: {sel}")
-                        el.click(timeout=5000)
-                        clicked = True
-                        break
-                except Exception:
-                    continue
-            if clicked:
-                _time.sleep(3)
-                try:
+                    age_el.click(timeout=5000)
+                    _time.sleep(3)
                     page.wait_for_load_state("networkidle", timeout=15000)
-                except Exception:
-                    pass
-            else:
-                # ボタンが見つからなければ、自動reloadを待つ
-                log.info("    🔧 年齢認証ボタン未検出、自動reloadを待機")
+                except Exception as e:
+                    log.warning(f"    ⚠️ 年齢認証クリック後の待機失敗: {e}")
+            elif is_challenge:
+                # 【ケースB】少々お待ちください等のチャレンジ → reload待機
+                log.info("    🔧 チャレンジページを検出 → 自動reload待機")
                 _time.sleep(8)
                 try:
                     page.wait_for_load_state("networkidle", timeout=15000)
                 except Exception:
                     pass
-                # まだチャレンジページなら再度reload
+                # まだチャレンジならもう一度
                 if "少々お待ち" in page.content():
-                    log.info("    🔧 チャレンジ継続中、追加待機")
+                    log.info("    🔧 チャレンジ継続中 → 追加reload+待機")
                     _time.sleep(10)
                     try:
                         page.reload(wait_until="networkidle", timeout=30000)
                     except Exception:
                         pass
+                # reload後に年齢認証が出てくることもあるので再チェック
+                age_sel2, age_el2 = _find_age_button()
+                if age_sel2:
+                    log.info(f"    🔧 reload後に年齢認証を検出 → クリック: {age_sel2}")
+                    try:
+                        age_el2.click(timeout=5000)
+                        _time.sleep(3)
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                    except Exception:
+                        pass
+            else:
+                # 【ケースC】通常ページ（既に認証済み等） → 即Cookie取得
+                log.info("    🔧 通常ページ検出（年齢認証/チャレンジなし）")
+
             cookies = context.cookies()
             log.info(f"    🔧 Playwright取得Cookie: {[c['name'] for c in cookies]}")
             browser.close()
