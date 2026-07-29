@@ -530,13 +530,16 @@ def login_wakust():
     for attempt in range(1, max_retries + 1):
         session = requests.Session()
         session.headers.update(browser_headers)
+        # 年齢認証済み扱いにする（成人サイト向け）
+        session.cookies.set("age_verified_true", "true", domain="wakust.com")
 
         try:
             # トップページを先にGETしてCookie(PHPSESSID等)を確立
             # Bot判定回避のため
             try:
                 warm = session.get(f"{BASE_URL}/", timeout=15)
-                log.info(f"    🔧 ウォームアップGET: HTTP {warm.status_code}")
+                log.info(f"    🔧 ウォームアップGET: HTTP {warm.status_code} "
+                         f"cookies={list(session.cookies.keys())}")
             except requests.RequestException as e:
                 log.info(f"    🔧 ウォームアップGET失敗（続行）: {e}")
 
@@ -547,7 +550,7 @@ def login_wakust():
                timeout=30)
 
             if res.status_code == 200 and "loginok" in res.text:
-                log.info("✅ ログイン成功")
+                log.info(f"✅ ログイン成功 cookies={list(session.cookies.keys())}")
                 return session
 
             snippet = res.text[:500].replace("\n", " ")
