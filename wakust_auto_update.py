@@ -514,14 +514,13 @@ def _to_multipart(payload):
 # ログイン
 # ============================================================
 def _warm_cookies_via_playwright():
-    """Playwrightで実ブラウザとしてアクセスし、
-    チャレンジページを通過した後のCookieを取得する。
-    戻り値: [{'name':..,'value':..,'domain':..}, ...] or None
+    """Playwrightで実ブラウザとしてアクセスし、年齢認証やチャレンジを通過して
+    Cookieを取得する。戻り値: [{'name':..,'value':..,'domain':..}, ...] or None
     """
     try:
         from playwright.sync_api import sync_playwright
         import time as _time
-        log.info("    🔧 Playwrightでチャレンジ通過を試行中...")
+        log.info("    🔧 Playwrightで年齢認証/チャレンジ通過を試行中...")
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
@@ -541,23 +540,58 @@ def _warm_cookies_via_playwright():
                 Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
                 Object.defineProperty(navigator, 'languages', {get: () => ['ja', 'en-US', 'en']});
             """)
-            # トップページにアクセス - 「少々お待ちください」チャレンジ画面が出る
+            # トップページにアクセス
             page.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=60000)
-            # 5秒後にreloadされる仕組みなので8秒待つ
-            _time.sleep(8)
-            # networkidleまで待機（チャレンジ通過後の本ページを取得）
-            try:
-                page.wait_for_load_state("networkidle", timeout=30000)
-            except Exception:
-                pass
-            # まだチャレンジページなら再度reload+待機
-            if "少々お待ち" in page.content() or "spinner" in page.content():
-                log.info("    🔧 チャレンジ継続中、追加待機")
-                _time.sleep(10)
+            _time.sleep(3)
+            # 年齢認証「はい」ボタンを探してクリック
+            # 複数の候補セレクタを順に試す
+            click_candidates = [
+                'text="はい"',
+                'text="18歳以上"',
+                'text="同意する"',
+                'text="同意"',
+                'text="Enter"',
+                'text="入場"',
+                'a:has-text("はい")',
+                'button:has-text("はい")',
+                'a:has-text("18歳以上")',
+                'button:has-text("18歳以上")',
+                'a[href*="age"]',
+                '.age-yes, #age_ok, .age_ok, #age-yes',
+            ]
+            clicked = False
+            for sel in click_candidates:
                 try:
-                    page.reload(wait_until="networkidle", timeout=30000)
+                    el = page.locator(sel).first
+                    if el.count() > 0 and el.is_visible(timeout=1000):
+                        log.info(f"    🔧 年齢認証ボタンをクリック: {sel}")
+                        el.click(timeout=5000)
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if clicked:
+                _time.sleep(3)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
                 except Exception:
                     pass
+            else:
+                # ボタンが見つからなければ、自動reloadを待つ
+                log.info("    🔧 年齢認証ボタン未検出、自動reloadを待機")
+                _time.sleep(8)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
+                # まだチャレンジページなら再度reload
+                if "少々お待ち" in page.content():
+                    log.info("    🔧 チャレンジ継続中、追加待機")
+                    _time.sleep(10)
+                    try:
+                        page.reload(wait_until="networkidle", timeout=30000)
+                    except Exception:
+                        pass
             cookies = context.cookies()
             log.info(f"    🔧 Playwright取得Cookie: {[c['name'] for c in cookies]}")
             browser.close()
