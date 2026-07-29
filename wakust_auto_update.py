@@ -513,6 +513,60 @@ def _to_multipart(payload):
 # ============================================================
 # ログイン
 # ============================================================
+def _warm_cookies_via_playwright():
+    """Playwrightで実ブラウザとしてアクセスし、
+    チャレンジページを通過した後のCookieを取得する。
+    戻り値: [{'name':..,'value':..,'domain':..}, ...] or None
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        import time as _time
+        log.info("    🔧 Playwrightでチャレンジ通過を試行中...")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            context = browser.new_context(
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/131.0.0.0 Safari/537.36"),
+                locale="ja-JP",
+                timezone_id="Asia/Tokyo",
+            )
+            page = context.new_page()
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = {runtime: {}};
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['ja', 'en-US', 'en']});
+            """)
+            # トップページにアクセス - 「少々お待ちください」チャレンジ画面が出る
+            page.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=60000)
+            # 5秒後にreloadされる仕組みなので8秒待つ
+            _time.sleep(8)
+            # networkidleまで待機（チャレンジ通過後の本ページを取得）
+            try:
+                page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                pass
+            # まだチャレンジページなら再度reload+待機
+            if "少々お待ち" in page.content() or "spinner" in page.content():
+                log.info("    🔧 チャレンジ継続中、追加待機")
+                _time.sleep(10)
+                try:
+                    page.reload(wait_until="networkidle", timeout=30000)
+                except Exception:
+                    pass
+            cookies = context.cookies()
+            log.info(f"    🔧 Playwright取得Cookie: {[c['name'] for c in cookies]}")
+            browser.close()
+        return cookies
+    except Exception as e:
+        log.warning(f"    ⚠️ Playwrightチャレンジ通過失敗: {e}")
+        return None
+
+
 def login_wakust():
     max_retries = 5
     # 30秒 → 60秒 → 120秒 → 300秒 → 600秒 (最大約17分粘る)
@@ -528,11 +582,31 @@ def login_wakust():
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     }
+    def _is_challenge_page(text):
+        """「少々お待ちください」等のチャレンジページか判定"""
+        return ("少々お待ち" in text or "spinner" in text.lower()
+                or "window.location.reload" in text)
+
+    warmed_cookies = None  # Playwrightで取得したCookieをキャッシュ
+
     for attempt in range(1, max_retries + 1):
         session = requests.Session()
         session.headers.update(browser_headers)
         # 年齢認証済み扱いにする（成人サイト向け）
         session.cookies.set("age_verified_true", "true", domain="wakust.com")
+        # Playwrightで取得済みのCookieがあれば注入
+        if warmed_cookies:
+            for c in warmed_cookies:
+                try:
+                    session.cookies.set(
+                        c["name"], c["value"],
+                        domain=c.get("domain", "wakust.com"),
+                        path=c.get("path", "/"),
+                    )
+                except Exception:
+                    pass
+            log.info(f"    🔧 Playwright済Cookieを注入: "
+                     f"{list(session.cookies.keys())}")
 
         try:
             # トップページを先にGETしてCookie(PHPSESSID等)を確立
@@ -541,6 +615,14 @@ def login_wakust():
                 warm = session.get(f"{BASE_URL}/", timeout=15)
                 log.info(f"    🔧 ウォームアップGET: HTTP {warm.status_code} "
                          f"cookies={list(session.cookies.keys())}")
+                # チャレンジページが返ってきたらPlaywrightにフォールバック
+                if _is_challenge_page(warm.text) and not warmed_cookies:
+                    log.info("    🔧 チャレンジページ検出、Playwrightで通過を試みる")
+                    warmed_cookies = _warm_cookies_via_playwright()
+                    if warmed_cookies:
+                        # 次のループでリトライする
+                        session.close()
+                        continue
             except requests.RequestException as e:
                 log.info(f"    🔧 ウォームアップGET失敗（続行）: {e}")
 
@@ -561,6 +643,11 @@ def login_wakust():
                 except requests.RequestException as e:
                     log.warning(f"    ⚠️ マイページGET失敗: {e}")
                 return session
+
+            # ログインレスポンスがチャレンジページならPlaywrightで通過
+            if _is_challenge_page(res.text) and not warmed_cookies:
+                log.info("    🔧 ログインレスポンスがチャレンジページ、Playwrightで通過を試みる")
+                warmed_cookies = _warm_cookies_via_playwright()
 
             snippet = res.text[:500].replace("\n", " ")
             log.warning(f"⚠️ ログイン失敗 (試行 {attempt}/{max_retries}): "
