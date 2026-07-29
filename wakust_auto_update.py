@@ -671,6 +671,16 @@ def fetch_post_list(session):
         soup = BeautifulSoup(res.text, "html.parser")
         posts = _parse_post_list_page(soup)
         if not posts:
+            if page == 1:
+                # 1ページ目で0件は異常。診断ログを出す
+                log.warning(f"    🔧 1ページ目で0件: HTTP {res.status_code} URL={res.url}")
+                log.warning(f"    🔧 body先頭800字: {res.text[:800]!r}")
+                # td_2要素の数もログ出力
+                td2s = soup.find_all(class_="td_2")
+                log.warning(f"    🔧 td_2要素数={len(td2s)}")
+                # loginページに戻されていないか
+                if "login" in res.url.lower() or "ログイン" in res.text[:2000]:
+                    log.error(f"    ❌ ログインページに戻されている（セッション切れの可能性）")
             break
         all_posts.extend(posts)
         # 次ページがあるか確認
@@ -3034,9 +3044,17 @@ def run_calendar_only():
 
     posts = fetch_post_list(session)
     if not posts:
-        log.warning("⚠️  記事が見つかりませんでした")
+        log.warning("⚠️  記事が0件。再ログインしてリトライします")
         session.close()
-        return
+        time.sleep(30)
+        session = login_wakust()
+        if session:
+            posts = fetch_post_list(session)
+    if not posts:
+        log.error("❌ 記事が見つかりませんでした（再ログイン後も0件）")
+        if session:
+            session.close()
+        sys.exit(1)
 
     # まとめ記事が存在するか確認
     summary_posts_found = {}  # {post_id: post}
@@ -3342,9 +3360,17 @@ def run_update():
 
     all_posts = fetch_post_list(session)
     if not all_posts:
-        log.warning("⚠️  記事が見つかりませんでした")
+        log.warning("⚠️  記事が0件。再ログインしてリトライします")
         session.close()
-        return
+        time.sleep(30)
+        session = login_wakust()
+        if session:
+            all_posts = fetch_post_list(session)
+    if not all_posts:
+        log.error("❌ 記事が見つかりませんでした（再ログイン後も0件）")
+        if session:
+            session.close()
+        sys.exit(1)
 
     unpublished = [p for p in all_posts if not p.get("is_published", True)]
     if unpublished:
@@ -3583,9 +3609,17 @@ def run_title_only():
 
     all_posts = fetch_post_list(session)
     if not all_posts:
-        log.warning("⚠️  記事が見つかりませんでした")
+        log.warning("⚠️  記事が0件。再ログインしてリトライします")
         session.close()
-        return
+        time.sleep(30)
+        session = login_wakust()
+        if session:
+            all_posts = fetch_post_list(session)
+    if not all_posts:
+        log.error("❌ 記事が見つかりませんでした（再ログイン後も0件）")
+        if session:
+            session.close()
+        sys.exit(1)
 
     unpublished = [p for p in all_posts if not p.get("is_published", True)]
     if unpublished:
