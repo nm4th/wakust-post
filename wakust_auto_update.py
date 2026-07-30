@@ -2878,26 +2878,50 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 # セット販売の再構築
 # ============================================================
 def fetch_set_list_full(session):
-    """現在の全セットの [(set_id, title)] を返す"""
-    try:
-        res = session.get(SETPRICE_LIST_URL, timeout=30)
-    except requests.RequestException as e:
-        log.warning(f"    ⚠️ セット一覧取得エラー: {e}")
-        return []
-    if res.status_code != 200:
-        log.warning(f"    ⚠️ セット一覧取得失敗 (HTTP {res.status_code})")
-        return []
-    soup = BeautifulSoup(res.text, "html.parser")
+    """現在の全セットの [(set_id, title)] を返す（全ページ対応）"""
     result = []
-    for tr in soup.find_all("tr"):
-        i_del = tr.find("i", class_=re.compile(r"delete_set"))
-        if not i_del:
-            continue
-        sid = i_del.get("data-id")
-        a = tr.find("a", href=re.compile(r"setlist/\?set_id="))
-        title = a.get_text(strip=True) if a else ""
-        if sid:
-            result.append((sid, title))
+    seen_ids = set()
+    page = 1
+    while True:
+        url = f"{SETPRICE_LIST_URL}&cp={page}" if page > 1 else SETPRICE_LIST_URL
+        try:
+            res = session.get(url, timeout=30)
+        except requests.RequestException as e:
+            log.warning(f"    ⚠️ セット一覧取得エラー (page={page}): {e}")
+            break
+        if res.status_code != 200:
+            log.warning(f"    ⚠️ セット一覧取得失敗 (page={page}, HTTP {res.status_code})")
+            break
+        soup = BeautifulSoup(res.text, "html.parser")
+        page_items = []
+        for tr in soup.find_all("tr"):
+            i_del = tr.find("i", class_=re.compile(r"delete_set"))
+            if not i_del:
+                continue
+            sid = i_del.get("data-id")
+            a = tr.find("a", href=re.compile(r"setlist/\?set_id="))
+            title = a.get_text(strip=True) if a else ""
+            if sid and sid not in seen_ids:
+                seen_ids.add(sid)
+                page_items.append((sid, title))
+        if not page_items:
+            # このページは0件 = 最終ページの次
+            break
+        result.extend(page_items)
+        # 次ページの存在確認
+        next_page = page + 1
+        next_link = soup.find("a", href=re.compile(rf"cp={next_page}\b"))
+        if not next_link:
+            for a in soup.find_all("a", href=re.compile(r"cp=(\d+)")):
+                m_cp = re.search(r"cp=(\d+)", a["href"])
+                if m_cp and int(m_cp.group(1)) > page:
+                    next_link = a
+                    break
+        if not next_link:
+            break
+        page += 1
+        time.sleep(0.5)
+    log.info(f"    📋 セット取得数: {len(result)}件（{page}ページ）")
     return result
 
 
