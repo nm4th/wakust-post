@@ -33,28 +33,54 @@ DELETE_SET_URL    = f"{BASE_URL}/wp-content/themes/wakust/user_edit/edit_set.php
 
 
 def fetch_set_list(session):
-    """セット販売一覧ページから (set_id, title, sales_pt, sales_count) のリストを取得"""
-    res = session.get(SETPRICE_LIST_URL)
-    if res.status_code != 200:
-        log.error(f"❌ セット一覧取得失敗 (HTTP {res.status_code})")
-        return []
-    soup = BeautifulSoup(res.text, "html.parser")
+    """セット販売一覧ページから (set_id, title, sales_line) のリストを全ページ取得"""
     sets = []
-    for i_del in soup.find_all("i", class_=re.compile(r"delete_set")):
-        set_id = i_del.get("data-id")
-        if not set_id:
-            continue
-        tr = i_del.find_parent("tr")
-        title = ""
-        sales_line = ""
-        if tr:
-            tds = tr.find_all("td")
-            if tds:
-                a = tds[0].find("a")
-                title = (a.get_text(strip=True) if a else tds[0].get_text(strip=True))
-            if len(tds) >= 3:
-                sales_line = tds[2].get_text(" ", strip=True)
-        sets.append((set_id, title, sales_line))
+    seen_ids = set()
+    page = 1
+    while True:
+        url = f"{SETPRICE_LIST_URL}&cp={page}" if page > 1 else SETPRICE_LIST_URL
+        try:
+            res = session.get(url, timeout=30)
+        except requests.RequestException as e:
+            log.error(f"❌ セット一覧取得エラー (page={page}): {e}")
+            break
+        if res.status_code != 200:
+            log.error(f"❌ セット一覧取得失敗 (page={page}, HTTP {res.status_code})")
+            break
+        soup = BeautifulSoup(res.text, "html.parser")
+        page_items = []
+        for i_del in soup.find_all("i", class_=re.compile(r"delete_set")):
+            set_id = i_del.get("data-id")
+            if not set_id or set_id in seen_ids:
+                continue
+            seen_ids.add(set_id)
+            tr = i_del.find_parent("tr")
+            title = ""
+            sales_line = ""
+            if tr:
+                tds = tr.find_all("td")
+                if tds:
+                    a = tds[0].find("a")
+                    title = (a.get_text(strip=True) if a else tds[0].get_text(strip=True))
+                if len(tds) >= 3:
+                    sales_line = tds[2].get_text(" ", strip=True)
+            page_items.append((set_id, title, sales_line))
+        if not page_items:
+            break
+        sets.extend(page_items)
+        next_page = page + 1
+        next_link = soup.find("a", href=re.compile(rf"cp={next_page}\b"))
+        if not next_link:
+            for a in soup.find_all("a", href=re.compile(r"cp=(\d+)")):
+                m_cp = re.search(r"cp=(\d+)", a["href"])
+                if m_cp and int(m_cp.group(1)) > page:
+                    next_link = a
+                    break
+        if not next_link:
+            break
+        page += 1
+        time.sleep(0.5)
+    log.info(f"    📋 セット取得数: {len(sets)}件（{page}ページ）")
     return sets
 
 
