@@ -3491,12 +3491,11 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
 
     if not dates and not is_today:
         if saw_off:
-            # スケジュール取得成功、全休みまたは未来出勤なし → 出勤情報を全消去
-            _log("info", f"    ✅ スケジュール全休み確認 → タイトルの出勤日情報をクリア")
-            new_title = _clear_shift_dates_from_title(post["title"])
-            _area_tag = CATEGORY_AREA_TAG.get(post.get("category"))
-            if _area_tag:
-                new_title = new_title.rstrip() + _area_tag
+            # スケジュール取得成功、全休みまたは未来出勤なし
+            # → 未来の出勤日が急に休みになることは稀なので、既存のタイトルを維持
+            #   (site側の一時的な不整合や表示週の違いの可能性)
+            _log("info", f"    ✅ スケジュール全休み確認 → 既存タイトルを維持（変更なし）")
+            new_title = post["title"]  # そのまま
             return {
                 "post":      post,
                 "details":   details,
