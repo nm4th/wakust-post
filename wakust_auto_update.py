@@ -1210,6 +1210,9 @@ def _has_work_info(info):
 
 
 def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
+    # スケジュール構造を正常にパースできたが休みを検出した場合True
+    # これがTrueならタイトル復元のfallbackを使わず「本当に出勤なし」として扱う
+    _saw_off = [False]  # listでクロージャから書き換え可能に
     try:
         _used_playwright = False
         _parsed_host = urlparse(schedule_url).hostname or ""
@@ -1220,7 +1223,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             soup = _fetch_with_playwright(schedule_url)
             _used_playwright = True
             if soup is None:
-                return [], False, False
+                return [], False, False, _saw_off[0]
         else:
             res = requests.get(schedule_url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -1233,10 +1236,10 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 soup = _fetch_with_playwright(schedule_url)
                 _used_playwright = True
                 if soup is None:
-                    return [], False, False
+                    return [], False, False, _saw_off[0]
             elif res.status_code != 200:
                 log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
-                return [], False, False
+                return [], False, False, _saw_off[0]
             else:
                 # content-typeのcharsetを優先（apparent_encodingは誤判定があるため）
                 if res.encoding is None or res.encoding == "ISO-8859-1":
@@ -1254,7 +1257,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
         _used_playwright = True
         if soup is None:
             log.error(f"    ❌ Playwrightでも取得失敗")
-            return [], False, False
+            return [], False, False, _saw_off[0]
 
     # JSレンダリング判定: スケジュール構造があるが中身が空の場合
     # → Playwrightでヘッドレスブラウザ経由で再取得
@@ -1454,6 +1457,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 info_p = day_p.find_next_sibling("p")
                 info = info_p.get_text(strip=True) if info_p else ""
                 if "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1495,6 +1499,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 for dt_el, dd_el in zip(dts, dds):
                     info = dd_el.get_text(strip=True)
                     if "休み" in info or "未定" in info:
+                        _saw_off[0] = True
                         continue
                     if not _has_work_info(info):
                         continue
@@ -1517,6 +1522,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             for dt_el, dd_el in zip(dt_sch, dd_sch):
                 info = dd_el.get_text(strip=True)
                 if "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1541,6 +1547,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 for dt_el, dd_el in zip(dts, dds):
                     info = dd_el.get_text(strip=True)
                     if "休み" in info or "未定" in info:
+                        _saw_off[0] = True
                         continue
                     if not _has_work_info(info):
                         continue
@@ -1564,6 +1571,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             for date_el, work_el in zip(any_sch_dates, any_sch_works):
                 info = work_el.get_text(strip=True)
                 if "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1593,6 +1601,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     continue
                 info = check_p.get_text(strip=True)
                 if info == "-" or "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1663,6 +1672,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
         for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
             line_rest = m.group(3).strip()
             if "休み" in line_rest or "未定" in line_rest:
+                _saw_off[0] = True
                 continue
             if not _has_work_info(line_rest) and line_rest:
                 continue
@@ -1706,6 +1716,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     for dt_el, dd_el in zip(dts, dds):
                         info = dd_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1724,6 +1735,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     for dt_el, dd_el in zip(dt_sch, dd_sch):
                         info = dd_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1744,6 +1756,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                         for dt_el, dd_el in zip(dts, dds):
                             info = dd_el.get_text(strip=True)
                             if "休み" in info or "未定" in info:
+                                _saw_off[0] = True
                                 continue
                             if not _has_work_info(info):
                                 continue
@@ -1762,6 +1775,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     for date_el, work_el in zip(any_sch_dates, any_sch_works):
                         info = work_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1786,6 +1800,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                             continue
                         info = check_p.get_text(strip=True)
                         if info == "-" or "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1850,6 +1865,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
                     line_rest = m.group(3).strip()
                     if "休み" in line_rest or "未定" in line_rest:
+                        _saw_off[0] = True
                         continue
                     if not _has_work_info(line_rest) and line_rest:
                         continue
@@ -1877,7 +1893,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             divs = soup.find_all(["div", "dl", "ul", "li", "span"], class_=re.compile(cls, re.I))
             if divs:
                 log.warning(f"    🔧 class~'{cls}' 要素数={len(divs)} 先頭: {str(divs[0])[:200]}")
-        return [], False, False
+        return [], False, False, _saw_off[0]
 
     candidates.sort(key=lambda x: x[0])
     # 重複除去
@@ -1899,12 +1915,12 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
     future = future[:3]
 
     if not future:
-        return [], False, is_today
+        return [], False, is_today, _saw_off[0]
 
     dates = [s for _, s in future]
     tomorrow = today + timedelta(days=1)
     is_tomorrow = (future[0][0].date() == tomorrow.date())
-    return dates, is_tomorrow, is_today
+    return dates, is_tomorrow, is_today, _saw_off[0]
 
 
 # ============================================================
@@ -1949,6 +1965,27 @@ def _strip_today_tag(title):
     title = _AREA_TAG_STRIP_RE.sub("", title)
     title = re.sub(r"\s*#[\d/,]+$", "", title)
     return title.rstrip()
+
+
+def _clear_shift_dates_from_title(title):
+    """タイトルから【M/D...出勤】バケツと日付ハッシュタグ、本日出勤/地域タグを全て除去。
+    「スケジュール取得成功・全休み」時に使用（古いシフト日付を残さない）。
+    例: 【8/10.11出勤】【Fカップ】... #8/10,8/11 #本日出勤 #東京都内
+         → 【Fカップ】...
+    """
+    title = _strip_today_tag(title)
+
+    def _replace_bracket(m):
+        inner = m.group(1)
+        if not re.search(r"[\d/.,｜|\s]+出勤", inner):
+            return m.group(0)
+        # 日付+出勤を除去してカップ数等が残ればbracket維持
+        cleaned = re.sub(r"[\d/.,｜|\s]+出勤", "", inner)
+        cleaned = re.sub(r"[\d/.,｜|\s]+", "", cleaned).strip()
+        return f"【{cleaned}】" if cleaned else ""
+
+    title = re.sub(r"【([^】]*)】", _replace_bracket, title, count=1)
+    return title.strip()
 
 
 def _extract_dates_from_title(title):
@@ -3288,7 +3325,7 @@ def run_calendar_only():
         dates, is_tomorrow, is_today = (None, False, False)
         if details["schedule_url"]:
             log.info(f"    🔗 {details['schedule_url']}")
-            dates_list, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+            dates_list, is_tomorrow, is_today, _saw_off = fetch_next_date_from_schedule(details["schedule_url"])
             if dates_list:
                 dates = ",".join(dates_list)
                 log.info(f"    📅 直近の出勤日: {dates}")
@@ -3448,11 +3485,28 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
 
     _log("info", f"    🔗 {details['schedule_url']}")
 
-    dates, is_tomorrow, is_today = fetch_next_date_from_schedule(
+    dates, is_tomorrow, is_today, saw_off = fetch_next_date_from_schedule(
         details["schedule_url"], start_from_tomorrow=start_from_tomorrow
     )
 
     if not dates and not is_today:
+        if saw_off:
+            # スケジュール取得成功、全休みまたは未来出勤なし → 出勤情報を全消去
+            _log("info", f"    ✅ スケジュール全休み確認 → タイトルの出勤日情報をクリア")
+            new_title = _clear_shift_dates_from_title(post["title"])
+            _area_tag = CATEGORY_AREA_TAG.get(post.get("category"))
+            if _area_tag:
+                new_title = new_title.rstrip() + _area_tag
+            return {
+                "post":      post,
+                "details":   details,
+                "next_date": None,
+                "is_tomorrow":  False,
+                "is_today":    False,
+                "new_title": new_title,
+                "tags":      tags,
+                "image_url": image_url,
+            }, msgs
         _log("warning", f"    ⚠️  出勤日取得失敗。タイトル/stateから日付復元を試行")
         fb_dates_str, fb_dates_list = _fallback_dates_from_title_or_state(post["title"], post["id"], state)
         if fb_dates_list:
