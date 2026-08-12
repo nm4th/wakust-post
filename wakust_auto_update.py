@@ -77,6 +77,10 @@ log = logging.getLogger(__name__)
 # ============================================================
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
+# WAKUST_COOKIE: ブラウザのCookieを丸ごとコピーして設定すると、
+# ログインをスキップして認証済みセッションを直接構築する
+# フォーマット: "PHPSESSID=xxx; is_login_mid=xxx; user_last_login=xxx; ..."
+WAKUST_COOKIE   = os.environ.get("WAKUST_COOKIE", "")
 
 # メール通知設定（GitHub Secretsで管理）
 REPORT_EMAIL    = os.environ.get("REPORT_EMAIL", "")       # 送信先
@@ -642,6 +646,44 @@ def login_wakust():
         """「少々お待ちください」等のチャレンジページか判定"""
         return ("少々お待ち" in text or "spinner" in text.lower()
                 or "window.location.reload" in text)
+
+    # ------------------------------------------------------------------
+    # WAKUST_COOKIE が設定されていれば、Cookie注入して認証済みsessionを構築
+    # 通常のログインフローをスキップ（チャレンジ画面回避のため）
+    # ------------------------------------------------------------------
+    if WAKUST_COOKIE:
+        log.info("🍪 WAKUST_COOKIE検出 → Cookie注入によるログインを試行")
+        session = requests.Session()
+        session.headers.update(browser_headers)
+        # "name=value; name2=value2; ..." 形式をパース
+        for pair in WAKUST_COOKIE.split(";"):
+            pair = pair.strip()
+            if not pair or "=" not in pair:
+                continue
+            name, _, value = pair.partition("=")
+            name, value = name.strip(), value.strip()
+            if name:
+                try:
+                    session.cookies.set(name, value, domain="wakust.com")
+                except Exception as e:
+                    log.warning(f"    ⚠️ Cookie設定失敗 [{name}]: {e}")
+        log.info(f"    🔧 注入Cookie: {list(session.cookies.keys())}")
+        # 認証確認: /mypage/ にGETしてloginページに戻されないか
+        try:
+            check = session.get(f"{BASE_URL}/mypage/", timeout=30,
+                                allow_redirects=True)
+            body = check.text[:2000]
+            if (check.status_code == 200
+                    and "login" not in check.url.lower()
+                    and "ログイン" not in body
+                    and not _is_challenge_page(body)):
+                log.info(f"✅ Cookie注入でログイン成功 (URL={check.url})")
+                return session
+            log.warning(f"⚠️ Cookieは無効の可能性 (HTTP {check.status_code}, "
+                        f"URL={check.url}) → 通常ログインにフォールバック")
+        except requests.RequestException as e:
+            log.warning(f"⚠️ Cookie検証時の通信エラー: {e} → 通常ログインにフォールバック")
+        session.close()
 
     warmed_cookies = None  # Playwrightで取得したCookieをキャッシュ
 
@@ -1210,6 +1252,9 @@ def _has_work_info(info):
 
 
 def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
+    # スケジュール構造を正常にパースできたが休みを検出した場合True
+    # これがTrueならタイトル復元のfallbackを使わず「本当に出勤なし」として扱う
+    _saw_off = [False]  # listでクロージャから書き換え可能に
     try:
         _used_playwright = False
         _parsed_host = urlparse(schedule_url).hostname or ""
@@ -1220,7 +1265,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             soup = _fetch_with_playwright(schedule_url)
             _used_playwright = True
             if soup is None:
-                return [], False, False
+                return [], False, False, _saw_off[0]
         else:
             res = requests.get(schedule_url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -1233,10 +1278,10 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 soup = _fetch_with_playwright(schedule_url)
                 _used_playwright = True
                 if soup is None:
-                    return [], False, False
+                    return [], False, False, _saw_off[0]
             elif res.status_code != 200:
                 log.error(f"    ❌ スケジュール取得失敗 (HTTP {res.status_code}): {schedule_url}")
-                return [], False, False
+                return [], False, False, _saw_off[0]
             else:
                 # content-typeのcharsetを優先（apparent_encodingは誤判定があるため）
                 if res.encoding is None or res.encoding == "ISO-8859-1":
@@ -1254,7 +1299,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
         _used_playwright = True
         if soup is None:
             log.error(f"    ❌ Playwrightでも取得失敗")
-            return [], False, False
+            return [], False, False, _saw_off[0]
 
     # JSレンダリング判定: スケジュール構造があるが中身が空の場合
     # → Playwrightでヘッドレスブラウザ経由で再取得
@@ -1454,6 +1499,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 info_p = day_p.find_next_sibling("p")
                 info = info_p.get_text(strip=True) if info_p else ""
                 if "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1495,6 +1541,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 for dt_el, dd_el in zip(dts, dds):
                     info = dd_el.get_text(strip=True)
                     if "休み" in info or "未定" in info:
+                        _saw_off[0] = True
                         continue
                     if not _has_work_info(info):
                         continue
@@ -1517,6 +1564,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             for dt_el, dd_el in zip(dt_sch, dd_sch):
                 info = dd_el.get_text(strip=True)
                 if "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1541,6 +1589,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 for dt_el, dd_el in zip(dts, dds):
                     info = dd_el.get_text(strip=True)
                     if "休み" in info or "未定" in info:
+                        _saw_off[0] = True
                         continue
                     if not _has_work_info(info):
                         continue
@@ -1564,6 +1613,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             for date_el, work_el in zip(any_sch_dates, any_sch_works):
                 info = work_el.get_text(strip=True)
                 if "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1593,6 +1643,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     continue
                 info = check_p.get_text(strip=True)
                 if info == "-" or "休み" in info or "未定" in info:
+                    _saw_off[0] = True
                     continue
                 if not _has_work_info(info):
                     continue
@@ -1663,6 +1714,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
         for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
             line_rest = m.group(3).strip()
             if "休み" in line_rest or "未定" in line_rest:
+                _saw_off[0] = True
                 continue
             if not _has_work_info(line_rest) and line_rest:
                 continue
@@ -1706,6 +1758,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     for dt_el, dd_el in zip(dts, dds):
                         info = dd_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1724,6 +1777,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     for dt_el, dd_el in zip(dt_sch, dd_sch):
                         info = dd_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1744,6 +1798,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                         for dt_el, dd_el in zip(dts, dds):
                             info = dd_el.get_text(strip=True)
                             if "休み" in info or "未定" in info:
+                                _saw_off[0] = True
                                 continue
                             if not _has_work_info(info):
                                 continue
@@ -1762,6 +1817,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                     for date_el, work_el in zip(any_sch_dates, any_sch_works):
                         info = work_el.get_text(strip=True)
                         if "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1786,6 +1842,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                             continue
                         info = check_p.get_text(strip=True)
                         if info == "-" or "休み" in info or "未定" in info:
+                            _saw_off[0] = True
                             continue
                         if not _has_work_info(info):
                             continue
@@ -1850,6 +1907,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
                     line_rest = m.group(3).strip()
                     if "休み" in line_rest or "未定" in line_rest:
+                        _saw_off[0] = True
                         continue
                     if not _has_work_info(line_rest) and line_rest:
                         continue
@@ -1877,7 +1935,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             divs = soup.find_all(["div", "dl", "ul", "li", "span"], class_=re.compile(cls, re.I))
             if divs:
                 log.warning(f"    🔧 class~'{cls}' 要素数={len(divs)} 先頭: {str(divs[0])[:200]}")
-        return [], False, False
+        return [], False, False, _saw_off[0]
 
     candidates.sort(key=lambda x: x[0])
     # 重複除去
@@ -1899,12 +1957,12 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
     future = future[:3]
 
     if not future:
-        return [], False, is_today
+        return [], False, is_today, _saw_off[0]
 
     dates = [s for _, s in future]
     tomorrow = today + timedelta(days=1)
     is_tomorrow = (future[0][0].date() == tomorrow.date())
-    return dates, is_tomorrow, is_today
+    return dates, is_tomorrow, is_today, _saw_off[0]
 
 
 # ============================================================
@@ -1949,6 +2007,27 @@ def _strip_today_tag(title):
     title = _AREA_TAG_STRIP_RE.sub("", title)
     title = re.sub(r"\s*#[\d/,]+$", "", title)
     return title.rstrip()
+
+
+def _clear_shift_dates_from_title(title):
+    """タイトルから【M/D...出勤】バケツと日付ハッシュタグ、本日出勤/地域タグを全て除去。
+    「スケジュール取得成功・全休み」時に使用（古いシフト日付を残さない）。
+    例: 【8/10.11出勤】【Fカップ】... #8/10,8/11 #本日出勤 #東京都内
+         → 【Fカップ】...
+    """
+    title = _strip_today_tag(title)
+
+    def _replace_bracket(m):
+        inner = m.group(1)
+        if not re.search(r"[\d/.,｜|\s]+出勤", inner):
+            return m.group(0)
+        # 日付+出勤を除去してカップ数等が残ればbracket維持
+        cleaned = re.sub(r"[\d/.,｜|\s]+出勤", "", inner)
+        cleaned = re.sub(r"[\d/.,｜|\s]+", "", cleaned).strip()
+        return f"【{cleaned}】" if cleaned else ""
+
+    title = re.sub(r"【([^】]*)】", _replace_bracket, title, count=1)
+    return title.strip()
 
 
 def _extract_dates_from_title(title):
@@ -3288,7 +3367,7 @@ def run_calendar_only():
         dates, is_tomorrow, is_today = (None, False, False)
         if details["schedule_url"]:
             log.info(f"    🔗 {details['schedule_url']}")
-            dates_list, is_tomorrow, is_today = fetch_next_date_from_schedule(details["schedule_url"])
+            dates_list, is_tomorrow, is_today, _saw_off = fetch_next_date_from_schedule(details["schedule_url"])
             if dates_list:
                 dates = ",".join(dates_list)
                 log.info(f"    📅 直近の出勤日: {dates}")
@@ -3448,11 +3527,27 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
 
     _log("info", f"    🔗 {details['schedule_url']}")
 
-    dates, is_tomorrow, is_today = fetch_next_date_from_schedule(
+    dates, is_tomorrow, is_today, saw_off = fetch_next_date_from_schedule(
         details["schedule_url"], start_from_tomorrow=start_from_tomorrow
     )
 
     if not dates and not is_today:
+        if saw_off:
+            # スケジュール取得成功、全休みまたは未来出勤なし
+            # → 未来の出勤日が急に休みになることは稀なので、既存のタイトルを維持
+            #   (site側の一時的な不整合や表示週の違いの可能性)
+            _log("info", f"    ✅ スケジュール全休み確認 → 既存タイトルを維持（変更なし）")
+            new_title = post["title"]  # そのまま
+            return {
+                "post":      post,
+                "details":   details,
+                "next_date": None,
+                "is_tomorrow":  False,
+                "is_today":    False,
+                "new_title": new_title,
+                "tags":      tags,
+                "image_url": image_url,
+            }, msgs
         _log("warning", f"    ⚠️  出勤日取得失敗。タイトル/stateから日付復元を試行")
         fb_dates_str, fb_dates_list = _fallback_dates_from_title_or_state(post["title"], post["id"], state)
         if fb_dates_list:
