@@ -29,6 +29,7 @@ jobs:
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
+          WAKUST_COOKIE: ${{ secrets.WAKUST_COOKIE }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             python wakust_delete_all_sets.py --dry-run

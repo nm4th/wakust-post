@@ -77,6 +77,10 @@ log = logging.getLogger(__name__)
 # ============================================================
 WAKUST_EMAIL    = os.environ.get("WAKUST_EMAIL", "")
 WAKUST_PASSWORD = os.environ.get("WAKUST_PASSWORD", "")
+# WAKUST_COOKIE: ブラウザのCookieを丸ごとコピーして設定すると、
+# ログインをスキップして認証済みセッションを直接構築する
+# フォーマット: "PHPSESSID=xxx; is_login_mid=xxx; user_last_login=xxx; ..."
+WAKUST_COOKIE   = os.environ.get("WAKUST_COOKIE", "")
 
 # メール通知設定（GitHub Secretsで管理）
 REPORT_EMAIL    = os.environ.get("REPORT_EMAIL", "")       # 送信先
@@ -642,6 +646,44 @@ def login_wakust():
         """「少々お待ちください」等のチャレンジページか判定"""
         return ("少々お待ち" in text or "spinner" in text.lower()
                 or "window.location.reload" in text)
+
+    # ------------------------------------------------------------------
+    # WAKUST_COOKIE が設定されていれば、Cookie注入して認証済みsessionを構築
+    # 通常のログインフローをスキップ（チャレンジ画面回避のため）
+    # ------------------------------------------------------------------
+    if WAKUST_COOKIE:
+        log.info("🍪 WAKUST_COOKIE検出 → Cookie注入によるログインを試行")
+        session = requests.Session()
+        session.headers.update(browser_headers)
+        # "name=value; name2=value2; ..." 形式をパース
+        for pair in WAKUST_COOKIE.split(";"):
+            pair = pair.strip()
+            if not pair or "=" not in pair:
+                continue
+            name, _, value = pair.partition("=")
+            name, value = name.strip(), value.strip()
+            if name:
+                try:
+                    session.cookies.set(name, value, domain="wakust.com")
+                except Exception as e:
+                    log.warning(f"    ⚠️ Cookie設定失敗 [{name}]: {e}")
+        log.info(f"    🔧 注入Cookie: {list(session.cookies.keys())}")
+        # 認証確認: /mypage/ にGETしてloginページに戻されないか
+        try:
+            check = session.get(f"{BASE_URL}/mypage/", timeout=30,
+                                allow_redirects=True)
+            body = check.text[:2000]
+            if (check.status_code == 200
+                    and "login" not in check.url.lower()
+                    and "ログイン" not in body
+                    and not _is_challenge_page(body)):
+                log.info(f"✅ Cookie注入でログイン成功 (URL={check.url})")
+                return session
+            log.warning(f"⚠️ Cookieは無効の可能性 (HTTP {check.status_code}, "
+                        f"URL={check.url}) → 通常ログインにフォールバック")
+        except requests.RequestException as e:
+            log.warning(f"⚠️ Cookie検証時の通信エラー: {e} → 通常ログインにフォールバック")
+        session.close()
 
     warmed_cookies = None  # Playwrightで取得したCookieをキャッシュ
 
