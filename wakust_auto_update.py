@@ -1658,6 +1658,33 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             if candidates:
                 log.info(f"    📅 形式P(profile_list)でマッチ")
 
+    # 形式L: <li>内に<p>×2 (日本語日付+時刻/―) 形式 (aroma-miely等)
+    # <li><p>08月15日（土）</p><p>21:00～翌05:00</p></li>
+    # <li><p>08月17日（月）</p><p>―</p></li>
+    if not candidates:
+        for li in soup.find_all("li"):
+            ps = li.find_all("p")
+            if len(ps) < 2:
+                continue
+            date_text = ps[0].get_text(strip=True)
+            time_text = ps[1].get_text(strip=True)
+            m = re.search(r"(\d{1,2})月\s*(\d{1,2})日", date_text)
+            if not m:
+                continue
+            # ―(オフマーカー) / 休み / 未定 / 空文字
+            if (time_text in ("―", "-", "－", "‐", "")
+                    or "休み" in time_text or "未定" in time_text):
+                _saw_off[0] = True
+                continue
+            if not _has_work_info(time_text):
+                continue
+            month, day = int(m.group(1)), int(m.group(2))
+            d = datetime(current_year, month, day)
+            if d >= start_date:
+                candidates.append((d, f"{month}/{day}"))
+        if candidates:
+            log.info(f"    📅 形式L(li>p×2 日本語日付+時刻)でマッチ")
+
     # パターン3: div構造の日付+出勤情報（tennesu等）
     if not candidates:
         date_divs = soup.find_all("div", class_=re.compile(r"date"))
