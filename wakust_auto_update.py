@@ -98,6 +98,9 @@ def jst_strftime(fmt):
 CALENDAR_ONLY = os.environ.get("CALENDAR_ONLY", "0") == "1"
 # TITLE_ONLY: タイトル＋回遊リストのみ更新（16:30モード、再投稿・PVなし）
 TITLE_ONLY = os.environ.get("TITLE_ONLY", "0") == "1"
+# CODOC_MODE: "post_new" = codocに未投稿記事から1件投稿（朝昼夜の3回/日実行想定）
+#             未設定/空 = 通常モード
+CODOC_MODE = os.environ.get("CODOC_MODE", "").strip()
 
 
 # ============================================================
@@ -3290,6 +3293,198 @@ def _update_profile_with_today_sets(session):
         log.warning(f"  ⚠️ プロフィール更新失敗")
 
 
+# ============================================================
+# codoc連携
+# ============================================================
+def _codoc_skip_post(post):
+    """codoc投稿・同期の対象外判定"""
+    if post["id"] in SUMMARY_POST_IDS:
+        return True  # まとめ記事
+    if post.get("is_reserved"):
+        return True  # 予約投稿
+    if not post.get("is_published", True):
+        return True  # 非公開/下書き
+    return False
+
+
+def run_codoc_post_new(session):
+    """codocに未投稿記事のうち販売回数が最多のものを1件投稿する"""
+    from wakust_codoc import codoc_login, codoc_create_entry
+    log.info(f"\n{'='*55}")
+    log.info(f"📝 codoc新規投稿 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    all_posts = fetch_post_list(session)
+    if not all_posts:
+        log.error("❌ 記事一覧が空、codoc投稿中止")
+        return
+
+    state = load_state()
+    # 対象記事: スキップ条件を除いた、かつcodoc未投稿
+    candidates = []
+    for p in all_posts:
+        if _codoc_skip_post(p):
+            continue
+        if state.get(p["id"], {}).get("codoc_entry_id"):
+            continue
+        candidates.append(p)
+
+    if not candidates:
+        log.info("📝 codoc投稿候補なし（対象記事すべて投稿済み）")
+        return
+
+    # 販売回数の多い順にソート
+    candidates.sort(key=lambda p: p.get("sales_count") or 0, reverse=True)
+    target = candidates[0]
+    log.info(f"📝 codoc投稿対象: [{target['id']}] {target['title']}  "
+             f"(販売{target.get('sales_count') or 0}回, 残候補{len(candidates)}件)")
+
+    # 記事詳細取得
+    try:
+        details = fetch_post_details(session, target)
+    except Exception as e:
+        log.error(f"❌ 記事詳細取得失敗: {e}")
+        return
+    payload = details.get("payload") or {}
+    body_free = payload.get("edit_text_1", "") or ""
+    body_paywalled = payload.get("edit_text_2", "") or ""
+    point_field = details.get("point_field") or "post_price"
+    try:
+        price = int(payload.get(point_field) or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if price < 100:
+        # codoc最低価格100円
+        price = calculate_sales_point(target.get("sales_count") or 0)
+    binded_url = target.get("url", "")
+
+    # codocログイン
+    session_codoc = codoc_login(WAKUST_EMAIL, WAKUST_PASSWORD)
+    if not session_codoc:
+        log.error("❌ codocログイン失敗")
+        return
+
+    # 投稿
+    entry_id = codoc_create_entry(
+        session_codoc,
+        title=target["title"],
+        body_free=body_free,
+        body_paywalled=body_paywalled,
+        price=price,
+        binded_url=binded_url,
+    )
+    if not entry_id:
+        log.error(f"❌ codoc投稿失敗: [{target['id']}]")
+        session_codoc.close()
+        return
+
+    log.info(f"✅ codoc投稿成功: [{target['id']}] → entry_id={entry_id}")
+
+    # state更新
+    if target["id"] not in state:
+        state[target["id"]] = {}
+    state[target["id"]]["codoc_entry_id"] = entry_id
+    state[target["id"]]["codoc_title"] = target["title"]
+    state[target["id"]]["codoc_price"] = price
+    state[target["id"]]["codoc_posted_at"] = jst_strftime("%Y-%m-%d %H:%M:%S")
+    save_state(state)
+    session_codoc.close()
+
+
+def run_codoc_sync(session, posts, post_infos):
+    """codoc投稿済み記事のタイトル/価格を最新に同期する（0時モード内で呼ばれる）"""
+    from wakust_codoc import codoc_login, codoc_update_entry
+    log.info(f"\n{'='*55}")
+    log.info(f"🔄 codoc投稿記事の同期 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    state = load_state()
+    posts_by_id = {p["id"]: p for p in posts}
+    infos_by_id = {info["post"]["id"]: info for info in post_infos}
+
+    # codoc投稿済み記事のみ
+    synced_ids = [pid for pid, s in state.items() if s.get("codoc_entry_id")]
+    if not synced_ids:
+        log.info("📝 codoc同期対象なし")
+        return
+
+    log.info(f"📝 codoc投稿済み: {len(synced_ids)}件")
+
+    session_codoc = None
+    updated = 0
+    skipped = 0
+    failed = 0
+    for pid in synced_ids:
+        s = state[pid]
+        entry_id = s["codoc_entry_id"]
+        p = posts_by_id.get(pid)
+        if not p or _codoc_skip_post(p):
+            continue
+        info = infos_by_id.get(pid)
+        if not info:
+            continue
+        # 記事更新後のタイトル・価格
+        new_title = info.get("new_title") or p["title"]
+        payload = info.get("details", {}).get("payload") or {}
+        point_field = info.get("details", {}).get("point_field") or "post_price"
+        try:
+            new_price = int(payload.get(point_field) or 0)
+        except (TypeError, ValueError):
+            new_price = 0
+        if new_price < 100:
+            new_price = calculate_sales_point(p.get("sales_count") or 0)
+
+        # 差分判定（タイトル or 価格に変化があった場合のみ更新）
+        if (new_title == s.get("codoc_title")
+                and new_price == s.get("codoc_price")):
+            skipped += 1
+            continue
+
+        # 初回ログイン
+        if session_codoc is None:
+            session_codoc = codoc_login(WAKUST_EMAIL, WAKUST_PASSWORD)
+            if not session_codoc:
+                log.error("❌ codocログイン失敗、同期中止")
+                return
+
+        body_free = payload.get("edit_text_1", "") or ""
+        body_paywalled = payload.get("edit_text_2", "") or ""
+        binded_url = p.get("url", "")
+
+        if codoc_update_entry(session_codoc, entry_id, new_title,
+                              body_free, body_paywalled, new_price, binded_url):
+            log.info(f"  ✅ 更新 [{pid}→{entry_id}] {new_title} / {new_price}円")
+            state[pid]["codoc_title"] = new_title
+            state[pid]["codoc_price"] = new_price
+            state[pid]["codoc_updated_at"] = jst_strftime("%Y-%m-%d %H:%M:%S")
+            save_state(state)
+            updated += 1
+        else:
+            log.warning(f"  ⚠️ 更新失敗 [{pid}→{entry_id}]")
+            failed += 1
+        time.sleep(1)
+
+    log.info(f"📊 codoc同期完了: 更新{updated}件 / 差分なし{skipped}件 / 失敗{failed}件")
+    if session_codoc:
+        session_codoc.close()
+
+
+def _run_codoc_post_only():
+    """朝昼夜モードで呼ばれる。wakustログイン→codoc投稿→終了"""
+    log.info(f"\n{'='*55}")
+    log.info(f"🚀 codoc投稿モード ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+    session = login_wakust()
+    if not session:
+        log.error("❌ wakustログイン失敗のため処理を中断します")
+        sys.exit(1)
+    try:
+        run_codoc_post_new(session)
+    finally:
+        session.close()
+    log.info(f"\n✅ codoc投稿処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+
+
 def run_organize_sets(session, post_infos):
     """既存セット全削除→新規セット組成→プロフィールフリーリンク更新"""
     log.info(f"\n{'='*55}")
@@ -3897,6 +4092,12 @@ def run_update():
     except Exception as e:
         log.error(f"❌ セット再構築でエラー: {e}", exc_info=True)
 
+    # codoc投稿済み記事のタイトル/価格を同期
+    try:
+        run_codoc_sync(session, posts, post_infos)
+    except Exception as e:
+        log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
+
     session.close()
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
@@ -4123,7 +4324,10 @@ def run_title_only():
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
-    if CALENDAR_ONLY:
+    if CODOC_MODE == "post_new":
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [codoc投稿モード]")
+        _run_codoc_post_only()
+    elif CALENDAR_ONLY:
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
         run_calendar_only()
     elif TITLE_ONLY:
