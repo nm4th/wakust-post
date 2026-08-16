@@ -41,39 +41,59 @@ def codoc_login(email, password):
     session = requests.Session()
     session.headers.update({
         "User-Agent": _UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+        "Upgrade-Insecure-Requests": "1",
     })
     # 1. GET /login でCSRFトークン+セッションCookie取得
     token = _get_token(session, CODOC_LOGIN_URL)
     if not token:
         log.error("❌ codoc: ログインフォームトークン取得失敗")
         return None
-    # 2. POST /login
+    log.info(f"    🔧 codoc: token取得 cookies={list(session.cookies.keys())}")
+    # 2. POST /login (リダイレクト無しで結果を確認)
     try:
         r = session.post(CODOC_LOGIN_URL, data={
             "_token": token,
             "email": email,
             "password": password,
             "remember": "1",
-        }, headers={"Referer": CODOC_LOGIN_URL}, timeout=30, allow_redirects=True)
+        }, headers={
+            "Referer": CODOC_LOGIN_URL,
+            "Origin": CODOC_BASE,
+        }, timeout=30, allow_redirects=False)
     except requests.RequestException as e:
         log.error(f"❌ codoc: ログインリクエスト失敗: {e}")
         return None
-    # 3. 認証確認: /me/entries/create にアクセスして200かつ/loginにリダイレクトされないか
-    try:
-        chk = session.get(CODOC_CREATE_FORM_URL, timeout=30, allow_redirects=False)
-        if chk.status_code == 200 and "login" not in chk.url.lower():
-            log.info("✅ codocログイン成功")
+    log.info(f"    🔧 codoc: login POST → HTTP {r.status_code} "
+             f"location={r.headers.get('location', '')!r} "
+             f"cookies={list(session.cookies.keys())}")
+    # 302で /login 以外にリダイレクト → 成功
+    if r.status_code in (301, 302):
+        loc = r.headers.get("location", "")
+        if loc and "/login" not in loc:
+            log.info(f"✅ codocログイン成功 (login POSTのredirect先: {loc})")
             return session
-        # 302リダイレクトなら遷移先確認
-        if chk.status_code in (301, 302):
-            loc = chk.headers.get("location", "")
-            if "login" not in loc.lower():
-                log.info(f"✅ codocログイン成功 (redirect→{loc})")
-                return session
-        log.error(f"❌ codocログイン失敗 (chk: HTTP {chk.status_code} url={chk.url})")
-    except requests.RequestException as e:
-        log.error(f"❌ codoc: ログイン確認失敗: {e}")
+        # /login にリダイレクト = 認証失敗
+        log.error(f"❌ codoc: ログイン失敗（/loginにリダイレクト back） location={loc}")
+        # レスポンス本文からエラーメッセージを取得
+        try:
+            follow = session.get(loc if loc.startswith("http") else CODOC_BASE + loc,
+                                 timeout=15)
+            body = follow.text
+            m = re.search(r'<span[^>]*(?:invalid-feedback|error)[^>]*>([^<]+)</span>',
+                          body, re.I)
+            if m:
+                log.error(f"    🔧 エラーメッセージ: {m.group(1).strip()!r}")
+        except Exception:
+            pass
+        return None
+    # 200が返る場合、フォームが再描画されている可能性 → エラー
+    if r.status_code == 200:
+        snippet = r.text[:800].replace("\n", " ")
+        log.error(f"❌ codoc: ログイン失敗 (200再描画) body先頭800字: {snippet!r}")
+        return None
+    log.error(f"❌ codoc: 予期しないHTTPコード {r.status_code}")
     return None
 
 
