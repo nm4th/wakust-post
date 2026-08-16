@@ -181,31 +181,60 @@ def codoc_create_entry(session, title, body_free, body_paywalled, price,
     token = _get_token(session, CODOC_CREATE_FORM_URL)
     if not token:
         return None
+    # XSRF-TOKEN cookieがあればX-XSRF-TOKENヘッダーにセット(Laravel対応)
+    extra_headers = {
+        "Referer": CODOC_CREATE_FORM_URL,
+        "Origin": CODOC_BASE,
+    }
+    xsrf = session.cookies.get("XSRF-TOKEN", domain="codoc.jp")
+    if xsrf:
+        from urllib.parse import unquote
+        extra_headers["X-XSRF-TOKEN"] = unquote(xsrf)
     data = _entry_form_data(title, body_free, body_paywalled, price,
                              binded_url, token)
     try:
         r = session.post(CODOC_CREATE_POST_URL, data=data,
-                         headers={"Referer": CODOC_CREATE_FORM_URL},
+                         headers=extra_headers,
                          timeout=60, allow_redirects=True)
     except requests.RequestException as e:
         log.error(f"❌ codoc: 記事作成リクエスト失敗: {e}")
         return None
     if r.status_code not in (200, 302):
         log.error(f"❌ codoc: 記事作成失敗 (HTTP {r.status_code})")
-        log.warning(f"    🔧 body先頭500字: {r.text[:500]!r}")
+        log.warning(f"    🔧 body先頭800字: {r.text[:800]!r}")
         return None
     # 応答URLから entry_id を抽出
     # 通常は /me/entries/{id}/edit にリダイレクトされる
     m = re.search(r"/me/entries/(\d+)", r.url or "")
-    if m:
+    if m and m.group(1).isdigit():
         return m.group(1)
     # historyから探す
     for hist in getattr(r, "history", []):
         loc = hist.headers.get("location", "")
         m2 = re.search(r"/me/entries/(\d+)", loc)
-        if m2:
+        if m2 and m2.group(1).isdigit():
             return m2.group(1)
-    log.warning(f"    ⚠️ codoc: 応答URLからentry_id抽出失敗 (URL={r.url})")
+    # URLが/createに戻ってる = バリデーションエラー、本文からエラーメッセージ抽出
+    log.warning(f"    ⚠️ codoc: 応答URLからentry_id抽出失敗 (URL={r.url}, "
+                f"HTTP {r.status_code}, history={[h.status_code for h in r.history]})")
+    # エラーメッセージ抽出
+    try:
+        soup = BeautifulSoup(r.text, "html.parser")
+        # Laravelのバリデーションエラー
+        errors = []
+        for cls in ("invalid-feedback", "error", "alert-danger", "error-message-body"):
+            for el in soup.find_all(class_=re.compile(cls, re.I)):
+                txt = el.get_text(" ", strip=True)
+                if txt and len(txt) < 500:
+                    errors.append(f"[{cls}] {txt}")
+        if errors:
+            log.error("    🔧 エラーメッセージ:")
+            for e in errors[:10]:
+                log.error(f"      {e}")
+        # bodyの先頭も出力
+        log.warning(f"    🔧 body先頭1500字: {r.text[:1500]!r}")
+    except Exception as e:
+        log.warning(f"    ⚠️ エラー解析失敗: {e}")
     return None
 
 
