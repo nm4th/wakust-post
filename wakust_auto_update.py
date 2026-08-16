@@ -101,6 +101,9 @@ TITLE_ONLY = os.environ.get("TITLE_ONLY", "0") == "1"
 # CODOC_MODE: "post_new" = codocに未投稿記事から1件投稿（朝昼夜の3回/日実行想定）
 #             未設定/空 = 通常モード
 CODOC_MODE = os.environ.get("CODOC_MODE", "").strip()
+# CODOC_COOKIE: ブラウザで2FA突破後のCookie文字列
+# 形式: "XSRF-TOKEN=xxx; codoc_session=yyy; remember_web_...=zzz"
+CODOC_COOKIE = os.environ.get("CODOC_COOKIE", "").strip()
 
 
 # ============================================================
@@ -3307,9 +3310,21 @@ def _codoc_skip_post(post):
     return False
 
 
+def _codoc_login_any():
+    """CODOC_COOKIEがあればCookie注入、なければ通常ログイン"""
+    from wakust_codoc import codoc_login, codoc_login_via_cookie
+    if CODOC_COOKIE:
+        log.info("🍪 CODOC_COOKIE検出 → Cookie注入で認証")
+        session = codoc_login_via_cookie(CODOC_COOKIE)
+        if session:
+            return session
+        log.warning("⚠️ Cookie無効。通常ログインにフォールバック（2FA有効時は失敗）")
+    return codoc_login(WAKUST_EMAIL, WAKUST_PASSWORD)
+
+
 def run_codoc_post_new(session):
     """codocに未投稿記事のうち販売回数が最多のものを1件投稿する"""
-    from wakust_codoc import codoc_login, codoc_create_entry
+    from wakust_codoc import codoc_create_entry
     log.info(f"\n{'='*55}")
     log.info(f"📝 codoc新規投稿 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
@@ -3358,8 +3373,8 @@ def run_codoc_post_new(session):
         price = calculate_sales_point(target.get("sales_count") or 0)
     binded_url = target.get("url", "")
 
-    # codocログイン
-    session_codoc = codoc_login(WAKUST_EMAIL, WAKUST_PASSWORD)
+    # codocログイン (Cookie注入 or 通常ログイン)
+    session_codoc = _codoc_login_any()
     if not session_codoc:
         log.error("❌ codocログイン失敗")
         return
@@ -3393,7 +3408,7 @@ def run_codoc_post_new(session):
 
 def run_codoc_sync(session, posts, post_infos):
     """codoc投稿済み記事のタイトル/価格を最新に同期する（0時モード内で呼ばれる）"""
-    from wakust_codoc import codoc_login, codoc_update_entry
+    from wakust_codoc import codoc_update_entry
     log.info(f"\n{'='*55}")
     log.info(f"🔄 codoc投稿記事の同期 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
@@ -3442,7 +3457,7 @@ def run_codoc_sync(session, posts, post_infos):
 
         # 初回ログイン
         if session_codoc is None:
-            session_codoc = codoc_login(WAKUST_EMAIL, WAKUST_PASSWORD)
+            session_codoc = _codoc_login_any()
             if not session_codoc:
                 log.error("❌ codocログイン失敗、同期中止")
                 return

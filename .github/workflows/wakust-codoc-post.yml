@@ -32,6 +32,7 @@ jobs:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
           WAKUST_COOKIE: ${{ secrets.WAKUST_COOKIE }}
+          CODOC_COOKIE: ${{ secrets.CODOC_COOKIE }}
           CODOC_MODE: post_new
         run: python wakust_auto_update.py
 

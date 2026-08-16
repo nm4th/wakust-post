@@ -36,8 +36,8 @@ def _get_token(session, url):
         return None
 
 
-def codoc_login(email, password):
-    """codocにログインしてsessionを返す。失敗時Noneを返す"""
+def _build_session():
+    """codoc用のrequests sessionを構築（ヘッダー設定済み）"""
     session = requests.Session()
     session.headers.update({
         "User-Agent": _UA,
@@ -45,6 +45,58 @@ def codoc_login(email, password):
         "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
         "Upgrade-Insecure-Requests": "1",
     })
+    return session
+
+
+def _verify_session(session):
+    """/me/entries/create に GET して認証済みか判定。認証済みならTrue"""
+    try:
+        chk = session.get(CODOC_CREATE_FORM_URL, timeout=30, allow_redirects=False)
+    except requests.RequestException as e:
+        log.warning(f"    ⚠️ codoc: 認証確認エラー: {e}")
+        return False
+    if chk.status_code == 200:
+        return True
+    if chk.status_code in (301, 302):
+        loc = chk.headers.get("location", "")
+        # loginやtwo_factorにリダイレクトされたら未認証
+        if "login" in loc.lower() or "two_factor" in loc.lower():
+            return False
+        return True
+    return False
+
+
+def codoc_login_via_cookie(cookie_str):
+    """Cookie文字列からsessionを構築。認証OKならsession返却、失敗時None
+    cookie_str形式: "XSRF-TOKEN=xxx; codoc_session=yyy; ..."
+    """
+    session = _build_session()
+    for pair in cookie_str.split(";"):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        name, _, value = pair.partition("=")
+        name, value = name.strip(), value.strip()
+        if not name:
+            continue
+        try:
+            session.cookies.set(name, value, domain="codoc.jp")
+        except Exception as e:
+            log.warning(f"    ⚠️ codoc: Cookie設定失敗 [{name}]: {e}")
+    log.info(f"    🔧 codoc: 注入Cookie={list(session.cookies.keys())}")
+    if _verify_session(session):
+        log.info("✅ codocログイン成功 (Cookie注入)")
+        return session
+    log.warning("⚠️ codoc: Cookie無効/期限切れの可能性")
+    session.close()
+    return None
+
+
+def codoc_login(email, password):
+    """codocにログインしてsessionを返す。失敗時Noneを返す
+    2FA有効の場合は失敗する。その場合はcodoc_login_via_cookieを使うこと。
+    """
+    session = _build_session()
     # 1. GET /login でCSRFトークン+セッションCookie取得
     token = _get_token(session, CODOC_LOGIN_URL)
     if not token:
