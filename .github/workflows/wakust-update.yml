@@ -41,6 +41,7 @@ jobs:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
           WAKUST_COOKIE: ${{ secrets.WAKUST_COOKIE }}
+          CODOC_COOKIE: ${{ secrets.CODOC_COOKIE }}
           CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
           TITLE_ONLY: ${{ (github.event.schedule == '30 7 * * *' || inputs.title_only == true) && '1' || '0' }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
