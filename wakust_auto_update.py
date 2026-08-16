@@ -1465,10 +1465,11 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             if d >= start_date:
                 candidates.append((d, f"{month}/{day}"))
 
-    # パターン2: 「3/7 土 10:00〜」形式のテーブル（namexspa・bellee等）
+    # パターン2: 「3/7 土 10:00〜」形式のテーブル（namexspa・bellee・eldorado等）
     # ※各行が「日付 | 時刻 | 予約リンク」の縦型テーブル
     if not candidates:
         for table in soup.find_all("table"):
+            _matched_this_table = False
             for row in table.find_all("tr"):
                 cells = row.find_all("td")
                 if len(cells) < 2:
@@ -1478,15 +1479,23 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 m = re.search(r"(\d{1,2})/(\d{1,2})", date_text)
                 if not m:
                     continue
+                _matched_this_table = True
                 month, day = int(m.group(1)), int(m.group(2))
                 d = datetime(current_year, month, day)
                 if d < start_date:
                     continue
                 if "お休み" in info_text or "未定" in info_text:
+                    _saw_off[0] = True
+                    continue
+                if not info_text:
+                    # 空セル = 休み (このテーブル形式では空欄で「休み」を表現)
+                    _saw_off[0] = True
                     continue
                 if _has_work_info(info_text):
                     candidates.append((d, f"{month}/{day}"))
-            if candidates:
+            if _matched_this_table and (candidates or _saw_off[0]):
+                log.info(f"    📅 パターン2(縦型 日付|時刻|予約)で処理: "
+                         f"candidates={len(candidates)}件, saw_off={_saw_off[0]}")
                 break
 
     # パターンK: krc_cast_calendar形式（アダマス等）
