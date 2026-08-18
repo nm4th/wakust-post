@@ -183,17 +183,27 @@ python wakust_threads.py --tag NN --json      # JSON出力（API連携用）
 
 ### セットアップ
 
-1. **Threads アカウントをプロアカウントに切り替える**
-   Threads アプリ → 設定 → アカウント → プロアカウントに切り替える
-2. **[Meta for Developers](https://developers.facebook.com/) でアプリを作る**
+**プロアカウントへの切り替えは不要です。** Threads API に必要なのは
+Meta の開発者アカウントと「Threads Tester」への登録で、アカウント種別は問いません
+（プロアカウントが要るのは Instagram Graph API の方）。
+
+1. **[Meta for Developers](https://developers.facebook.com/) でアプリを作る**
    アプリ作成時にユースケースで **「Threads API へのアクセス」** を選ぶ
-3. **権限を追加する** — 最低限 `threads_basic` と `threads_content_publish`。
+2. **権限を追加する** — 最低限 `threads_basic` と `threads_content_publish`。
    分析も取るなら `threads_manage_insights` も追加
-4. **自分のアカウントを Threads テスターに追加**し、Threads 側で招待を承認する
+3. **自分を Threads Tester に追加する**
+   アプリ → アプリの役割 → テスター → 「ユーザーを追加」→
+   追加の役割で **Threads Tester** を選び、**Threads のユーザー名**を入力
+4. **Threads 側で招待を承認する**
+   Threads アプリ → 設定 → アカウント → ウェブサイトのアクセス許可 → 招待
 5. **ダッシュボードで短期トークンを発行**（有効期限1時間）。
    アプリのシークレットも控えておく
 6. **長期トークンに交換する**（下記コマンド）
 7. 出力された2つの値を GitHub の Secrets に登録する
+
+自分のアカウントにだけ投稿する用途なら、**アプリ審査も Tech Provider Verification も
+不要**です。テスターとして登録されたアカウントに対しては、審査前でもAPIが使えます。
+他人のアカウントを扱うツールとして公開する場合だけ、これらの審査が必要になります。
 
 ```bash
 pip install requests
