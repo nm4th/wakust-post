@@ -1,11 +1,11 @@
 name: Wakust Codoc Post New
 
 on:
-  schedule:
-    # 朝10:00 JST (UTC 01:00), 昼13:00 JST (UTC 04:00), 夜21:00 JST (UTC 12:00)
-    - cron: '0 1 * * *'
-    - cron: '0 4 * * *'
-    - cron: '0 12 * * *'
+  # 一時停止中：自動スケジュールは無効化。必要なら workflow_dispatch で手動実行のみ可能。
+  # schedule:
+  #   - cron: '0 1 * * *'   # 朝10:00 JST
+  #   - cron: '0 4 * * *'   # 昼13:00 JST
+  #   - cron: '0 12 * * *'  # 夜21:00 JST
   workflow_dispatch: {}
 
 jobs:
