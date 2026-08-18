@@ -1,0 +1,86 @@
+name: Wakust Threads Post
+
+# 掲載済み記事から投稿文を組み立てて Threads に投稿する。
+# 認証情報（THREADS_USER_ID / THREADS_ACCESS_TOKEN）が未設定のときは
+# dry-run になり、ログに文面が出るだけで投稿はされない。
+
+on:
+  schedule:
+    # 10:00 / 13:00 / 21:00 JST
+    - cron: '0 1 * * *'
+    - cron: '0 4 * * *'
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    inputs:
+      template:
+        description: '投稿テンプレート'
+        type: choice
+        options: [today, cheatsheet, week, new]
+        default: today
+      area:
+        description: 'エリアで絞る（空なら全エリア）'
+        type: string
+        default: ''
+      dry_run:
+        description: '投稿せず文面だけ確認する'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wakust-threads-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Pick template for this run
+        id: pick
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 1 * * *")  echo "template=today"      >> "$GITHUB_OUTPUT" ;;
+            "0 4 * * *")  echo "template=cheatsheet" >> "$GITHUB_OUTPUT" ;;
+            "0 12 * * *") echo "template=week"       >> "$GITHUB_OUTPUT" ;;
+            *)            echo "template=${{ inputs.template || 'today' }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Post to Threads
+        env:
+          # dry_run が true のときはトークンを渡さない → 自動的に dry-run になる
+          THREADS_USER_ID: ${{ inputs.dry_run && '' || secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ inputs.dry_run && '' || secrets.THREADS_ACCESS_TOKEN }}
+        run: |
+          python wakust_threads.py \
+            --template "${{ steps.pick.outputs.template }}" \
+            ${{ inputs.area && format('--area {0}', inputs.area) || '' }} \
+            --post
+
+      - name: Commit post history
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f wakust_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "📣 Threads投稿履歴 $(date -u +%Y-%m-%d_%H:%M)"
+            for i in 1 2 3 4; do
+              git pull --rebase origin main && git push origin HEAD:main && break
+              sleep $((2 ** i))
+            done
+          fi

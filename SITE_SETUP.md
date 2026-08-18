@@ -175,3 +175,60 @@ python wakust_threads.py --tag NN --json      # JSON出力（API連携用）
 
 締めの一言は `site_config.json` の `threads.closers` からローテーションします。
 同じ文面が続くとスパム判定されやすいので、文言は適宜足してください。
+
+## Threads への自動投稿
+
+`wakust_threads_api.py` が Threads Graph API を叩きます。
+コンテナ作成 → 公開 → リプライ の3ステップです。
+
+### セットアップ
+
+1. Threads アカウントをプロアカウントに切り替える
+2. [Meta for Developers](https://developers.facebook.com/) でアプリを作り、
+   Threads API のプロダクトを追加する
+3. `threads_basic` と `threads_content_publish` の権限を取得する
+4. 長期アクセストークン（有効期限60日）を発行する
+5. GitHub の Secrets に登録する
+
+| Secret | 内容 |
+|---|---|
+| `THREADS_USER_ID` | Threads のユーザーID（数値） |
+| `THREADS_ACCESS_TOKEN` | 長期アクセストークン |
+
+**トークンは60日で切れます。** `ThreadsClient.refresh_token()` で延長できるので、
+期限前に実行して Secrets を更新してください。
+
+### 誘導先の切り替え
+
+`site_config.json` の `threads.link_target` で変えられます。
+
+| 値 | リプライに入るURL |
+|---|---|
+| `wakust` | 記事単体は `source_url`（ワクストの記事URL）、一覧系は `wakust_landing_url` |
+| `site` | 自社サイトの絞り込み済み一覧URL（`?area=新宿&day=today`） |
+
+`link_target` が `wakust` で `wakust_landing_url` が空の場合、一覧系テンプレートは
+**リンクなしで投稿されます**（誤ったURLを貼らないため）。一覧から誘導したいときは
+ワクストの公開プロフィールURLなどを設定してください。
+
+### 実行
+
+```bash
+# 文面の確認だけ（投稿しない）
+python wakust_threads.py --template today
+
+# 実投稿。認証情報が無ければ自動的に dry-run になる
+THREADS_USER_ID=... THREADS_ACCESS_TOKEN=... \
+  python wakust_threads.py --template today --post
+
+# 残り投稿数の確認（1日250件まで）
+python wakust_threads_api.py
+```
+
+GitHub Actions の `Wakust Threads Post` が 10:00 / 13:00 / 21:00 JST に
+それぞれ `today` / `cheatsheet` / `week` を投稿します。
+同じ日に同じテンプレートを二度投げないよう、`wakust_state.json` の
+`_threads` に投稿履歴を残しています。
+
+手動実行では `dry_run` が既定で true なので、まず文面をログで確認してから
+false にして本番投稿してください。

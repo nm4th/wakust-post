@@ -71,10 +71,25 @@ def _filter(articles, area=None, day=None, tag=None):
 
 
 def _url(cfg, **params):
-    """絞り込み済みの一覧URLを組み立てる"""
+    """一覧向けの誘導先URLを組み立てる
+
+    link_target="site"   … 自社サイトの絞り込み済み一覧URL
+    link_target="wakust" … ワクストの着地URL（wakust_landing_url）
+    """
+    tcfg = cfg.get("threads") or {}
+    if tcfg.get("link_target") == "wakust":
+        return (tcfg.get("wakust_landing_url") or "").strip()
     base = cfg["base_url"] + "/"
     q = "&".join(f"{k}={quote(str(v))}" for k, v in params.items() if v)
     return base + ("?" + q if q else "")
+
+
+def _article_url(cfg, a):
+    """記事1件の誘導先URL"""
+    tcfg = cfg.get("threads") or {}
+    if tcfg.get("link_target") == "wakust":
+        return a.get("source_url") or (tcfg.get("wakust_landing_url") or "").strip()
+    return f'{cfg["base_url"]}/articles/{a["id"]}/'
 
 
 def _closer(cfg, seed):
@@ -89,9 +104,12 @@ def _compose(cfg, title, lines, closer, reply_url, note=None):
     if note:
         body += [note, ""]
     body.append(closer)
+    reply = ""
+    if reply_url:
+        reply = f'{tcfg.get("reply_lead", "詳細はこちら👇")}\n{reply_url}'
     return {
         "text": "\n".join(body).strip(),
-        "reply": f'{tcfg.get("reply_lead", "詳細はこちら👇")}\n{reply_url}',
+        "reply": reply,
         "url": reply_url,
     }
 
@@ -222,7 +240,7 @@ def tpl_new(cfg, articles, area=None):
         lines.append(f'タグ　{" / ".join(a["tags"][:5])}')
     return _compose(cfg, "レポート追加しました", lines,
                     _closer(cfg, int(a["id"][-2:] or 0)),
-                    f'{cfg["base_url"]}/articles/{a["id"]}/')
+                    _article_url(cfg, a))
 
 
 TEMPLATES = {
@@ -256,6 +274,8 @@ def main():
     ap.add_argument("--area", help="エリアで絞る（例: 新宿）")
     ap.add_argument("--tag", help="タグまとめも生成する（例: NN）")
     ap.add_argument("--json", action="store_true", help="JSONで出力")
+    ap.add_argument("--post", action="store_true",
+                    help="Threads APIで実際に投稿する（認証情報が無ければdry-run）")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -275,14 +295,68 @@ def main():
         print(json.dumps(posts, ensure_ascii=False, indent=2))
         return
 
+    if args.post:
+        _publish(posts)
+        return
+
     for p in posts:
         print("=" * 52)
         print(f'【{p.get("label", p["template"])}】  {len(p["text"])}文字')
         print("=" * 52)
         print(p["text"])
-        print("\n--- リプライに置く投稿 ---")
-        print(p["reply"])
+        if p["reply"]:
+            print("\n--- リプライに置く投稿 ---")
+            print(p["reply"])
         print()
+
+
+STATE_FILE = "wakust_state.json"
+
+
+def _load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def _save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def _publish(posts):
+    """Threads APIで投稿する。同じ日に同じテンプレートを二度投げない"""
+    from wakust_threads_api import ThreadsClient, ThreadsError
+
+    client = ThreadsClient()
+    left, total = client.remaining_quota()
+    if left is not None:
+        print(f"本日の残り投稿数: {left} / {total}")
+        if left <= 0:
+            print("投稿上限に達しています。中止します。")
+            return
+
+    state = _load_state()
+    posted = state.setdefault("_threads", {})
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+
+    for p in posts:
+        key = f'{today}:{p["template"]}'
+        if key in posted:
+            print(f'⏭️  投稿済みなのでスキップ: {p["template"]}')
+            continue
+        try:
+            post_id, reply_id = client.post_with_reply(p["text"], p["reply"])
+        except ThreadsError as e:
+            print(f'❌ 投稿失敗 [{p["template"]}]: {e}')
+            continue
+        posted[key] = {"post_id": post_id, "reply_id": reply_id,
+                       "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")}
+        _save_state(state)
 
 
 if __name__ == "__main__":
