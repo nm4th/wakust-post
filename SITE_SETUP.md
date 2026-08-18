@@ -144,3 +144,34 @@ CODOC_MODE=site_publish CODOC_COOKIE="..." WAKUST_COOKIE="..." \
 - **同じ記事が二重に掲載される** … 掲載済み判定は `wakust_state.json` と
   `site_content/articles/*.json` の両方で行っています。ワークフローが
   コミットに失敗していないか確認してください。
+
+## SNS投稿文の自動生成（wakust_threads.py）
+
+Threads / X に貼る投稿文を、掲載済みの記事データから組み立てます。
+投稿APIは叩かず、**文面を出力するだけ**です。
+
+```bash
+python wakust_threads.py                      # 全テンプレートを表示
+python wakust_threads.py --template today     # 本日出勤・料金順だけ
+python wakust_threads.py --area 新宿          # エリアで絞る
+python wakust_threads.py --tag NN --json      # JSON出力（API連携用）
+```
+
+| テンプレート | 内容 |
+|---|---|
+| `today` | 本日出勤を料金順（安→高）に並べる |
+| `cheatsheet` | 「まず安く試すなら → ◯◯」形式の目的別リスト |
+| `week` | 1週間分の出勤カレンダー |
+| `new` | 新着1件の告知 |
+| `--tag` | 指定タグで絞った一覧 |
+
+各テンプレートは **本文とリプライ文をセットで返します。** 本文にはリンクを入れず、
+自分の投稿へのリプライにURLを置く運用を想定しています（本文にリンクを入れると
+リーチが落ちると言われているため。Threads API ではリプライは投稿数上限に
+カウントされません）。
+
+リプライに入るURLは絞り込み済みの一覧URL（`?area=新宿&day=today` など）なので、
+投稿の内容とサイトの表示が一致します。
+
+締めの一言は `site_config.json` の `threads.closers` からローテーションします。
+同じ文面が続くとスパム判定されやすいので、文言は適宜足してください。
