@@ -4,9 +4,6 @@ on:
   schedule:
     # 毎日16:30 JSTに実行（UTC 07:30 = JST 16:30）タイトル＋回遊リストのみ
     - cron: '30 7 * * *'
-    # 毎日1:30 JSTに実行（UTC 16:30 = JST 01:30）フォールバック用
-    # cron-job.orgが0時に成功していたら直近90分以内なのでスキップ、失敗していたらここで実行される
-    - cron: '30 16 * * *'
   workflow_dispatch:
     inputs:
       calendar_only:
@@ -47,8 +44,6 @@ jobs:
           CODOC_COOKIE: ${{ secrets.CODOC_COOKIE }}
           CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
           TITLE_ONLY: ${{ (github.event.schedule == '30 7 * * *' || inputs.title_only == true) && '1' || '0' }}
-          # 1:30 JSTのnative cron発火時のみフォールバックモード（直近90分以内に成功していればskip）
-          FALLBACK_CHECK: ${{ github.event.schedule == '30 16 * * *' && '1' || '0' }}
           REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}

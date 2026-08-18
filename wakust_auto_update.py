@@ -104,9 +104,6 @@ CODOC_MODE = os.environ.get("CODOC_MODE", "").strip()
 # CODOC_COOKIE: ブラウザで2FA突破後のCookie文字列
 # 形式: "XSRF-TOKEN=xxx; codoc_session=yyy; remember_web_...=zzz"
 CODOC_COOKIE = os.environ.get("CODOC_COOKIE", "").strip()
-# FALLBACK_CHECK: "1" のとき、直近90分以内に0時フル更新が成功していたらskipする
-# （native cronがcron-job.orgのフォールバックとして走る用）
-FALLBACK_CHECK = os.environ.get("FALLBACK_CHECK", "0") == "1"
 
 
 # ============================================================
@@ -115,7 +112,6 @@ FALLBACK_CHECK = os.environ.get("FALLBACK_CHECK", "0") == "1"
 STATE_FILE          = "wakust_state.json"
 PV_LOG_DIR          = "logs"
 PV_LOG_FILE         = "logs/wakust_pv_log.csv"
-LAST_FULL_UPDATE_FILE = "logs/last_full_update.txt"
 BASE_URL            = "https://wakust.com"
 LOGIN_AJAX_URL      = "https://wakust.com/wp-content/themes/wakust/user_edit/login_mypage.php"
 POST_LIST_URL       = f"{BASE_URL}/mypage/?post_list"
@@ -3886,24 +3882,6 @@ def run_update():
     log.info(f"🔍 更新チェック開始 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
 
-    # フォールバックモード: 直近90分以内に成功していたらskip
-    # （native cronがcron-job.orgのフォールバックとして走る場合のみ有効）
-    if FALLBACK_CHECK and os.path.exists(LAST_FULL_UPDATE_FILE):
-        try:
-            with open(LAST_FULL_UPDATE_FILE, "r", encoding="utf-8") as f:
-                ts_str = f.read().strip()
-            last_ts = datetime.fromisoformat(ts_str)
-            if last_ts.tzinfo is None:
-                last_ts = last_ts.replace(tzinfo=timezone.utc)
-            elapsed_min = (datetime.now(timezone.utc) - last_ts).total_seconds() / 60
-            if elapsed_min < 90:
-                log.info(f"⏭️ フォールバックskip: {elapsed_min:.1f}分前に成功済み "
-                         f"(last={ts_str}) → 何もせず終了")
-                sys.exit(0)
-            log.info(f"🔁 フォールバック実行: 前回成功から {elapsed_min:.1f}分経過（90分超）")
-        except Exception as e:
-            log.warning(f"⚠️ last_full_update.txt 読取失敗（続行）: {e}")
-
     session = login_wakust()
     if not session:
         log.error("❌ ログイン失敗のため処理を中断します（GitHub Actionsで失敗扱い）")
@@ -4145,15 +4123,6 @@ def run_update():
     #     log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
 
     session.close()
-
-    # フォールバック用: 成功タイムスタンプを記録（UTC ISO形式）
-    try:
-        os.makedirs(PV_LOG_DIR, exist_ok=True)
-        with open(LAST_FULL_UPDATE_FILE, "w", encoding="utf-8") as f:
-            f.write(datetime.now(timezone.utc).isoformat())
-    except Exception as e:
-        log.warning(f"⚠️ last_full_update.txt 書込失敗: {e}")
-
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
 
