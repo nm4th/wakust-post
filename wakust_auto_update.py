@@ -3780,10 +3780,11 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
     if not dates and not is_today:
         if saw_off:
             # スケジュール取得成功、全休みまたは未来出勤なし
-            # → 未来の出勤日が急に休みになることは稀なので、既存のタイトルを維持
+            # → 未来の出勤日が急に休みになることは稀なので、既存タイトルはほぼ維持
             #   (site側の一時的な不整合や表示週の違いの可能性)
-            _log("info", f"    ✅ スケジュール全休み確認 → 既存タイトルを維持（変更なし）")
-            new_title = post["title"]  # そのまま
+            # ただし本日出勤していないので #本日出勤 タグだけは剥がす
+            _log("info", f"    ✅ スケジュール全休み確認 → 既存タイトル維持（#本日出勤タグのみ除去）")
+            new_title = _strip_today_tag(post["title"])
             return {
                 "post":      post,
                 "details":   details,
