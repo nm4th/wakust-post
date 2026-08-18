@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import csv
+import glob
 import html as html_module
 import logging
 import math
@@ -3636,6 +3637,91 @@ def _site_fetch_tags_image(session, post):
         return [], None
 
 
+def run_meta_export(session):
+    """SNS投稿用に、記事の「メタデータだけ」を書き出す
+
+    codocには一切触れず、有料部分(edit_text_2)も無料部分(edit_text_1)も
+    保存しない。タイトル・エリア・タグ・出勤日・価格・販売回数と、
+    ワクストの記事URLだけを持つ。Threads投稿はこれだけで組み立てられる。
+    """
+    log.info(f"\n{'='*55}")
+    log.info(f"🗂️  記事メタデータの書き出し ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    all_posts = fetch_post_list(session)
+    if not all_posts:
+        log.error("❌ 記事一覧が空、書き出し中止")
+        return
+
+    os.makedirs(SITE_CONTENT_DIR, exist_ok=True)
+    written = skipped = 0
+    seen_ids = set()
+    for p in all_posts:
+        if _codoc_skip_post(p):
+            skipped += 1
+            continue
+        seen_ids.add(p["id"])
+        path = os.path.join(SITE_CONTENT_DIR, f"{p['id']}.json")
+        prev = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    prev = json.load(f)
+            except (OSError, ValueError):
+                prev = {}
+
+        category = prev.get("category") or "その他"
+        article = {
+            "id": p["id"],
+            "title": p["title"],
+            "category": category,
+            "area": _site_area_of(category),
+            "tags": prev.get("tags", []),
+            "shift_dates": _shift_dates_iso(p["title"]),
+            "sales_count": p.get("sales_count") or 0,
+            "pv_total": p.get("pv_total") or 0,
+            "price": prev.get("price") or calculate_sales_point(p.get("sales_count") or 0),
+            # 本文は保存しない（無料部分・有料部分ともに書き出さない）
+            "free_html": "",
+            "image_url": prev.get("image_url") or "",
+            "codoc_entry_id": prev.get("codoc_entry_id", ""),
+            "codoc_entry_code": prev.get("codoc_entry_code", ""),
+            "source_url": p.get("url", ""),
+            "published_at": prev.get("published_at") or p.get("posted_at")
+                            or jst_strftime("%Y-%m-%d %H:%M:%S"),
+            "content_updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(article, f, ensure_ascii=False, indent=2)
+        written += 1
+
+    # 非公開・予約になった記事のJSONは消す（一覧に出したままにしない）
+    removed = 0
+    for path in glob.glob(os.path.join(SITE_CONTENT_DIR, "*.json")):
+        pid = os.path.splitext(os.path.basename(path))[0]
+        if pid not in seen_ids:
+            os.remove(path)
+            removed += 1
+
+    log.info(f"📊 メタデータ書き出し完了: {written}件 / 対象外{skipped}件 / 削除{removed}件")
+
+
+def _run_meta_export_only():
+    """メタデータ書き出しモード。codocには触れない"""
+    log.info(f"\n{'='*55}")
+    log.info(f"🚀 メタデータ書き出しモード ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+    session = login_wakust()
+    if not session:
+        log.error("❌ wakustログイン失敗のため処理を中断します")
+        sys.exit(1)
+    try:
+        run_meta_export(session)
+    finally:
+        session.close()
+    log.info(f"\n✅ 書き出し完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+
+
 def run_site_publish(session, limit=1):
     """自社サイト未掲載の記事から販売回数が多い順に codoc エントリーを作成し、
     サイト用の記事JSONを書き出す"""
@@ -4702,7 +4788,10 @@ def run_title_only():
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
-    if CODOC_MODE == "site_publish":
+    if CODOC_MODE == "meta_export":
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [メタデータ書き出しモード]")
+        _run_meta_export_only()
+    elif CODOC_MODE == "site_publish":
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [自社サイト掲載モード]")
         _run_site_publish_only()
     elif CODOC_MODE == "site_build":

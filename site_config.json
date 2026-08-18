@@ -43,6 +43,7 @@
       "10": "today",
       "13": "cheatsheet",
       "21": "week"
-    }
+    },
+    "show_names": false
   }
 }

@@ -1,0 +1,67 @@
+name: Wakust Meta Export
+
+# SNS投稿用に、記事の「メタデータだけ」をワクストから書き出す。
+# codocには一切触れず、本文（無料部分・有料部分とも）も保存しない。
+# 保存するのは タイトル / エリア / タグ / 出勤日 / 価格 / 販売回数 / 記事URL のみ。
+
+on:
+  schedule:
+    # 毎朝 9:30 JST（Threads投稿の前に最新化しておく）
+    - cron: '30 0 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wakust-meta-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Export metadata
+        env:
+          WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
+          WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
+          WAKUST_COOKIE: ${{ secrets.WAKUST_COOKIE }}
+          CODOC_MODE: meta_export
+        run: python wakust_auto_update.py
+
+      - name: Commit metadata
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add site_content/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "🗂️ 記事メタデータ更新 $(date -u +%Y-%m-%d)"
+            for i in 1 2 3 4; do
+              git pull --rebase origin main && git push origin HEAD:main && break
+              sleep $((2 ** i))
+            done
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wakust-meta-export-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 14

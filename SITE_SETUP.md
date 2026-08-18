@@ -232,3 +232,48 @@ GitHub Actions の `Wakust Threads Post` が 10:00 / 13:00 / 21:00 JST に
 
 手動実行では `dry_run` が既定で true なので、まず文面をログで確認してから
 false にして本番投稿してください。
+
+## 有料本文の扱い（どこにも出していないことの確認）
+
+有料部分（ワクストの `edit_text_2`）を読むのは、**codoc にエントリーを作る処理だけ**です。
+`wakust_site.py` / `wakust_threads.py` / `wakust_threads_api.py` は
+`edit_text_2` も `body_paywalled` も一切参照していません。
+
+```bash
+# 確認コマンド
+grep -n "body_paywalled\|edit_text_2" wakust_site.py wakust_threads.py wakust_threads_api.py
+# → 何も出なければ、サイト出力にもSNS投稿にも有料本文は入っていない
+```
+
+### SNS投稿だけを回す構成（codocを使わない）
+
+ワクストに誘導するだけなら、codoc も自社サイトも経由する必要がありません。
+`CODOC_MODE=meta_export` は、**本文を一切保存せず**メタデータだけを書き出します。
+
+| 保存する | 保存しない |
+|---|---|
+| タイトル / エリア / タグ / 出勤日 / 価格 / 販売回数 / ワクストの記事URL | 有料部分・無料部分の本文、codocエントリー |
+
+`Wakust Meta Export` ワークフローが毎朝 9:30 JST に実行され、その結果を使って
+`Wakust Threads Post` が投稿します。codoc関連のワークフロー
+（`Wakust Site Publish` / `Wakust Site Deploy`）を止めても、SNS投稿は動きます。
+
+### 投稿に名前を出さない
+
+`site_config.json` の `threads.show_names` を `false`（既定）にすると、
+投稿から嬢の名前が消え、代わりにタグで表されます。
+
+```
+全エリア 本日8/18(火)出勤 料金順（安→高）
+
+¥1,000　NN / 巨乳（新宿）
+¥1,200　PZ / 巨乳（池袋）
+```
+
+出勤カレンダーも、名前ではなくエリアごとの人数になります。
+
+```
+8/19(水)　池袋2名・新宿2名
+```
+
+`true` にすると名前入り（`【8/20,21出勤】ゆい Fカップ` → `ゆい`）になります。

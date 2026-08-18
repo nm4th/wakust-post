@@ -46,6 +46,19 @@ def display_name(title):
     return name or (t[:12] if t else "（名前不明）")
 
 
+def label_of(cfg, a):
+    """投稿に出す見出し。show_names=False なら名前を伏せてタグで表す
+
+    名前を出さない場合、「誰か」は伏せたまま「どんな子か」だけ伝える形にする。
+    """
+    if (cfg.get("threads") or {}).get("show_names"):
+        return display_name(a["title"])
+    tags = a.get("tags") or []
+    if tags:
+        return " / ".join(tags[:3])
+    return a.get("area") or "―"
+
+
 def today_iso(offset=0):
     return (datetime.now(JST).date() + timedelta(days=offset)).isoformat()
 
@@ -126,7 +139,7 @@ def tpl_today(cfg, articles, area=None):
     items.sort(key=lambda a: int(a.get("price") or 0))
     limit = (cfg.get("threads") or {}).get("max_items", 8)
     label = area or "全エリア"
-    lines = [f'{yen(a.get("price"))}　{display_name(a["title"])}（{a.get("area")}）'
+    lines = [f'{yen(a.get("price"))}　{label_of(cfg, a)}（{a.get("area")}）'
              for a in items[:limit]]
     d = datetime.now(JST).date()
     note = f"本日は{len(items)}名が出勤。"
@@ -179,7 +192,7 @@ def tpl_cheatsheet(cfg, articles, area=None):
     for label, a, extra in picks[:limit]:
         pad = "　" * (width - len(label))
         tail = f"（{extra}）" if extra else ""
-        lines.append(f'・{label}{pad}　→　{display_name(a["title"])}{tail}')
+        lines.append(f'・{label}{pad}　→　{label_of(cfg, a)}{tail}')
     return _compose(
         cfg, f'{area or "全エリア"} 目的別チートシート',
         lines, _closer(cfg, len(items)), _url(cfg, area=area))
@@ -190,16 +203,27 @@ def tpl_week(cfg, articles, area=None):
     items = _filter(articles, area=area)
     if not items:
         return None
+    show_names = (cfg.get("threads") or {}).get("show_names")
     lines = []
     for i in range(7):
         d = today_iso(i)
-        names = [display_name(a["title"]) for a in items
-                 if d in (a.get("shift_dates") or [])]
-        if not names:
+        day_items = [a for a in items if d in (a.get("shift_dates") or [])]
+        if not day_items:
             continue
-        shown = "・".join(names[:6])
-        more = f" 他{len(names) - 6}名" if len(names) > 6 else ""
-        lines.append(f"{fmt_date(d)}　{shown}{more}")
+        if show_names:
+            names = [display_name(a["title"]) for a in day_items]
+            body = "・".join(names[:6])
+            if len(names) > 6:
+                body += f" 他{len(names) - 6}名"
+        else:
+            # 名前は出さず、エリアごとの人数だけ載せる
+            by_area = {}
+            for a in day_items:
+                by_area[a.get("area") or "その他"] = \
+                    by_area.get(a.get("area") or "その他", 0) + 1
+            body = "・".join(f"{k}{v}名" for k, v in
+                            sorted(by_area.items(), key=lambda kv: -kv[1]))
+        lines.append(f"{fmt_date(d)}　{body}")
     if not lines:
         return None
     return _compose(
@@ -216,7 +240,7 @@ def tpl_tag(cfg, articles, tag, area=None):
         return None
     items.sort(key=lambda a: int(a.get("price") or 0))
     limit = (cfg.get("threads") or {}).get("max_items", 8)
-    lines = [f'{yen(a.get("price"))}　{display_name(a["title"])}（{a.get("area")}）'
+    lines = [f'{yen(a.get("price"))}　{label_of(cfg, a)}（{a.get("area")}）'
              for a in items[:limit]]
     scope = f"{area} " if area else ""
     return _compose(
@@ -233,10 +257,11 @@ def tpl_new(cfg, articles, area=None):
     a = items[0]
     dates = a.get("shift_dates") or []
     tcfg = cfg.get("threads") or {}
-    lines = [f'{display_name(a["title"])}（{a.get("area")}）',
+    lines = [f'{label_of(cfg, a)}（{a.get("area")}）',
              f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}',
              f'料金　{yen(a.get("price"))}']
-    if a.get("tags"):
+    # show_names=False のときは見出しがタグなので、重ねて出さない
+    if a.get("tags") and (cfg.get("threads") or {}).get("show_names"):
         lines.append(f'タグ　{" / ".join(a["tags"][:5])}')
     return _compose(cfg, "レポート追加しました", lines,
                     _closer(cfg, int(a["id"][-2:] or 0)),
