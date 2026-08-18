@@ -1,0 +1,46 @@
+name: Wakust Threads Token Check
+
+# Threads の長期アクセストークンは60日で失効し、切れると延長できない。
+# 週1で生存確認し、死んでいたらワークフローを失敗させて通知を飛ばす。
+
+on:
+  schedule:
+    # 毎週月曜 9:00 JST
+    - cron: '0 0 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Check token
+        env:
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$THREADS_ACCESS_TOKEN" ]; then
+            echo "::notice::THREADS_ACCESS_TOKEN が未設定です（Threads投稿はdry-runのまま）"
+            exit 0
+          fi
+          if ! python wakust_threads_setup.py check; then
+            echo "::error::Threadsのアクセストークンが無効です。" \
+                 "python wakust_threads_setup.py exchange で取り直して" \
+                 "Secrets の THREADS_ACCESS_TOKEN を更新してください"
+            exit 1
+          fi

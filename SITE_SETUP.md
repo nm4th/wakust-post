@@ -183,12 +183,45 @@ python wakust_threads.py --tag NN --json      # JSON出力（API連携用）
 
 ### セットアップ
 
-1. Threads アカウントをプロアカウントに切り替える
-2. [Meta for Developers](https://developers.facebook.com/) でアプリを作り、
-   Threads API のプロダクトを追加する
-3. `threads_basic` と `threads_content_publish` の権限を取得する
-4. 長期アクセストークン（有効期限60日）を発行する
-5. GitHub の Secrets に登録する
+1. **Threads アカウントをプロアカウントに切り替える**
+   Threads アプリ → 設定 → アカウント → プロアカウントに切り替える
+2. **[Meta for Developers](https://developers.facebook.com/) でアプリを作る**
+   アプリ作成時にユースケースで **「Threads API へのアクセス」** を選ぶ
+3. **権限を追加する** — 最低限 `threads_basic` と `threads_content_publish`。
+   分析も取るなら `threads_manage_insights` も追加
+4. **自分のアカウントを Threads テスターに追加**し、Threads 側で招待を承認する
+5. **ダッシュボードで短期トークンを発行**（有効期限1時間）。
+   アプリのシークレットも控えておく
+6. **長期トークンに交換する**（下記コマンド）
+7. 出力された2つの値を GitHub の Secrets に登録する
+
+```bash
+pip install requests
+python wakust_threads_setup.py exchange \
+  --short-token "短期トークン" --app-secret "アプリのシークレット"
+```
+
+```
+✅ 取得できました。GitHub の Secrets に以下を登録してください。
+
+  THREADS_USER_ID       1784...
+  THREADS_ACCESS_TOKEN  THQVJ...
+
+  アカウント : @masa08460
+  有効期限   : 約60.0日
+```
+
+### トークンの期限管理
+
+**長期トークンは60日で失効し、切れた後は延長できません。** 切れる前に延長します。
+
+```bash
+THREADS_ACCESS_TOKEN=... python wakust_threads_setup.py refresh   # 60日延長
+THREADS_ACCESS_TOKEN=... python wakust_threads_setup.py check     # 生存確認＋残り投稿数
+```
+
+`Wakust Threads Token Check` が毎週月曜9:00 JSTに生存確認をして、
+トークンが死んでいたらワークフローを失敗させて通知します。
 
 | Secret | 内容 |
 |---|---|
