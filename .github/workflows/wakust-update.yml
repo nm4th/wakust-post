@@ -4,6 +4,8 @@ on:
   schedule:
     # 毎日16:30 JSTに実行（UTC 07:30 = JST 16:30）タイトル＋回遊リストのみ
     - cron: '30 7 * * *'
+    # 毎日0:00 JSTに実行（UTC 15:00 = JST 00:00）フル更新（cron-job.orgが落ちてもGitHub native cronで実行）
+    - cron: '0 15 * * *'
   workflow_dispatch:
     inputs:
       calendar_only:

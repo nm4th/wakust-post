@@ -4116,11 +4116,11 @@ def run_update():
     except Exception as e:
         log.error(f"❌ セット再構築でエラー: {e}", exc_info=True)
 
-    # codoc投稿済み記事のタイトル/価格を同期
-    try:
-        run_codoc_sync(session, posts, post_infos)
-    except Exception as e:
-        log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
+    # codoc同期は一時停止中
+    # try:
+    #     run_codoc_sync(session, posts, post_infos)
+    # except Exception as e:
+    #     log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
 
     session.close()
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
@@ -4349,8 +4349,9 @@ def run_title_only():
 # ============================================================
 if __name__ == "__main__":
     if CODOC_MODE == "post_new":
-        log.info(f"🚀 ワクスト自動更新スクリプト起動 [codoc投稿モード]")
-        _run_codoc_post_only()
+        # codoc投稿は一時停止中
+        log.info(f"⏸️ codoc投稿モードは一時停止中です（何もせず終了）")
+        sys.exit(0)
     elif CALENDAR_ONLY:
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
         run_calendar_only()
