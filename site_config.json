@@ -36,7 +36,7 @@
       "この並びは毎日更新してます。保存版📌",
       "気になる子がいたら早めに。ブクマ推奨📑"
     ],
-    "reply_lead": "一覧・絞り込みはこちら👇",
+    "reply_lead": "詳細はこちら👇",
     "link_target": "wakust",
     "wakust_landing_url": "",
     "post_schedule": {
@@ -44,6 +44,8 @@
       "13": "cheatsheet",
       "21": "week"
     },
-    "show_names": false
-  }
+    "show_names": false,
+    "profile_cta": "詳細はプロフィールのリンクから"
+  },
+  "site_enabled": false
 }

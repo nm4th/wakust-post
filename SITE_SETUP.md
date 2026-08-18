@@ -277,3 +277,28 @@ grep -n "body_paywalled\|edit_text_2" wakust_site.py wakust_threads.py wakust_th
 ```
 
 `true` にすると名前入り（`【8/20,21出勤】ゆい Fカップ` → `ゆい`）になります。
+
+## 現在の構成（ワクスト誘導・codoc停止）
+
+```
+ワクスト（記事の原本・販売もここ）
+   │  タイトル / エリア / タグ / 出勤日 / 価格 / 販売回数 / 記事URL
+   ▼  CODOC_MODE=meta_export  ※本文は保存しない
+site_content/articles/*.json
+   ▼  wakust_threads.py
+Threads 投稿（名前は伏せ、タグで表現）
+   └─ 記事1件の投稿 → リプライにワクストの記事URL
+   └─ 一覧系の投稿   → リンクなし。「詳細はプロフィールのリンクから」
+```
+
+| ワークフロー | 状態 |
+|---|---|
+| `Wakust Meta Export` | 稼働（毎朝9:30 JST） |
+| `Wakust Threads Post` | 稼働（10:00 / 13:00 / 21:00 JST） |
+| `Wakust Auto Update` | 稼働（0:00 / 16:30 JST） |
+| `Wakust Site Publish` | **停止**（手動実行のみ残置） |
+| `Wakust Site Deploy` | **停止**（手動実行のみ残置） |
+
+codoc掲載と自社サイトは `site_config.json` の `site_enabled: false` で切ってあります。
+コードは残してあるので、再開したくなったら `site_enabled` を `true` に戻し、
+各ワークフローの `schedule` / `push` トリガーのコメントを外すだけです。

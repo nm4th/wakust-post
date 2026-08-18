@@ -3,14 +3,16 @@ name: Wakust Site Deploy
 # site_content/ の記事JSONから自社サイトを生成し、GitHub Pages に公開する。
 # 事前準備: リポジトリ Settings → Pages → Source を "GitHub Actions" にすること。
 
+# ⏸ 停止中: 自社サイトの公開は行わない（ワクストへ誘導する方針のため）。
+# 再開する場合は push トリガーのコメントを外すこと。手動実行は今も可能。
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'site_content/**'
-      - 'wakust_site.py'
-      - 'site_config.json'
-      - '.github/workflows/wakust-site-deploy.yml'
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'site_content/**'
+  #     - 'wakust_site.py'
+  #     - 'site_config.json'
+  #     - '.github/workflows/wakust-site-deploy.yml'
   workflow_dispatch: {}
 
 permissions:

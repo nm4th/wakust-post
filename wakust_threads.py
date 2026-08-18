@@ -120,6 +120,11 @@ def _compose(cfg, title, lines, closer, reply_url, note=None):
     reply = ""
     if reply_url:
         reply = f'{tcfg.get("reply_lead", "詳細はこちら👇")}\n{reply_url}'
+    else:
+        # 貼るURLが無い投稿は、プロフィールのリンクへ誘導する
+        cta = (tcfg.get("profile_cta") or "").strip()
+        if cta:
+            body.append(cta)
     return {
         "text": "\n".join(body).strip(),
         "reply": reply,

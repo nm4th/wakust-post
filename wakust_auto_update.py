@@ -3533,6 +3533,14 @@ def _run_codoc_post_only():
 SITE_CONTENT_DIR = "site_content/articles"
 
 
+def _site_enabled():
+    """自社サイト/codoc掲載を使うかどうか"""
+    try:
+        return bool(_site_config().get("site_enabled", True))
+    except Exception:
+        return False
+
+
 def _site_config():
     """site_config.json を読み込む（wakust_site と同じローダーを使う）"""
     from wakust_site import load_config
@@ -4551,16 +4559,19 @@ def run_update():
     except Exception as e:
         log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
 
-    # 自社サイト掲載済み記事のタイトル/価格/無料部分を同期 → サイト再生成
-    try:
-        run_site_sync(session, posts, post_infos)
-    except Exception as e:
-        log.error(f"❌ 自社サイト同期でエラー: {e}", exc_info=True)
-    try:
-        from wakust_site import build
-        build()
-    except Exception as e:
-        log.error(f"❌ サイト生成でエラー: {e}", exc_info=True)
+    # 自社サイト掲載済み記事の同期 → サイト再生成（site_enabled=true のときだけ）
+    if _site_enabled():
+        try:
+            run_site_sync(session, posts, post_infos)
+        except Exception as e:
+            log.error(f"❌ 自社サイト同期でエラー: {e}", exc_info=True)
+        try:
+            from wakust_site import build
+            build()
+        except Exception as e:
+            log.error(f"❌ サイト生成でエラー: {e}", exc_info=True)
+    else:
+        log.info("⏸ 自社サイトは無効（site_config.json の site_enabled=false）")
 
     session.close()
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")

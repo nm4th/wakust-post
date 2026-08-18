@@ -7,12 +7,14 @@ name: Wakust Site Publish
 #   4. コミットをトリガーに Wakust Site Deploy が Pages へ公開する
 # 有料本文は codoc 側にのみ保存され、リポジトリにも公開HTMLにも出ない。
 
+# ⏸ 停止中: ワクストへ誘導する方針にしたため、codocへの掲載は自動実行しない。
+# 再開する場合は schedule のコメントを外すこと。手動実行は今も可能。
 on:
-  schedule:
-    # 朝10:00 JST (UTC 01:00), 昼13:00 JST (UTC 04:00), 夜21:00 JST (UTC 12:00)
-    - cron: '0 1 * * *'
-    - cron: '0 4 * * *'
-    - cron: '0 12 * * *'
+  # schedule:
+  #   # 朝10:00 JST (UTC 01:00), 昼13:00 JST (UTC 04:00), 夜21:00 JST (UTC 12:00)
+  #   - cron: '0 1 * * *'
+  #   - cron: '0 4 * * *'
+  #   - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
       publish_limit:
