@@ -52,10 +52,19 @@ jobs:
           git add site_content/ || true
           if ! git diff --cached --quiet; then
             git commit -m "🗂️ 記事メタデータ更新 $(date -u +%Y-%m-%d)"
+            pushed=0
             for i in 1 2 3 4; do
-              git pull --rebase origin main && git push origin HEAD:main && break
+              if git pull --rebase origin main && git push origin HEAD:main; then
+                pushed=1; break
+              fi
               sleep $((2 ** i))
             done
+            # pushの失敗を握りつぶさない（403などに気づけなくなるため）
+            if [ "$pushed" != "1" ]; then
+              echo "::error::git push に失敗しました。Settings → Actions → General →" \
+                   "Workflow permissions が 'Read and write permissions' か確認してください"
+              exit 1
+            fi
           fi
 
       - name: Upload logs
