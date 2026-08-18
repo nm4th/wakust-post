@@ -207,9 +207,26 @@ python wakust_threads.py --tag NN --json      # JSON出力（API連携用）
 | `wakust` | 記事単体は `source_url`（ワクストの記事URL）、一覧系は `wakust_landing_url` |
 | `site` | 自社サイトの絞り込み済み一覧URL（`?area=新宿&day=today`） |
 
-`link_target` が `wakust` で `wakust_landing_url` が空の場合、一覧系テンプレートは
-**リンクなしで投稿されます**（誤ったURLを貼らないため）。一覧から誘導したいときは
-ワクストの公開プロフィールURLなどを設定してください。
+一覧系の着地先には **ワクストの公開プロフィール** を設定しています。
+
+```
+https://wakust.com/user/Risingnoboru/
+```
+
+このURLは固定のまま、**中身が毎日0時に更新されます**。`run_organize_sets()` の
+最後で `_update_profile_with_today_sets()` が走り、プロフィールのフリーリンク5枠を
+本日出勤セット（東京都内・新宿・池袋・神奈川・埼玉）に張り替えているためです。
+
+Threads のプロフィール欄（bioは最大5リンク）にもこのURLを置いてください。
+**Threads API にはプロフィールを書き換える権限が存在しない**ので、bioの自動更新は
+できません。「固定URLを置いて、その先の中身を毎日更新する」形にすることで、
+同じ効果を追加実装ゼロで実現しています。
+
+セットURL（`https://wakust.com/setlist/?set_id=...`）を直接bioに置いてはいけません。
+0時に全セットを削除・再作成しているので `set_id` が毎日変わり、翌日には死にます。
+
+`wakust_landing_url` が空の場合、一覧系テンプレートは**リンクなしで投稿され**、
+代わりに `profile_cta`（「詳細はプロフィールのリンクから」）が本文末尾に付きます。
 
 ### 実行
 
