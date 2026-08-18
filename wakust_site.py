@@ -5,9 +5,15 @@ site_content/articles/*.json を読み込み、codoc の貼り付けタグを埋
 
   python wakust_site.py
 
+サイトの主目的は「探しやすさ」。一覧ページはキーワード検索・出勤日・エリア・
+タグでの絞り込みと並び替えができる。JavaScriptはDOM上のカードを出し分ける
+だけなので、JSを切っていても全記事が見える（＝クローラも全記事を読める）。
+
 出力物:
-  site/index.html               記事一覧
-  site/articles/{id}.html       記事ページ（無料部分 + codocペイウォール）
+  site/index.html               記事一覧（検索・絞り込み）
+  site/articles/{id}/           記事ページ（無料部分 + codocペイウォール）
+  site/area/{slug}/             エリア別一覧（SEO用）
+  site/tag/{slug}/              タグ別一覧（SEO用）
   site/tokushoho.html           特定商取引法に基づく表記
   site/privacy.html             プライバシーポリシー
   site/assets/style.css
@@ -25,6 +31,7 @@ import glob
 import html
 import shutil
 import logging
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("wakust.site")
@@ -33,9 +40,21 @@ if not log.handlers:
 
 JST = timezone(timedelta(hours=9))
 CONFIG_FILE = "site_config.json"
+WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
+
+# エリア名 → URLスラッグ（日本語ディレクトリを避けたいので固定表を持つ）
+AREA_SLUGS = {
+    "東京都内": "tokyo", "東京都": "tokyo", "新宿": "shinjuku", "池袋": "ikebukuro",
+    "神奈川": "kanagawa", "神奈川県": "kanagawa", "埼玉": "saitama",
+    "埼玉県": "saitama", "千葉": "chiba", "千葉県": "chiba", "多摩": "tama",
+    "その他": "other",
+}
+# 一覧に最初から出すタグの数（残りは「すべてのタグ」で展開）
+TAG_CHIP_LIMIT = 24
+
 
 # ============================================================
-# テンプレート補助（CSSの波括弧と衝突しないよう {{key}} 形式）
+# テンプレート補助（CSS/JSの波括弧と衝突しないよう {{key}} 形式）
 # ============================================================
 def render(tpl, **kw):
     out = tpl
@@ -45,7 +64,32 @@ def render(tpl, **kw):
 
 
 def esc(s):
-    return html.escape(s or "", quote=True)
+    return html.escape(str(s or ""), quote=True)
+
+
+# ファイル名に使えない文字だけを落とす（日本語はそのまま残す）
+_UNSAFE_PATH = re.compile(r'[/\\?%*:|"<>\x00-\x1f]')
+
+
+def slugify(name, table=None):
+    """ディレクトリ名に使うスラッグ。英数字は小文字化、日本語はそのまま残す。
+
+    ディレクトリ名は生のUTF-8にしておく必要がある。パーセントエンコードした
+    名前でディレクトリを作ると、サーバーがURLをデコードしてから探すため
+    404になる（/tag/%E5%B7%A8%E4%B9%B3/ → 巨乳 を探しに行く）。
+    """
+    if table and name in table:
+        return table[name]
+    s = _UNSAFE_PATH.sub("", (name or "").strip())
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]*", s):
+        return re.sub(r"[ _]+", "-", s).lower()
+    return s or "other"
+
+
+def url_slug(name, table=None):
+    """リンク・canonical用にスラッグをパーセントエンコードする"""
+    from urllib.parse import quote
+    return quote(slugify(name, table), safe="")
 
 
 # ============================================================
@@ -125,17 +169,33 @@ def load_articles(cfg):
             continue
         if a.get("hidden"):
             continue
+        a.setdefault("area", a.get("category") or "その他")
+        a.setdefault("tags", [])
+        a.setdefault("shift_dates", [])
         articles.append(a)
     articles.sort(key=lambda a: (a.get("published_at") or ""), reverse=True)
     return articles
 
 
+def article_path(cfg, a):
+    return f'{cfg["base_path"]}/articles/{a["id"]}/'
+
+
 def article_url(cfg, a):
-    return f"{cfg['base_url']}/articles/{a['id']}.html"
+    return f'{cfg["base_url"]}/articles/{a["id"]}/'
+
+
+def fmt_date(iso):
+    """2026-08-20 → 8/20(水)"""
+    try:
+        d = datetime.strptime(iso, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return iso
+    return f"{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})"
 
 
 # ============================================================
-# パーツ
+# codoc パーツ
 # ============================================================
 _warned = set()
 
@@ -161,36 +221,37 @@ def codoc_entry_tag(cfg, a):
     return render(c.get("entry_tag", ""), entry_code=code)
 
 
+# ============================================================
+# 共通レイアウト
+# ============================================================
 def nav_html(cfg):
-    bp = cfg["base_path"]
     return render("""
 <header class="site-header">
   <div class="wrap">
     <a class="brand" href="{{bp}}/">{{title}}</a>
     <nav>
-      <a href="{{bp}}/">記事一覧</a>
+      <a href="{{bp}}/">記事をさがす</a>
       <a href="{{bp}}/tokushoho.html">特商法表記</a>
       <a href="{{bp}}/privacy.html">プライバシー</a>
     </nav>
   </div>
-</header>""", bp=bp, title=esc(cfg["site_title"]))
+</header>""", bp=cfg["base_path"], title=esc(cfg["site_title"]))
 
 
 def footer_html(cfg):
-    bp = cfg["base_path"]
-    year = datetime.now(JST).year
     return render("""
 <footer class="site-footer">
   <div class="wrap">
     <p class="links">
-      <a href="{{bp}}/">記事一覧</a>
+      <a href="{{bp}}/">記事をさがす</a>
       <a href="{{bp}}/tokushoho.html">特定商取引法に基づく表記</a>
       <a href="{{bp}}/privacy.html">プライバシーポリシー</a>
     </p>
     <p class="note">決済は codoc（株式会社codoc）を通じて行われます。</p>
     <p class="copy">&copy; {{year}} {{title}}</p>
   </div>
-</footer>""", bp=bp, year=year, title=esc(cfg["site_title"]))
+</footer>""", bp=cfg["base_path"], year=datetime.now(JST).year,
+        title=esc(cfg["site_title"]))
 
 
 def adult_gate_html(cfg):
@@ -265,8 +326,10 @@ def page(cfg, *, content, page_title, description, canonical,
         og_img = f'<meta property="og:image" content="{esc(image_url)}">'
     jsonld_tag = ""
     if jsonld:
-        jsonld_tag = ('<script type="application/ld+json">'
-                      + json.dumps(jsonld, ensure_ascii=False) + "</script>")
+        blocks = jsonld if isinstance(jsonld, list) else [jsonld]
+        jsonld_tag = "".join(
+            '<script type="application/ld+json">'
+            + json.dumps(b, ensure_ascii=False) + "</script>" for b in blocks)
     return render(
         PAGE_TPL,
         page_title=esc(page_title),
@@ -289,39 +352,412 @@ def page(cfg, *, content, page_title, description, canonical,
 
 
 # ============================================================
-# 記事ページ
+# 記事カード（絞り込み用の data-* を持たせる）
 # ============================================================
+def card_html(cfg, a):
+    tags = a.get("tags") or []
+    dates = a.get("shift_dates") or []
+    # 検索用の文字列（タイトル＋タグ＋エリア）を小文字で持たせる
+    haystack = " ".join([a.get("title", ""), a.get("area", "")] + tags).lower()
+    date_chips = "".join(
+        f'<span class="d">{esc(fmt_date(d))}</span>' for d in dates[:3])
+    return render("""
+<li class="card" data-area="{{area}}" data-tags="{{tags}}" data-dates="{{dates}}"
+    data-price="{{price_raw}}" data-sales="{{sales}}" data-pub="{{pub}}"
+    data-next="{{next_date}}" data-s="{{hay}}">
+  <a href="{{href}}">
+    {{thumb}}
+    <div class="card-body">
+      <h3>{{title}}</h3>
+      <p class="card-dates">{{date_chips}}</p>
+      <p class="card-meta"><span class="cat">{{area}}</span><span class="price">{{price}}</span></p>
+      {{tag_list}}
+    </div>
+  </a>
+</li>""",
+        area=esc(a.get("area") or "その他"),
+        tags=esc(",".join(tags)),
+        dates=esc(",".join(dates)),
+        price_raw=int(a.get("price") or 0),
+        sales=int(a.get("sales_count") or 0),
+        pub=esc((a.get("published_at") or "")[:10]),
+        next_date=esc(dates[0] if dates else "9999-12-31"),
+        hay=esc(haystack),
+        href=article_path(cfg, a),
+        thumb=(render('<img class="thumb" src="{{s}}" alt="" loading="lazy">',
+                      s=esc(a["image_url"])) if a.get("image_url")
+               else '<span class="thumb thumb-none"></span>'),
+        title=esc(a["title"]),
+        date_chips=date_chips or '<span class="d d-none">出勤日未定</span>',
+        price=(esc(f'{int(a["price"]):,}{cfg.get("currency_suffix", "円")}')
+               if a.get("price") else ""),
+        tag_list=('<p class="card-tags">'
+                  + "".join(f"<span>{esc(t)}</span>" for t in tags[:5])
+                  + "</p>") if tags else "",
+    )
+
+
+# ============================================================
+# 絞り込みUI
+# ============================================================
+FINDER_JS = """
+(function () {
+  var root = document.getElementById('finder');
+  if (!root) return;
+  var cards = Array.prototype.slice.call(
+    document.querySelectorAll('#results > .card'));
+  var results = document.getElementById('results');
+  var countEl = document.getElementById('result-count');
+  var moreBtn = document.getElementById('more-btn');
+  var emptyEl = document.getElementById('no-result');
+  var qInput = document.getElementById('q');
+  var sortSel = document.getElementById('sort');
+  var PAGE = 30;
+  var shown = PAGE;
+
+  var state = { q: '', area: '', tags: [], day: '', sort: 'new' };
+
+  function todayISO(offset) {
+    var d = new Date(Date.now() + (offset || 0) * 86400000);
+    // JSTのカレンダー日付に合わせる
+    var j = new Date(d.getTime() + (d.getTimezoneOffset() + 540) * 60000);
+    return j.getFullYear() + '-' + String(j.getMonth() + 1).padStart(2, '0')
+      + '-' + String(j.getDate()).padStart(2, '0');
+  }
+
+  function dayMatches(card) {
+    if (!state.day) return true;
+    var dates = (card.dataset.dates || '').split(',').filter(Boolean);
+    if (!dates.length) return false;
+    if (state.day === 'today') return dates.indexOf(todayISO(0)) >= 0;
+    if (state.day === 'tomorrow') return dates.indexOf(todayISO(1)) >= 0;
+    if (state.day === 'week') {
+      for (var i = 0; i < 7; i++) {
+        if (dates.indexOf(todayISO(i)) >= 0) return true;
+      }
+      return false;
+    }
+    return dates.indexOf(state.day) >= 0;
+  }
+
+  function matches(card) {
+    if (state.area && card.dataset.area !== state.area) return false;
+    if (state.tags.length) {
+      var ct = (card.dataset.tags || '').split(',');
+      for (var i = 0; i < state.tags.length; i++) {
+        if (ct.indexOf(state.tags[i]) < 0) return false;   // タグはAND条件
+      }
+    }
+    if (!dayMatches(card)) return false;
+    if (state.q) {
+      var hay = card.dataset.s || '';
+      var words = state.q.toLowerCase().split(/[\\s\\u3000]+/).filter(Boolean);
+      for (var j = 0; j < words.length; j++) {
+        if (hay.indexOf(words[j]) < 0) return false;
+      }
+    }
+    return true;
+  }
+
+  var SORTS = {
+    new:   function (a, b) { return (b.dataset.pub || '').localeCompare(a.dataset.pub || ''); },
+    hot:   function (a, b) { return (+b.dataset.sales) - (+a.dataset.sales); },
+    cheap: function (a, b) { return (+a.dataset.price) - (+b.dataset.price); },
+    soon:  function (a, b) { return (a.dataset.next || '').localeCompare(b.dataset.next || ''); }
+  };
+
+  function apply(resetPage) {
+    if (resetPage !== false) shown = PAGE;
+    var hits = cards.filter(matches);
+    hits.sort(SORTS[state.sort] || SORTS.new);
+    cards.forEach(function (c) { c.hidden = true; });
+    hits.slice(0, shown).forEach(function (c) {
+      c.hidden = false;
+      results.appendChild(c);
+    });
+    countEl.textContent = hits.length + '件';
+    emptyEl.hidden = hits.length > 0;
+    moreBtn.hidden = hits.length <= shown;
+    syncUrl();
+  }
+
+  function syncUrl() {
+    var p = new URLSearchParams();
+    if (state.q) p.set('q', state.q);
+    if (state.area) p.set('area', state.area);
+    if (state.tags.length) p.set('tags', state.tags.join(','));
+    if (state.day) p.set('day', state.day);
+    if (state.sort !== 'new') p.set('sort', state.sort);
+    var qs = p.toString();
+    history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+  }
+
+  function readUrl() {
+    var p = new URLSearchParams(location.search);
+    state.q = p.get('q') || '';
+    state.area = p.get('area') || '';
+    state.tags = (p.get('tags') || '').split(',').filter(Boolean);
+    state.day = p.get('day') || '';
+    state.sort = p.get('sort') || 'new';
+    qInput.value = state.q;
+    sortSel.value = state.sort;
+    paintChips();
+  }
+
+  function paintChips() {
+    root.querySelectorAll('.chip[data-area]').forEach(function (b) {
+      b.classList.toggle('is-on', b.dataset.area === state.area);
+    });
+    root.querySelectorAll('.chip[data-day]').forEach(function (b) {
+      b.classList.toggle('is-on', b.dataset.day === state.day);
+    });
+    root.querySelectorAll('.chip[data-tag]').forEach(function (b) {
+      b.classList.toggle('is-on', state.tags.indexOf(b.dataset.tag) >= 0);
+    });
+    var daySel = document.getElementById('day-select');
+    if (daySel) daySel.value = /^\\d{4}-/.test(state.day) ? state.day : '';
+    root.classList.toggle('has-filter',
+      !!(state.q || state.area || state.tags.length || state.day));
+  }
+
+  root.addEventListener('click', function (e) {
+    var chip = e.target.closest('.chip');
+    if (chip) {
+      if ('area' in chip.dataset) {
+        state.area = (state.area === chip.dataset.area) ? '' : chip.dataset.area;
+      } else if ('day' in chip.dataset) {
+        state.day = (state.day === chip.dataset.day) ? '' : chip.dataset.day;
+      } else if ('tag' in chip.dataset) {
+        var t = chip.dataset.tag, i = state.tags.indexOf(t);
+        if (i >= 0) { state.tags.splice(i, 1); } else { state.tags.push(t); }
+      }
+      paintChips();
+      apply();
+      return;
+    }
+    if (e.target.id === 'clear-btn') {
+      state.q = ''; state.area = ''; state.tags = []; state.day = '';
+      qInput.value = '';
+      paintChips();
+      apply();
+    }
+    if (e.target.id === 'tag-more') {
+      root.querySelector('.tag-wrap').classList.toggle('open');
+      e.target.textContent =
+        root.querySelector('.tag-wrap').classList.contains('open')
+          ? 'タグを閉じる' : 'すべてのタグ';
+    }
+  });
+
+  var timer;
+  qInput.addEventListener('input', function () {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      state.q = qInput.value.trim();
+      paintChips();
+      apply();
+    }, 150);
+  });
+
+  sortSel.addEventListener('change', function () {
+    state.sort = sortSel.value;
+    apply();
+  });
+
+  var daySel = document.getElementById('day-select');
+  if (daySel) {
+    daySel.addEventListener('change', function () {
+      state.day = daySel.value;
+      paintChips();
+      apply();
+    });
+  }
+
+  moreBtn.addEventListener('click', function () {
+    shown += PAGE;
+    apply(false);
+  });
+
+  readUrl();
+  apply();
+})();
+"""
+
+
+def finder_html(cfg, articles):
+    """検索ボックス＋ファセットUI"""
+    areas = Counter(a.get("area") or "その他" for a in articles)
+    tags = Counter(t for a in articles for t in (a.get("tags") or []))
+    today = datetime.now(JST).date()
+    upcoming = Counter(d for a in articles for d in (a.get("shift_dates") or [])
+                       if d >= today.isoformat())
+
+    area_chips = "".join(
+        render('<button type="button" class="chip" data-area="{{a}}">{{a}}'
+               '<em>{{n}}</em></button>', a=esc(k), n=v)
+        for k, v in areas.most_common())
+
+    tag_items = tags.most_common()
+    tag_chips = "".join(
+        render('<button type="button" class="chip{{extra}}" data-tag="{{t}}">'
+               '{{t}}<em>{{n}}</em></button>',
+               t=esc(k), n=v, extra="" if i < TAG_CHIP_LIMIT else " chip-extra")
+        for i, (k, v) in enumerate(tag_items))
+    tag_more = ('<button type="button" class="link-btn" id="tag-more">すべてのタグ</button>'
+                if len(tag_items) > TAG_CHIP_LIMIT else "")
+
+    day_options = "".join(
+        render('<option value="{{d}}">{{label}}（{{n}}件）</option>',
+               d=esc(d), label=esc(fmt_date(d)), n=n)
+        for d, n in sorted(upcoming.items())[:30])
+
+    return render("""
+<section id="finder" class="finder">
+  <div class="search-row">
+    <input type="search" id="q" placeholder="名前・タグ・エリアで検索"
+           autocomplete="off" aria-label="キーワード検索">
+    <button type="button" class="link-btn" id="clear-btn">条件をクリア</button>
+  </div>
+
+  <div class="facet">
+    <span class="facet-label">出勤日</span>
+    <div class="chips">
+      <button type="button" class="chip" data-day="today">今日</button>
+      <button type="button" class="chip" data-day="tomorrow">明日</button>
+      <button type="button" class="chip" data-day="week">1週間以内</button>
+      <select id="day-select" aria-label="日付で絞り込む">
+        <option value="">日付を選ぶ</option>
+        {{day_options}}
+      </select>
+    </div>
+  </div>
+
+  <div class="facet">
+    <span class="facet-label">エリア</span>
+    <div class="chips">{{area_chips}}</div>
+  </div>
+
+  <div class="facet">
+    <span class="facet-label">タグ</span>
+    <div class="chips tag-wrap">{{tag_chips}}</div>
+    {{tag_more}}
+  </div>
+
+  <div class="result-row">
+    <span id="result-count">{{count}}件</span>
+    <label class="sort-label">並び替え
+      <select id="sort">
+        <option value="new">新着順</option>
+        <option value="hot">人気順（販売数）</option>
+        <option value="soon">出勤日が近い順</option>
+        <option value="cheap">価格が安い順</option>
+      </select>
+    </label>
+  </div>
+</section>
+""", area_chips=area_chips, tag_chips=tag_chips, tag_more=tag_more,
+        day_options=day_options, count=len(articles))
+
+
+def listing_html(cfg, articles, heading, lead=""):
+    """ファセットUI + カード一覧（共通）"""
+    cards = "".join(card_html(cfg, a) for a in articles)
+    return render("""
+<section class="hero-copy">
+  <h1>{{heading}}</h1>
+  {{lead}}
+</section>
+{{finder}}
+<ul id="results" class="cards">{{cards}}</ul>
+<p id="no-result" class="empty" hidden>条件に合う記事がありません。条件をゆるめてお試しください。</p>
+{{empty}}
+<div class="more-row"><button type="button" id="more-btn" class="more-btn" hidden>
+  もっと見る</button></div>
+<script>{{js}}</script>
+""", heading=esc(heading),
+        lead=f'<p>{esc(lead)}</p>' if lead else "",
+        finder=finder_html(cfg, articles),
+        cards=cards,
+        empty=("" if articles else
+               '<p class="empty">公開中の記事はまだありません。</p>'),
+        js=FINDER_JS)
+
+
+# ============================================================
+# 各ページ
+# ============================================================
+def render_index(cfg, articles):
+    content = listing_html(cfg, articles, cfg["site_title"],
+                           cfg.get("site_tagline", ""))
+    return page(cfg, content=content,
+                page_title=f'{cfg["site_title"]} | {cfg.get("site_tagline", "")}',
+                description=cfg["site_description"],
+                canonical=cfg["base_url"] + "/")
+
+
+def render_area(cfg, area, articles):
+    heading = f"{area}の記事一覧"
+    desc = (f"{area}エリアの出勤情報・体験レポート{len(articles)}件。"
+            f"出勤日・タグで絞り込めます。")
+    content = listing_html(cfg, articles, heading, desc)
+    return page(cfg, content=content,
+                page_title=f'{heading} | {cfg["site_title"]}',
+                description=desc,
+                canonical=f'{cfg["base_url"]}/area/{url_slug(area, AREA_SLUGS)}/')
+
+
+def render_tag(cfg, tag, articles):
+    heading = f"「{tag}」の記事一覧"
+    desc = (f"{tag}の出勤情報・体験レポート{len(articles)}件。"
+            f"出勤日・エリアで絞り込めます。")
+    content = listing_html(cfg, articles, heading, desc)
+    return page(cfg, content=content,
+                page_title=f'{heading} | {cfg["site_title"]}',
+                description=desc,
+                canonical=f'{cfg["base_url"]}/tag/{url_slug(tag)}/')
+
+
 def render_article(cfg, a, related):
     free = clean_free_html(a.get("free_html"))
     desc = plain_text(free) or cfg["site_description"]
     url = article_url(cfg, a)
     price = a.get("price")
     tags = a.get("tags") or []
+    dates = a.get("shift_dates") or []
+
+    date_html = ""
+    if dates:
+        chips = "".join(f'<span class="d">{esc(fmt_date(d))}</span>' for d in dates)
+        date_html = f'<div class="shift-dates"><span class="lbl">出勤予定</span>{chips}</div>'
 
     meta_bits = []
-    if a.get("category"):
-        meta_bits.append(f'<span class="cat">{esc(a["category"])}</span>')
-    if a.get("published_at"):
-        meta_bits.append(f'<time>{esc(a["published_at"][:10])} 公開</time>')
+    if a.get("area"):
+        meta_bits.append(
+            render('<a class="cat" href="{{bp}}/area/{{slug}}/">{{a}}</a>',
+                   bp=cfg["base_path"], slug=url_slug(a["area"], AREA_SLUGS),
+                   a=esc(a["area"])))
     if a.get("content_updated_at"):
         meta_bits.append(f'<time>{esc(a["content_updated_at"][:10])} 更新</time>')
     if price:
         meta_bits.append('<span class="price">'
                          + esc(f"{int(price):,}{cfg.get('currency_suffix', '円')}")
                          + "</span>")
+
     tags_html = ""
     if tags:
-        tags_html = ('<ul class="tags">'
-                     + "".join(f"<li>{esc(t)}</li>" for t in tags) + "</ul>")
+        tags_html = ('<ul class="tags">' + "".join(
+            render('<li><a href="{{bp}}/tag/{{slug}}/">{{t}}</a></li>',
+                   bp=cfg["base_path"], slug=url_slug(t), t=esc(t))
+            for t in tags) + "</ul>")
 
     related_html = ""
     if related:
         items = "".join(
             render('<li><a href="{{href}}">{{t}}</a></li>',
-                   href=f'{cfg["base_path"]}/articles/{r["id"]}.html',
-                   t=esc(r["title"]))
+                   href=article_path(cfg, r), t=esc(r["title"]))
             for r in related)
-        related_html = f'<section class="related"><h2>関連記事</h2><ul>{items}</ul></section>'
+        related_html = ('<section class="related"><h2>同じエリアの記事</h2>'
+                        f'<ul>{items}</ul></section>')
 
     hero = ""
     if a.get("image_url"):
@@ -330,9 +766,12 @@ def render_article(cfg, a, related):
                       src=esc(a["image_url"]), alt=esc(a["title"]))
 
     content = render("""
+<nav class="crumbs"><a href="{{bp}}/">記事をさがす</a> ›
+  <a href="{{bp}}/area/{{aslug}}/">{{area}}</a></nav>
 <article class="post">
   <h1>{{title}}</h1>
   <div class="post-meta">{{meta}}</div>
+  {{dates}}
   {{tags}}
   {{hero}}
   <div class="post-body">
@@ -344,8 +783,10 @@ def render_article(cfg, a, related):
   </div>
 </article>
 {{related}}
-""", title=esc(a["title"]), meta=" ".join(meta_bits), tags=tags_html,
-        hero=hero, free=free, codoc=codoc_entry_tag(cfg, a),
+""", bp=cfg["base_path"], aslug=url_slug(a.get("area") or "その他", AREA_SLUGS),
+        area=esc(a.get("area") or "その他"),
+        title=esc(a["title"]), meta="".join(meta_bits), dates=date_html,
+        tags=tags_html, hero=hero, free=free, codoc=codoc_entry_tag(cfg, a),
         related=related_html)
 
     jsonld = {
@@ -367,92 +808,35 @@ def render_article(cfg, a, related):
         jsonld["datePublished"] = a["published_at"].replace(" ", "T") + "+09:00"
     if a.get("content_updated_at"):
         jsonld["dateModified"] = a["content_updated_at"].replace(" ", "T") + "+09:00"
+    if tags:
+        jsonld["keywords"] = ", ".join(tags)
     if price:
         jsonld["offers"] = {
-            "@type": "Offer",
-            "price": int(price),
-            "priceCurrency": "JPY",
-            "url": url,
-            "availability": "https://schema.org/InStock",
+            "@type": "Offer", "price": int(price), "priceCurrency": "JPY",
+            "url": url, "availability": "https://schema.org/InStock",
         }
+
+    # パンくずも構造化データにしておくと検索結果に階層が出る
+    area = a.get("area") or "その他"
+    breadcrumb = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": cfg["site_title"],
+             "item": cfg["base_url"] + "/"},
+            {"@type": "ListItem", "position": 2, "name": area,
+             "item": f'{cfg["base_url"]}/area/{url_slug(area, AREA_SLUGS)}/'},
+            {"@type": "ListItem", "position": 3, "name": a["title"], "item": url},
+        ],
+    }
 
     return page(cfg, content=content,
                 page_title=f'{a["title"]} | {cfg["site_title"]}',
                 description=desc, canonical=url, og_type="article",
                 og_title=a["title"], image_url=a.get("image_url"),
-                jsonld=jsonld)
+                jsonld=[jsonld, breadcrumb])
 
 
-# ============================================================
-# 一覧ページ
-# ============================================================
-def render_index(cfg, articles):
-    cats = sorted({a.get("category") or "その他" for a in articles})
-    filters = '<button type="button" class="f-btn is-on" data-cat="">すべて</button>'
-    filters += "".join(
-        render('<button type="button" class="f-btn" data-cat="{{c}}">{{c}}</button>',
-               c=esc(c)) for c in cats)
-
-    cards = []
-    for a in articles:
-        cards.append(render("""
-<li class="card" data-cat="{{cat}}">
-  <a href="{{href}}">
-    {{thumb}}
-    <div class="card-body">
-      <h2>{{title}}</h2>
-      <p class="card-meta"><span class="cat">{{cat}}</span> <span class="price">{{price}}</span></p>
-      <p class="card-excerpt">{{excerpt}}</p>
-    </div>
-  </a>
-</li>""",
-            cat=esc(a.get("category") or "その他"),
-            href=f'{cfg["base_path"]}/articles/{a["id"]}.html',
-            thumb=(render('<img class="thumb" src="{{s}}" alt="" loading="lazy">',
-                          s=esc(a["image_url"])) if a.get("image_url") else ""),
-            title=esc(a["title"]),
-            price=(esc(f'{int(a["price"]):,}{cfg.get("currency_suffix", "円")}')
-                   if a.get("price") else ""),
-            excerpt=esc(plain_text(clean_free_html(a.get("free_html")), 90)),
-        ))
-
-    empty = "" if cards else '<p class="empty">公開中の記事はまだありません。</p>'
-
-    content = render("""
-<section class="hero-copy">
-  <h1>{{title}}</h1>
-  <p>{{tagline}}</p>
-</section>
-<div class="filters">{{filters}}</div>
-<ul class="cards">{{cards}}</ul>
-{{empty}}
-<script>
-(function () {
-  var btns = document.querySelectorAll('.f-btn');
-  var cards = document.querySelectorAll('.cards .card');
-  btns.forEach(function (b) {
-    b.addEventListener('click', function () {
-      var cat = b.dataset.cat;
-      btns.forEach(function (x) { x.classList.toggle('is-on', x === b); });
-      cards.forEach(function (c) {
-        c.hidden = !!cat && c.dataset.cat !== cat;
-      });
-    });
-  });
-})();
-</script>
-""", title=esc(cfg["site_title"]), tagline=esc(cfg.get("site_tagline", "")),
-        filters=filters, cards="".join(cards), empty=empty)
-
-    return page(cfg, content=content,
-                page_title=f'{cfg["site_title"]} | {cfg.get("site_tagline", "")}',
-                description=cfg["site_description"],
-                canonical=cfg["base_url"] + "/")
-
-
-# ============================================================
-# 固定ページ
-# ============================================================
 def render_tokushoho(cfg):
     t = cfg.get("tokushoho") or {}
     rows = [
@@ -515,12 +899,14 @@ def render_privacy(cfg):
 STYLE_CSS = """
 :root {
   --bg: #ffffff; --fg: #1a1a1c; --muted: #6b6b73; --line: #e6e6ea;
-  --card: #ffffff; --accent: #c2185b; --accent-fg: #ffffff; --shadow: 0 1px 3px rgba(0,0,0,.08);
+  --card: #ffffff; --chip: #f4f4f7; --accent: #c2185b; --accent-fg: #ffffff;
+  --shadow: 0 1px 3px rgba(0,0,0,.08);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #131316; --fg: #ececf1; --muted: #a0a0ab; --line: #2c2c33;
-    --card: #1c1c21; --accent: #ff6f9c; --accent-fg: #1a1a1c; --shadow: none;
+    --card: #1c1c21; --chip: #22222a; --accent: #ff6f9c; --accent-fg: #1a1a1c;
+    --shadow: none;
   }
 }
 * { box-sizing: border-box; }
@@ -533,7 +919,7 @@ body {
 }
 img { max-width: 100%; height: auto; }
 a { color: inherit; }
-.wrap { width: min(880px, 92vw); margin: 0 auto; }
+.wrap { width: min(1000px, 92vw); margin: 0 auto; }
 .site-header { border-bottom: 1px solid var(--line); position: sticky; top: 0;
   background: var(--bg); z-index: 10; }
 .site-header .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.2rem;
@@ -542,34 +928,90 @@ a { color: inherit; }
 .site-header nav { display: flex; gap: 1rem; font-size: .85rem; }
 .site-header nav a { color: var(--muted); text-decoration: none; }
 .site-header nav a:hover { color: var(--accent); }
-main.wrap { padding: 2rem 0 3rem; }
-.hero-copy h1 { font-size: 1.6rem; margin: 0 0 .4rem; }
-.hero-copy p { color: var(--muted); margin: 0 0 1.5rem; }
-.filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.4rem; }
-.f-btn { border: 1px solid var(--line); background: transparent; color: var(--muted);
-  border-radius: 999px; padding: .3rem .9rem; font-size: .82rem; cursor: pointer; }
-.f-btn.is-on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+main.wrap { padding: 1.6rem 0 3rem; }
+.hero-copy h1 { font-size: 1.45rem; margin: 0 0 .3rem; }
+.hero-copy p { color: var(--muted); margin: 0 0 1.2rem; font-size: .9rem; }
+
+/* 絞り込み */
+.finder { background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 1rem 1.1rem .9rem; margin-bottom: 1.4rem; }
+.search-row { display: flex; gap: .6rem; align-items: center; margin-bottom: .9rem; }
+#q { flex: 1; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  border-radius: 10px; padding: .65rem .9rem; font-size: 1rem; min-width: 0; }
+#q:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.link-btn { background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: .82rem; text-decoration: underline; padding: .2rem; white-space: nowrap; }
+.finder.has-filter .link-btn#clear-btn { color: var(--accent); font-weight: 600; }
+.facet { display: flex; gap: .7rem; align-items: flex-start;
+  padding: .45rem 0; border-top: 1px dashed var(--line); }
+.facet-label { flex: 0 0 3.8rem; font-size: .78rem; color: var(--muted);
+  padding-top: .35rem; }
+.chips { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+.chip { border: 1px solid var(--line); background: var(--chip); color: var(--fg);
+  border-radius: 999px; padding: .28rem .75rem; font-size: .82rem; cursor: pointer;
+  display: inline-flex; gap: .3rem; align-items: baseline; }
+.chip em { font-style: normal; font-size: .68rem; color: var(--muted); }
+.chip.is-on { background: var(--accent); color: var(--accent-fg);
+  border-color: var(--accent); }
+.chip.is-on em { color: var(--accent-fg); opacity: .8; }
+.tag-wrap .chip-extra { display: none; }
+.tag-wrap.open .chip-extra { display: inline-flex; }
+#day-select, #sort { border: 1px solid var(--line); background: var(--bg);
+  color: var(--fg); border-radius: 999px; padding: .28rem .6rem; font-size: .82rem; }
+.result-row { display: flex; justify-content: space-between; align-items: center;
+  border-top: 1px dashed var(--line); margin-top: .5rem; padding-top: .6rem;
+  font-size: .85rem; }
+#result-count { font-weight: 700; }
+.sort-label { color: var(--muted); font-size: .8rem; display: flex; gap: .4rem;
+  align-items: center; }
+
+/* カード */
 .cards { list-style: none; padding: 0; margin: 0; display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
   overflow: hidden; box-shadow: var(--shadow); }
+.card[hidden] { display: none; }
 .card > a { text-decoration: none; display: block; height: 100%; }
 .card .thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
-.card-body { padding: .85rem 1rem 1.1rem; }
-.card-body h2 { font-size: .98rem; margin: 0 0 .4rem; line-height: 1.5; }
-.card-meta { margin: 0 0 .4rem; font-size: .78rem; color: var(--muted);
-  display: flex; gap: .6rem; }
-.card-excerpt { margin: 0; font-size: .8rem; color: var(--muted); }
-.cat { color: var(--muted); }
+.thumb-none { background: var(--chip); }
+.card-body { padding: .8rem .9rem 1rem; }
+.card-body h3 { font-size: .95rem; margin: 0 0 .45rem; line-height: 1.55;
+  font-weight: 600; }
+.card-dates { margin: 0 0 .4rem; display: flex; flex-wrap: wrap; gap: .25rem; }
+.card-dates .d { font-size: .74rem; background: var(--chip); border-radius: 4px;
+  padding: .05rem .4rem; color: var(--fg); }
+.card-dates .d-none { color: var(--muted); }
+.card-meta { margin: 0 0 .35rem; font-size: .78rem; display: flex; gap: .6rem;
+  justify-content: space-between; }
+.card-tags { margin: 0; display: flex; flex-wrap: wrap; gap: .25rem; }
+.card-tags span { font-size: .7rem; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 .35rem; }
+.cat { color: var(--muted); text-decoration: none; }
 .price { color: var(--accent); font-weight: 700; }
-.empty { color: var(--muted); }
-.post h1 { font-size: 1.5rem; line-height: 1.5; margin: 0 0 .6rem; }
+.empty { color: var(--muted); padding: 2rem 0; text-align: center; }
+.more-row { text-align: center; margin-top: 1.6rem; }
+.more-btn { border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  border-radius: 999px; padding: .6rem 2rem; font-size: .9rem; cursor: pointer; }
+
+/* 記事 */
+.crumbs { font-size: .78rem; color: var(--muted); margin-bottom: .7rem; }
+.crumbs a { color: var(--muted); text-decoration: none; }
+.post { max-width: 720px; }
+.post h1 { font-size: 1.45rem; line-height: 1.55; margin: 0 0 .6rem; }
 .post-meta { display: flex; flex-wrap: wrap; gap: .8rem; font-size: .82rem;
   color: var(--muted); margin-bottom: .8rem; }
+.shift-dates { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
+  background: var(--chip); border-radius: 10px; padding: .5rem .7rem;
+  margin-bottom: 1rem; }
+.shift-dates .lbl { font-size: .75rem; color: var(--muted); margin-right: .2rem; }
+.shift-dates .d { font-size: .85rem; font-weight: 600; background: var(--bg);
+  border-radius: 6px; padding: .1rem .5rem; }
 .tags { list-style: none; display: flex; flex-wrap: wrap; gap: .35rem;
   padding: 0; margin: 0 0 1.2rem; }
-.tags li { font-size: .72rem; border: 1px solid var(--line); border-radius: 4px;
-  padding: .1rem .45rem; color: var(--muted); }
+.tags a { font-size: .74rem; border: 1px solid var(--line); border-radius: 4px;
+  padding: .1rem .45rem; color: var(--muted); text-decoration: none;
+  display: inline-block; }
+.tags a:hover { color: var(--accent); border-color: var(--accent); }
 .hero { margin: 0 0 1.4rem; }
 .hero img { border-radius: 12px; width: 100%; }
 .post-body { overflow-wrap: anywhere; }
@@ -578,7 +1020,8 @@ main.wrap { padding: 2rem 0 3rem; }
 .paywall { margin-top: 2rem; padding-top: 1.4rem; border-top: 2px dashed var(--line); }
 .paywall-lead { font-size: .88rem; color: var(--muted); margin: 0 0 1rem; }
 .paywall-missing { color: var(--muted); font-size: .9rem; }
-.related { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1.4rem; }
+.related { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1.4rem;
+  max-width: 720px; }
 .related h2 { font-size: 1rem; margin: 0 0 .6rem; }
 .related ul { padding-left: 1.1rem; margin: 0; }
 .related li { margin-bottom: .35rem; font-size: .9rem; }
@@ -603,9 +1046,13 @@ main.wrap { padding: 2rem 0 3rem; }
 #age-yes { background: var(--accent); color: var(--accent-fg); border: 0;
   border-radius: 8px; padding: .7rem 1rem; font-size: .95rem; cursor: pointer; }
 .age-no { color: var(--muted); font-size: .85rem; }
-@media (max-width: 480px) {
+@media (max-width: 560px) {
   body { font-size: 15px; }
-  .cards { grid-template-columns: 1fr; }
+  .cards { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .7rem; }
+  .card-body { padding: .6rem .65rem .75rem; }
+  .card-body h3 { font-size: .85rem; }
+  .facet { flex-direction: column; gap: .35rem; }
+  .facet-label { flex: none; padding-top: 0; }
 }
 """
 
@@ -634,20 +1081,38 @@ def build(cfg=None):
     _write(os.path.join(out, "tokushoho.html"), render_tokushoho(cfg))
     _write(os.path.join(out, "privacy.html"), render_privacy(cfg))
 
-    by_cat = {}
+    by_area = {}
+    by_tag = {}
     for a in articles:
-        by_cat.setdefault(a.get("category") or "その他", []).append(a)
+        by_area.setdefault(a.get("area") or "その他", []).append(a)
+        for t in (a.get("tags") or []):
+            by_tag.setdefault(t, []).append(a)
+
+    urls = [cfg["base_url"] + "/"]
 
     for a in articles:
-        related = [r for r in by_cat.get(a.get("category") or "その他", [])
+        related = [r for r in by_area.get(a.get("area") or "その他", [])
                    if r["id"] != a["id"]][:6]
-        _write(os.path.join(out, "articles", f'{a["id"]}.html'),
+        _write(os.path.join(out, "articles", a["id"], "index.html"),
                render_article(cfg, a, related))
+        urls.append(article_url(cfg, a))
         sold = "販売中" if a.get("codoc_entry_code") else "⚠️ codoc未紐付け"
-        log.info(f"  ✅ articles/{a['id']}.html  {a['title'][:36]}  [{sold}]")
+        log.info(f"  ✅ articles/{a['id']}/  {a['title'][:34]}  [{sold}]")
 
-    # sitemap / robots
-    urls = [cfg["base_url"] + "/"] + [article_url(cfg, a) for a in articles]
+    for area, items in sorted(by_area.items()):
+        slug = slugify(area, AREA_SLUGS)
+        _write(os.path.join(out, "area", slug, "index.html"),
+               render_area(cfg, area, items))
+        urls.append(f'{cfg["base_url"]}/area/{url_slug(area, AREA_SLUGS)}/')
+    log.info(f"  📁 エリア別ページ {len(by_area)}件")
+
+    for tag, items in sorted(by_tag.items()):
+        slug = slugify(tag)
+        _write(os.path.join(out, "tag", slug, "index.html"),
+               render_tag(cfg, tag, items))
+        urls.append(f'{cfg["base_url"]}/tag/{url_slug(tag)}/')
+    log.info(f"  🏷️  タグ別ページ {len(by_tag)}件")
+
     today = datetime.now(JST).strftime("%Y-%m-%d")
     entries = "".join(
         f"<url><loc>{esc(u)}</loc><lastmod>{today}</lastmod></url>" for u in urls)
@@ -662,7 +1127,8 @@ def build(cfg=None):
     missing = [a["id"] for a in articles if not a.get("codoc_entry_code")]
     if missing:
         log.warning(f"⚠️ codocエントリーコード未設定の記事: {missing}")
-    log.info(f"✅ サイト生成完了: {out}/ ({len(articles)}記事)")
+    log.info(f"✅ サイト生成完了: {out}/ "
+             f"（記事{len(articles)} / URL{len(urls)}）")
     return len(articles)
 
 

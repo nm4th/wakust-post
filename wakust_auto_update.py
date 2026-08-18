@@ -1131,12 +1131,14 @@ def fetch_post_details(session, post):
 # ============================================================
 # 記事公開ページからタグを取得
 # ============================================================
-def fetch_post_tags(session, post_url):
-    """記事の公開ページからアルファベットのみのタグとタイトル画像URLを抽出する。
+def fetch_post_tags(session, post_url, alpha_only=True):
+    """記事の公開ページからタグとタイトル画像URLを抽出する。
 
     タグは「KEYWORD(NUMBER)」形式で表示されている。
     例: CKB(127), F(1473), HR(23397), 中野(989), 巨乳(19987)
-    → アルファベットのみ: ["CKB", "F", "HR"]
+    → alpha_only=True (既定): ["CKB", "F", "HR"]   ※セット組成のプレイタグ用
+    → alpha_only=False:       ["CKB", "F", "HR", "中野", "巨乳"]
+                              ※自社サイトの絞り込み用。日本語タグも拾う
 
     戻り値: (tags: list[str], image_url: str|None)
     """
@@ -1149,10 +1151,12 @@ def fetch_post_tags(session, post_url):
 
         tags = []
         # ページ内のリンク・スパンからタグ形式テキストを探す
+        tag_re = (re.compile(r'^([A-Za-z]+)\(\d+\)$') if alpha_only
+                  else re.compile(r'^(.{1,20}?)\((\d+)\)$'))
         for el in soup.find_all(["a", "span"]):
             text = el.get_text(strip=True)
-            m = re.match(r'^([A-Za-z]+)\(\d+\)$', text)
-            if m:
+            m = tag_re.match(text)
+            if m and m.group(1) not in tags:
                 tags.append(m.group(1))
 
         if tags:
@@ -3538,6 +3542,37 @@ def _site_article_url(cfg, post_id):
     return f"{cfg['base_url']}/articles/{post_id}.html"
 
 
+def _shift_dates_iso(title):
+    """タイトルの【8/20,21出勤】から実日付(YYYY-MM-DD)のリストを作る。
+
+    年はタイトルに入っていないので、JSTの今日を基準に推定する
+    （60日以上前の日付になる場合は翌年扱い）。
+    """
+    today = datetime.now(JST).date()
+    out = []
+    for md in _extract_dates_from_title(title):
+        try:
+            month, day = (int(x) for x in md.split("/", 1))
+        except (TypeError, ValueError):
+            continue
+        for year in (today.year, today.year + 1):
+            try:
+                d = datetime(year, month, day).date()
+            except ValueError:
+                break  # 2/30 のような不正日付
+            if (today - d).days <= 60:
+                iso = d.isoformat()
+                if iso not in out:
+                    out.append(iso)
+                break
+    return sorted(out)
+
+
+def _site_area_of(category):
+    """カテゴリ名を一覧の絞り込み用エリア名に正規化する"""
+    return CATEGORY_TO_SET_AREA.get(category, category or "その他")
+
+
 def _site_price_for(post, details):
     """記事の販売価格を決める（ワクスト側の販売ポイントが基準）"""
     payload = details.get("payload") or {}
@@ -3566,11 +3601,17 @@ def _write_site_article(cfg, post, details, price, entry_id, entry_code,
         except (OSError, ValueError):
             prev = {}
     now = jst_strftime("%Y-%m-%d %H:%M:%S")
+    category = details.get("category") or prev.get("category") or "その他"
     article = {
         "id": post["id"],
         "title": post["title"],
-        "category": details.get("category") or prev.get("category") or "その他",
+        "category": category,
+        # 一覧の絞り込みに使うフィールド群
+        "area": _site_area_of(category),
         "tags": tags if tags is not None else prev.get("tags", []),
+        "shift_dates": _shift_dates_iso(post["title"]),
+        "sales_count": post.get("sales_count") or prev.get("sales_count") or 0,
+        "pv_total": post.get("pv_total") or prev.get("pv_total") or 0,
         "price": price,
         # 無料部分だけをサイトに出す（有料部分 edit_text_2 は絶対に含めない）
         "free_html": payload.get("edit_text_1", "") or "",
@@ -3588,7 +3629,8 @@ def _write_site_article(cfg, post, details, price, entry_id, entry_code,
 
 def _site_fetch_tags_image(session, post):
     try:
-        return fetch_post_tags(session, post["url"])
+        # 自社サイトの絞り込み用なので日本語タグも含めて取得する
+        return fetch_post_tags(session, post["url"], alpha_only=False)
     except Exception as e:
         log.warning(f"    ⚠️ タグ/画像取得スキップ: {e}")
         return [], None
