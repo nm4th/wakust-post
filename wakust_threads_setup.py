@@ -1,9 +1,13 @@
 """Threads API のトークン取得・確認ヘルパー
 
-Meta のダッシュボードで発行できるのは有効期限1時間の短期トークン。
-これを60日の長期トークンに交換し、あわせてユーザーIDを取得する。
+Meta ダッシュボードの「ユーザートークン生成ツール」は、有効期限60日の
+長期トークンを直接発行する。その場合は secrets コマンドでユーザーIDを引くだけでよい。
+OAuthフローなどで短期トークン（1時間）しか無い場合は exchange で交換する。
 
-  # 短期トークン → 長期トークン + ユーザーID（初回セットアップ）
+  # ダッシュボードで発行した長期トークンから、Secretsに貼る値を出す（通常はこちら）
+  python wakust_threads_setup.py secrets --token "XXXX"
+
+  # 短期トークンしか無い場合は長期トークンに交換する
   python wakust_threads_setup.py exchange --short-token "XXXX" --app-secret "YYYY"
 
   # 今のトークンの残り日数を確認
@@ -74,6 +78,25 @@ def cmd_exchange(args):
             ensure_ascii=False, indent=2))
 
 
+def cmd_secrets(args):
+    """既に長期トークンを持っている場合に、Secretsに貼る2つの値を出力する
+
+    Metaダッシュボードの「ユーザートークン生成ツール」は長期トークンを
+    直接発行するため、exchange を経由せずこちらを使えばよい。
+    """
+    token = args.token or os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
+    if not token:
+        sys.exit("❌ トークンを --token で渡すか THREADS_ACCESS_TOKEN に設定してください")
+    me = _fetch_me(token)
+
+    print("\n✅ 確認できました。GitHub の Secrets に以下を登録してください。\n")
+    print(f"  THREADS_USER_ID       {me.get('id')}")
+    print(f"  THREADS_ACCESS_TOKEN  {token}")
+    print(f"\n  アカウント : @{me.get('username')}")
+    print("\n⚠️ 長期トークンは約60日で失効し、切れると延長できません。")
+    print("   期限前に refresh を実行して、Secrets を更新してください。")
+
+
 def cmd_refresh(args):
     """長期トークンを延長する（有効期限内にのみ可能）"""
     token = args.token or os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
@@ -118,6 +141,12 @@ def main():
     p.add_argument("--app-secret", required=True, help="Threads アプリのシークレット")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_exchange)
+
+    p = sub.add_parser(
+        "secrets",
+        help="長期トークンからSecretsに貼る値を出力する（ダッシュボード発行時はこちら）")
+    p.add_argument("--token", help="省略時は THREADS_ACCESS_TOKEN を使う")
+    p.set_defaults(func=cmd_secrets)
 
     p = sub.add_parser("refresh", help="長期トークンを延長する")
     p.add_argument("--token", help="省略時は THREADS_ACCESS_TOKEN を使う")
