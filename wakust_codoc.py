@@ -285,6 +285,8 @@ _ENTRY_CODE_PATTERNS = [
     re.compile(r'/entries/(' + _CODE_CHARS + r')'),
 ]
 _USERCODE_RE = re.compile(r'data-usercode=["\']([A-Za-z0-9_\-]{4,32})["\']')
+# 公開URLは https://codoc.jp/sites/{サイトコード}/entries/{エントリーコード}
+_SITECODE_RE = re.compile(r'/sites/([A-Za-z0-9_\-]{6,32})/')
 
 
 def _pick_entry_code(text):
@@ -334,6 +336,11 @@ def codoc_fetch_usercode(session):
         m = _USERCODE_RE.search(r.text)
         if m:
             log.info(f"    🔖 codoc: usercode={m.group(1)}")
+            return m.group(1)
+        # 貼り付けタグが見つからない画面でも、公開URLからサイトコードを拾える
+        m = _SITECODE_RE.search(r.text)
+        if m:
+            log.info(f"    🔖 codoc: usercode={m.group(1)} (公開URLから推定)")
             return m.group(1)
     log.warning("    ⚠️ codoc: usercodeを自動取得できませんでした。"
                 "site_config.json の codoc.usercode に手動設定してください")

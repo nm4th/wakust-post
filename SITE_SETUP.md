@@ -30,11 +30,27 @@ wakust_site.py  → site/  → GitHub Pages
 
 ### 1. codoc 側
 
-1. codoc にログインし、**マイページ → サイト（またはタグを貼り付け）** から
-   スクリプトタグを開く。
-2. `data-usercode="xxxxxxxx"` の値（ユーザーコード）を控える。
-3. 自社サイトのドメインを codoc に登録する（登録ドメイン外ではペイウォールが動きません）。
+1. 自社サイトのドメインを codoc に登録する（登録ドメイン外ではペイウォールが動きません）。
    GitHub Pages をそのまま使う場合は `nm4th.github.io` を登録します。
+2. `site_config.json` の `codoc.usercode` には、公開URL
+   `https://codoc.jp/sites/mKFyLVe4HA/entries/...` から読み取った
+   サイトコード **`mKFyLVe4HA`** を設定済みです。
+   codoc 管理画面の「タグを貼り付け」に出るスクリプトタグの `data-usercode` と
+   一致しているか、最初の1件を公開する前に一度だけ確認してください。
+   違っていた場合は Variables の `CODOC_USERCODE` で上書きできます。
+
+### codoc のURL/コード構造（確認済み）
+
+```
+https://codoc.jp/sites/mKFyLVe4HA/entries/zKDF0Mzq3A
+                       ^^^^^^^^^^         ^^^^^^^^^^
+                       サイトコード        エントリーコード
+                       = data-usercode    = codoc-entry-{ここ}
+```
+
+エントリーコードは記事ごとに変わる公開IDで、`/me/entries/{数字}` の数字とは別物です。
+`codoc_fetch_entry_code()` が作成直後に自動で回収し、
+`site_content/articles/{記事ID}.json` の `codoc_entry_code` に保存します。
 
 ### 2. GitHub 側
 
@@ -45,7 +61,7 @@ wakust_site.py  → site/  → GitHub Pages
 
 | 変数名 | 例 | 説明 |
 |---|---|---|
-| `CODOC_USERCODE` | `t0Fx1DCJdA` | codoc のユーザーコード。公開HTMLに出る値なので Secret でなくてよい |
+| `CODOC_USERCODE` | `mKFyLVe4HA` | codoc のサイトコード。`site_config.json` に設定済みなので、変更したいときだけ指定。公開HTMLに出る値なので Secret でなくてよい |
 | `SITE_BASE_URL` | `https://nm4th.github.io/wakust-post` | 独自ドメインを使う場合はそのURL。未設定なら `site_config.json` の値 |
 | `SITE_CNAME` | `example.com` | 独自ドメインを使うときだけ設定（`site/CNAME` を出力する） |
 | `CODOC_LIMITED` | `1` | `1`=codoc上は限定公開 / `0`=codoc.jp の一覧にも載せる |

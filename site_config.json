@@ -10,7 +10,7 @@
   "adult_gate_text": "このサイトには成人向けの内容が含まれます。18歳未満の方はご利用いただけません。",
   "currency_suffix": "円",
   "codoc": {
-    "usercode": "",
+    "usercode": "mKFyLVe4HA",
     "script_tag": "<script src=\"https://codoc.jp/js/cms.js\" data-usercode=\"{{usercode}}\" charset=\"UTF-8\" defer></script>",
     "entry_tag": "<div class=\"codoc-entries\" id=\"codoc-entry-{{entry_code}}\"></div>"
   },
