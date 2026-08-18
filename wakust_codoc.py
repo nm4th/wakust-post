@@ -150,8 +150,12 @@ def codoc_login(email, password):
 
 
 def _entry_form_data(title, body_free, body_paywalled, price, binded_url,
-                     token, method=None):
-    """codoc entryフォームのデータを構築"""
+                     token, method=None, limited="0", seo_paywall="0"):
+    """codoc entryフォームのデータを構築
+
+    limited="1" にすると codoc 上では限定公開（一覧に出さない）になる。
+    自社サイトのみで販売し、codoc.jp を決済レイヤーとしてだけ使う場合に指定する。
+    """
     data = {
         "_token": token,
         "title": title,
@@ -162,12 +166,12 @@ def _entry_form_data(title, body_free, body_paywalled, price, binded_url,
         "show_price": "1",
         "price": str(price),
         "show_paywalled_support": "0",
-        "limited": "0",
+        "limited": str(limited),
         "affiliate_mode": "0",
         "show_support": "1",
         "binded_url": binded_url or "",
-        "seo_paywall": "0",
-        "status": "1",  # 公開
+        "seo_paywall": str(seo_paywall),
+        "status": "1",  # 公開（ペイウォールを動作させるには公開が必要）
         "preview": "",
     }
     if method:
@@ -176,7 +180,7 @@ def _entry_form_data(title, body_free, body_paywalled, price, binded_url,
 
 
 def codoc_create_entry(session, title, body_free, body_paywalled, price,
-                       binded_url=""):
+                       binded_url="", limited="0"):
     """codocに新規記事作成 → entry_id(str)を返す。失敗時None"""
     token = _get_token(session, CODOC_CREATE_FORM_URL)
     if not token:
@@ -191,7 +195,7 @@ def codoc_create_entry(session, title, body_free, body_paywalled, price,
         from urllib.parse import unquote
         extra_headers["X-XSRF-TOKEN"] = unquote(xsrf)
     data = _entry_form_data(title, body_free, body_paywalled, price,
-                             binded_url, token)
+                             binded_url, token, limited=limited)
     try:
         r = session.post(CODOC_CREATE_POST_URL, data=data,
                          headers=extra_headers,
@@ -239,7 +243,7 @@ def codoc_create_entry(session, title, body_free, body_paywalled, price,
 
 
 def codoc_update_entry(session, entry_id, title, body_free, body_paywalled,
-                       price, binded_url=""):
+                       price, binded_url="", limited="0"):
     """codocの既存記事を更新（_method=PUT）"""
     edit_url = f"{CODOC_BASE}/me/entries/{entry_id}/edit"
     submit_url = f"{CODOC_BASE}/me/entries/{entry_id}"
@@ -247,7 +251,7 @@ def codoc_update_entry(session, entry_id, title, body_free, body_paywalled,
     if not token:
         return False
     data = _entry_form_data(title, body_free, body_paywalled, price,
-                             binded_url, token, method="PUT")
+                             binded_url, token, method="PUT", limited=limited)
     try:
         r = session.post(submit_url, data=data,
                          headers={"Referer": edit_url},
@@ -260,3 +264,77 @@ def codoc_update_entry(session, entry_id, title, body_free, body_paywalled,
         log.warning(f"    🔧 body先頭500字: {r.text[:500]!r}")
         return False
     return True
+
+
+# ============================================================
+# 自社サイト埋め込み用: エントリーコード / ユーザーコードの取得
+# ============================================================
+# codocの貼り付けタグは2種類:
+#   1) ページの<head>に1つ  <script src="https://codoc.jp/js/cms.js"
+#                              data-usercode="xxxxxxxx" charset="UTF-8" defer></script>
+#   2) ペイウォールを出す位置に
+#      <div class="codoc-entries" id="codoc-entry-{エントリーコード}"></div>
+# entry_id（/me/entries/{id} の数字）とエントリーコード（英数字の公開ID）は別物なので、
+# 作成後に編集画面から公開IDを回収する必要がある。
+
+# 数字だけのIDを公開コードと誤認しないよう、英字を1文字以上含むものだけ拾う
+_CODE_CHARS = r"[A-Za-z0-9_\-]{6,32}"
+_ENTRY_CODE_PATTERNS = [
+    re.compile(r'codoc-entry-(' + _CODE_CHARS + r')'),
+    re.compile(r'data-entry-code=["\'](' + _CODE_CHARS + r')["\']'),
+    re.compile(r'/entries/(' + _CODE_CHARS + r')'),
+]
+_USERCODE_RE = re.compile(r'data-usercode=["\']([A-Za-z0-9_\-]{4,32})["\']')
+
+
+def _pick_entry_code(text):
+    """HTMLからエントリーコード（英字を含む英数字ID）を抜き出す"""
+    for pat in _ENTRY_CODE_PATTERNS:
+        for m in pat.finditer(text or ""):
+            code = m.group(1)
+            if code.isdigit():
+                continue  # /entries/123 は内部ID、公開コードではない
+            if code.lower() in ("create", "preview", "edit"):
+                continue
+            return code
+    return None
+
+
+def codoc_fetch_entry_code(session, entry_id):
+    """entry_id から自社サイト埋め込み用のエントリーコードを取得。失敗時None"""
+    for url in (f"{CODOC_BASE}/me/entries/{entry_id}/edit",
+                f"{CODOC_BASE}/me/entries/{entry_id}"):
+        try:
+            r = session.get(url, timeout=30)
+        except requests.RequestException as e:
+            log.warning(f"    ⚠️ codoc: エントリーコード取得エラー {url}: {e}")
+            continue
+        if r.status_code != 200:
+            log.warning(f"    ⚠️ codoc: エントリーコード取得 HTTP {r.status_code} "
+                        f"URL={url}")
+            continue
+        code = _pick_entry_code(r.text)
+        if code:
+            log.info(f"    🔖 codoc: entry_code={code} (entry_id={entry_id})")
+            return code
+    log.error(f"❌ codoc: エントリーコードが見つかりません (entry_id={entry_id})。"
+              f"codoc管理画面の「タグを貼り付け」から手動で確認してください")
+    return None
+
+
+def codoc_fetch_usercode(session):
+    """codocのユーザーコード（scriptタグの data-usercode）を取得。失敗時None"""
+    for url in (CODOC_CREATE_FORM_URL, f"{CODOC_BASE}/me/sites", f"{CODOC_BASE}/me"):
+        try:
+            r = session.get(url, timeout=30)
+        except requests.RequestException:
+            continue
+        if r.status_code != 200:
+            continue
+        m = _USERCODE_RE.search(r.text)
+        if m:
+            log.info(f"    🔖 codoc: usercode={m.group(1)}")
+            return m.group(1)
+    log.warning("    ⚠️ codoc: usercodeを自動取得できませんでした。"
+                "site_config.json の codoc.usercode に手動設定してください")
+    return None

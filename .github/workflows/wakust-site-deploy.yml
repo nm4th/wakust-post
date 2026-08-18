@@ -1,0 +1,62 @@
+name: Wakust Site Deploy
+
+# site_content/ の記事JSONから自社サイトを生成し、GitHub Pages に公開する。
+# 事前準備: リポジトリ Settings → Pages → Source を "GitHub Actions" にすること。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site_content/**'
+      - 'wakust_site.py'
+      - 'site_config.json'
+      - '.github/workflows/wakust-site-deploy.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build site
+        env:
+          # codocのユーザーコード（scriptタグの data-usercode）。
+          # 公開HTMLに出る値なので秘密ではないが、Secrets/Variablesで管理してもよい。
+          CODOC_USERCODE: ${{ vars.CODOC_USERCODE || secrets.CODOC_USERCODE }}
+          # 独自ドメインを使う場合は Variables に SITE_BASE_URL を設定する
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+        run: python wakust_site.py
+
+      - name: Add CNAME for custom domain
+        if: ${{ vars.SITE_CNAME != '' }}
+        run: echo "${{ vars.SITE_CNAME }}" > site/CNAME
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

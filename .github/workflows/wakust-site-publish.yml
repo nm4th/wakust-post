@@ -1,29 +1,36 @@
-name: Wakust Auto Update
+name: Wakust Site Publish
+
+# ワクストの記事を1件ずつ自社サイトに掲載する。
+#   1. ワクストから記事の無料部分・有料部分・価格を取得
+#   2. codoc にエントリーを作成（binded_url = 自社サイトの記事URL / 限定公開）
+#   3. site_content/articles/{id}.json を書き出してコミット
+#   4. コミットをトリガーに Wakust Site Deploy が Pages へ公開する
+# 有料本文は codoc 側にのみ保存され、リポジトリにも公開HTMLにも出ない。
 
 on:
   schedule:
-    # 毎日16:30 JSTに実行（UTC 07:30 = JST 16:30）タイトル＋回遊リストのみ
-    - cron: '30 7 * * *'
+    # 朝10:00 JST (UTC 01:00), 昼13:00 JST (UTC 04:00), 夜21:00 JST (UTC 12:00)
+    - cron: '0 1 * * *'
+    - cron: '0 4 * * *'
+    - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
-      calendar_only:
-        description: 'カレンダーのみ更新する'
-        type: boolean
-        default: false
-      title_only:
-        description: 'タイトル＋回遊リストのみ更新する（16:30モード）'
-        type: boolean
-        default: false
-  repository_dispatch:
-    types: [midnight-update]
+      publish_limit:
+        description: '1回の実行で掲載する記事数'
+        type: string
+        default: '1'
 
 permissions:
   contents: write
 
+concurrency:
+  group: wakust-site-publish
+  cancel-in-progress: false
+
 jobs:
-  update:
+  publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -39,7 +46,7 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
-      - name: Run wakust auto update
+      - name: Publish to own site
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
@@ -47,24 +54,22 @@ jobs:
           CODOC_COOKIE: ${{ secrets.CODOC_COOKIE }}
           CODOC_USERCODE: ${{ vars.CODOC_USERCODE || secrets.CODOC_USERCODE }}
           SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+          # codoc上は限定公開にして、販売導線は自社サイトだけにする
           CODOC_LIMITED: ${{ vars.CODOC_LIMITED || '1' }}
-          CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
-          TITLE_ONLY: ${{ (github.event.schedule == '30 7 * * *' || inputs.title_only == true) && '1' || '0' }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SITE_PUBLISH_LIMIT: ${{ inputs.publish_limit || '1' }}
+          CODOC_MODE: site_publish
         run: python wakust_auto_update.py
 
-      - name: Commit and push logs / site content
+      - name: Commit site content
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add logs/ site_content/ || true
+          git add site_content/ || true
           # wakust_state.json は .gitignore 対象だが、掲載済み判定に必要なので -f で追跡する
           git add -f wakust_state.json || true
           if ! git diff --cached --quiet; then
-            git commit -m "📊 PVログ・自社サイト同期 $(date -u +%Y-%m-%d)"
+            git commit -m "🏬 自社サイト掲載記事を追加 $(date -u +%Y-%m-%d_%H:%M)"
             for i in 1 2 3 4; do
               git pull --rebase origin main && git push origin HEAD:main && break
               sleep $((2 ** i))
@@ -75,6 +80,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: wakust-logs-${{ github.run_id }}
+          name: wakust-site-publish-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30
