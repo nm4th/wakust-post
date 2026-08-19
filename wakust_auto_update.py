@@ -3099,6 +3099,22 @@ def delete_all_sets(session):
     log.info(f"  📊 削除完了: {ok}/{len(ids)}件")
 
 
+def delete_sets_by_prefix(session, prefix):
+    """タイトルが指定prefixで始まるセットのみ削除する"""
+    set_list = fetch_set_list_full(session)
+    targets = [(sid, title) for sid, title in set_list if title.startswith(prefix)]
+    log.info(f"🗑️  「{prefix}」で始まるセット削除: {len(targets)}件（全{len(set_list)}件中）")
+    ok = 0
+    for sid, title in targets:
+        if delete_one_set(session, sid):
+            log.info(f"  ✅ 削除 [{sid}] {title}")
+            ok += 1
+        else:
+            log.warning(f"  ❌ 削除失敗 [{sid}]")
+        time.sleep(SET_POST_INTERVAL)
+    log.info(f"  📊 削除完了: {ok}/{len(targets)}件")
+
+
 def create_one_set(session, name, price, post_ids):
     """1件のセットを作成する（3回リトライ）"""
     headers = {
@@ -3125,12 +3141,24 @@ def create_one_set(session, name, price, post_ids):
                 return False
 
 
-def _organize_sets(post_infos):
-    """post_infosを分類して (name, price, [post_ids]) のリストを返す"""
-    now = datetime.now(JST)
-    date_label = f"{now.month}/{now.day}"
+def _organize_sets(post_infos, mode="today"):
+    """post_infosを分類して (name, price, [post_ids]) のリストを返す。
 
-    today_groups   = defaultdict(list)   # area -> [(pid, unit_price)]
+    mode="today"    : 本日出勤×地域 + 地域×プレイタグ の2種類（0時モード用）
+    mode="tomorrow" : 明日出勤×地域のみ（16:30モード用、タグ別は0時のを維持）
+    """
+    now = datetime.now(JST)
+    if mode == "tomorrow":
+        target_dt = now + timedelta(days=1)
+        date_label = f"{target_dt.month}/{target_dt.day}"
+        set_prefix = "明日出勤"
+        target_flag = "is_tomorrow"
+    else:
+        date_label = f"{now.month}/{now.day}"
+        set_prefix = "本日出勤"
+        target_flag = "is_today"
+
+    target_groups  = defaultdict(list)   # area -> [(pid, unit_price)]
     tagged_groups  = defaultdict(list)   # (area, tag) -> [(pid, unit_price)]
 
     # 除外理由の集計（診断用）
@@ -3153,27 +3181,28 @@ def _organize_sets(post_infos):
         sales_count = post.get("sales_count") or 0
         unit_price  = calculate_sales_point(sales_count)
 
-        is_today = bool(info.get("is_today"))
+        is_target = bool(info.get(target_flag))
         has_future = bool(info.get("next_date"))
 
-        if not is_today and not has_future:
+        if not is_target and not has_future:
             excluded["出勤情報なし"].append((pid, title, cat))
             continue
 
-        # A. 本日出勤×地域
-        if is_today:
-            today_groups[area].append((pid, unit_price))
+        # A. 対象出勤×地域
+        if is_target:
+            target_groups[area].append((pid, unit_price))
             in_any.add(pid)
 
-        # B. 地域×プレイタグ
-        tags = info.get("tags") or []
-        matched = next((t for t in SET_TAG_PRIORITY if t in tags), None)
-        if matched:
-            tagged_groups[(area, matched)].append((pid, unit_price))
-            in_any.add(pid)
-        else:
-            if not is_today:
-                excluded[f"タグなし(地域={area})"].append((pid, title, tags))
+        # B. 地域×プレイタグ（todayモードのみ、tomorrowモードでは0時のを維持）
+        if mode == "today":
+            tags = info.get("tags") or []
+            matched = next((t for t in SET_TAG_PRIORITY if t in tags), None)
+            if matched:
+                tagged_groups[(area, matched)].append((pid, unit_price))
+                in_any.add(pid)
+            else:
+                if not is_target:
+                    excluded[f"タグなし(地域={area})"].append((pid, title, tags))
 
     # 除外理由サマリをログ
     if excluded:
@@ -3194,21 +3223,22 @@ def _organize_sets(post_infos):
 
     sets = []
     dropped_small = []
-    # A. 本日出勤×地域（先に作成）
-    for area in sorted(today_groups.keys()):
-        items = today_groups[area]
+    # A. 対象出勤×地域（先に作成）
+    for area in sorted(target_groups.keys()):
+        items = target_groups[area]
         if len(items) < SET_MIN_POSTS:
-            dropped_small.append((f"本日出勤{area}", [pid for pid, _ in items]))
+            dropped_small.append((f"{set_prefix}{area}", [pid for pid, _ in items]))
             continue
-        sets.append(_build(f"本日出勤{date_label}{area}セット", items))
+        sets.append(_build(f"{set_prefix}{date_label}{area}セット", items))
 
-    # B. 地域×プレイタグ
-    for (area, tag) in sorted(tagged_groups.keys()):
-        items = tagged_groups[(area, tag)]
-        if len(items) < SET_MIN_POSTS:
-            dropped_small.append((f"{area}{tag}", [pid for pid, _ in items]))
-            continue
-        sets.append(_build(f"{area}{tag}セット", items))
+    # B. 地域×プレイタグ（todayモードのみ）
+    if mode == "today":
+        for (area, tag) in sorted(tagged_groups.keys()):
+            items = tagged_groups[(area, tag)]
+            if len(items) < SET_MIN_POSTS:
+                dropped_small.append((f"{area}{tag}", [pid for pid, _ in items]))
+                continue
+            sets.append(_build(f"{area}{tag}セット", items))
 
     if dropped_small:
         log.info(f"\n📋 セット組成: 2件未満で見送ったグループ")
@@ -3286,18 +3316,28 @@ def update_profile_links(session, links):
                 return False
 
 
-def _update_profile_with_today_sets(session):
-    """本日出勤セットのURLをプロフィールのフリーリンクに設定"""
+def _update_profile_with_sets(session, mode="today"):
+    """{本日|明日}出勤セットのURLをプロフィールのフリーリンクに設定
+
+    mode="today"    : 本日出勤{今日}{地域}セット を検索（0時モード用）
+    mode="tomorrow" : 明日出勤{明日}{地域}セット を検索（16:30モード用）
+    """
     now = datetime.now(JST)
-    date_label = f"{now.month}/{now.day}"
+    if mode == "tomorrow":
+        target_dt = now + timedelta(days=1)
+        date_label = f"{target_dt.month}/{target_dt.day}"
+        set_prefix = "明日出勤"
+    else:
+        date_label = f"{now.month}/{now.day}"
+        set_prefix = "本日出勤"
 
     set_list = fetch_set_list_full(session)
-    log.info(f"\n🔗 プロフィールフリーリンクを更新")
+    log.info(f"\n🔗 プロフィールフリーリンクを更新（{set_prefix}）")
     log.info(f"  📋 現在のセット総数: {len(set_list)}件")
 
     links = []
     for area in PROFILE_LINK_AREAS:
-        prefix = f"本日出勤{date_label}{area}セット"
+        prefix = f"{set_prefix}{date_label}{area}セット"
         matched = next(((sid, title) for sid, title in set_list
                         if title.startswith(prefix)), None)
         if matched:
@@ -3310,7 +3350,7 @@ def _update_profile_with_today_sets(session):
             links.append((link_name, url))
             log.info(f"  ✅ {area}: {link_name} → {url}")
         else:
-            log.info(f"  ⏭️  {area}: 本日出勤セットなし（空欄化）")
+            log.info(f"  ⏭️  {area}: {set_prefix}セットなし（空欄化）")
 
     if update_profile_links(session, links):
         log.info(f"  ✅ プロフィール更新完了 ({len(links)}件のリンク設定)")
@@ -3946,15 +3986,28 @@ def _run_site_publish_only():
     log.info(f"\n✅ 自社サイト掲載処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
 
-def run_organize_sets(session, post_infos):
-    """既存セット全削除→新規セット組成→プロフィールフリーリンク更新"""
+def run_organize_sets(session, post_infos, mode="today"):
+    """セット販売の再構築 + プロフィールリンク更新
+
+    mode="today"    : 全セット削除→本日出勤セット+タグ別セット作成（0時モード）
+    mode="tomorrow" : 本日出勤セットのみ削除→明日出勤セット作成（16:30モード、タグ別は維持）
+    """
     log.info(f"\n{'='*55}")
-    log.info(f"📦 セット販売の再構築 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    if mode == "tomorrow":
+        log.info(f"📦 セット販売の再構築 [明日出勤モード] ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    else:
+        log.info(f"📦 セット販売の再構築 [本日出勤モード] ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
     log.info(f"{'='*55}")
 
-    delete_all_sets(session)
+    if mode == "tomorrow":
+        # 本日出勤セットのみ削除、タグ別セットは0時のを維持
+        delete_sets_by_prefix(session, "本日出勤")
+        # 念のため以前の明日出勤セットも掃除
+        delete_sets_by_prefix(session, "明日出勤")
+    else:
+        delete_all_sets(session)
 
-    sets = _organize_sets(post_infos)
+    sets = _organize_sets(post_infos, mode=mode)
     log.info(f"\n📝 作成予定セット: {len(sets)}件")
     for name, price, pids in sets:
         log.info(f"  - {name} ({price}pt, {len(pids)}件)")
@@ -3971,9 +4024,9 @@ def run_organize_sets(session, post_infos):
             time.sleep(SET_POST_INTERVAL)
         log.info(f"\n📊 セット組成完了: {ok}/{len(sets)}件")
 
-    # 本日出勤セットのURLをプロフィールに反映
+    # {本日|明日}出勤セットのURLをプロフィールに反映
     try:
-        _update_profile_with_today_sets(session)
+        _update_profile_with_sets(session, mode=mode)
     except Exception as e:
         log.error(f"❌ プロフィールリンク更新エラー: {e}", exc_info=True)
 
@@ -4217,10 +4270,11 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
     if not dates and not is_today:
         if saw_off:
             # スケジュール取得成功、全休みまたは未来出勤なし
-            # → 未来の出勤日が急に休みになることは稀なので、既存のタイトルを維持
+            # → 未来の出勤日が急に休みになることは稀なので、既存タイトルはほぼ維持
             #   (site側の一時的な不整合や表示週の違いの可能性)
-            _log("info", f"    ✅ スケジュール全休み確認 → 既存タイトルを維持（変更なし）")
-            new_title = post["title"]  # そのまま
+            # ただし本日出勤していないので #本日出勤 タグだけは剥がす
+            _log("info", f"    ✅ スケジュール全休み確認 → 既存タイトル維持（#本日出勤タグのみ除去）")
+            new_title = _strip_today_tag(post["title"])
             return {
                 "post":      post,
                 "details":   details,
@@ -4272,7 +4326,8 @@ def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
         dates_str = None
         new_title = _strip_today_tag(post["title"])
 
-    if is_today:
+    # 16:30モード（start_from_tomorrow）では #本日出勤 タグは付けない
+    if is_today and not start_from_tomorrow:
         new_title = new_title.rstrip() + TODAY_TAG
 
     _area_tag = CATEGORY_AREA_TAG.get(post.get("category"))
@@ -4553,11 +4608,11 @@ def run_update():
     except Exception as e:
         log.error(f"❌ セット再構築でエラー: {e}", exc_info=True)
 
-    # codoc投稿済み記事のタイトル/価格を同期
-    try:
-        run_codoc_sync(session, posts, post_infos)
-    except Exception as e:
-        log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
+    # codoc同期は一時停止中
+    # try:
+    #     run_codoc_sync(session, posts, post_infos)
+    # except Exception as e:
+    #     log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
 
     # 自社サイト掲載済み記事の同期 → サイト再生成（site_enabled=true のときだけ）
     if _site_enabled():
@@ -4791,6 +4846,13 @@ def run_title_only():
 
         time.sleep(1)
 
+    # 明日出勤セットの再構築（本日出勤セットを削除→明日出勤セット作成）
+    # タグ別セットは0時のを維持
+    try:
+        run_organize_sets(session, post_infos, mode="tomorrow")
+    except Exception as e:
+        log.error(f"❌ セット再構築でエラー: {e}", exc_info=True)
+
     session.close()
     log.info(f"\n✅ タイトル＋回遊リスト更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
@@ -4810,8 +4872,9 @@ if __name__ == "__main__":
         from wakust_site import build
         build()
     elif CODOC_MODE == "post_new":
-        log.info(f"🚀 ワクスト自動更新スクリプト起動 [codoc投稿モード]")
-        _run_codoc_post_only()
+        # codoc投稿は停止中（Threads投稿→ワクスト誘導に移行したため）
+        log.info(f"⏸️ codoc投稿モードは停止中です（何もせず終了）")
+        sys.exit(0)
     elif CALENDAR_ONLY:
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
         run_calendar_only()

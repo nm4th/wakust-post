@@ -293,9 +293,14 @@ THREADS_ACCESS_TOKEN=... python wakust_threads_setup.py check     # 生存確認
 https://wakust.com/user/Risingnoboru/
 ```
 
-このURLは固定のまま、**中身が毎日0時に更新されます**。`run_organize_sets()` の
-最後で `_update_profile_with_today_sets()` が走り、プロフィールのフリーリンク5枠を
-本日出勤セット（東京都内・新宿・池袋・神奈川・埼玉）に張り替えているためです。
+このURLは固定のまま、**中身が1日2回更新されます**。`run_organize_sets()` の最後で
+`_update_profile_with_sets()` が走り、プロフィールのフリーリンク5枠
+（東京都内・新宿・池袋・神奈川・埼玉）を張り替えているためです。
+
+| タイミング | 貼られるセット |
+|---|---|
+| 0:00 JST | 本日出勤セット |
+| 16:30 JST | 明日出勤セット |
 
 Threads のプロフィール欄（bioは最大5リンク）にもこのURLを置いてください。
 **Threads API にはプロフィールを書き換える権限が存在しない**ので、bioの自動更新は
