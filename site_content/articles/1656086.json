@@ -1,9 +1,14 @@
 {
   "id": "1656086",
   "title": "【12/8.27出勤】【Iカップ】【大宮】神スタイルと初回NSの悦楽！AI超えの美体と堕ちる「生の温もり」…2回戦連続フィニッシュ #12/8,12/27 #埼玉",
-  "category": "その他",
-  "area": "その他",
-  "tags": [],
+  "category": "大宮",
+  "area": "埼玉",
+  "station": "大宮",
+  "tags": [
+    "Iカップ",
+    "大宮",
+    "NS"
+  ],
   "shift_dates": [
     "2026-12-08",
     "2026-12-27"
@@ -17,5 +22,5 @@
   "codoc_entry_code": "",
   "source_url": "https://wakust.com/Risingnoboru/1656086/",
   "published_at": "2026-03-30 16:07",
-  "content_updated_at": "2026-08-19 13:27:14"
+  "content_updated_at": "2026-08-19 14:43:40"
 }
