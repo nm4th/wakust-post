@@ -88,21 +88,6 @@ jobs:
             ${{ inputs.area && format('--area {0}', inputs.area) || '' }} \
             --post
 
-      - name: Refresh pinned reply
-        # 投稿のたびに、固定ポストにぶら下げた本命リストを貼り替える。
-        # 直近で推した場所が先頭に来るので、投稿と固定ポストの内容が噛み合う
-        if: ${{ !inputs.dry_run }}
-        env:
-          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
-          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-        run: |
-          if [ -z "$THREADS_ACCESS_TOKEN" ]; then
-            echo "::notice::トークン未設定のためスキップ"
-            exit 0
-          fi
-          python wakust_threads.py --refresh-pinned || \
-            echo "::warning::固定ポストの更新に失敗しました（投稿自体は成功）"
-
       - name: Commit post history
         if: always()
         run: |

@@ -521,95 +521,40 @@ def tpl_spec(cfg, articles, area=None):
     post["text"] = post["text"].lstrip("\n")
     post["spec_no"] = no
     post["story_id"] = str(a["id"])
-    post["focus"] = {"area": a.get("area", ""), "station": a.get("station", ""),
-                     "label": a.get("station") or a.get("area", "")}
     return post
 
 
 def tpl_pinned(cfg, articles, area=None):
     """固定ポストの本体
 
-    各投稿が「本命は書いてない」「最後の1つは伏せておく」と言っているので、
-    ここでその約束を回収する。中身は貼りっぱなしで古くならないように書き、
-    日々変わる本命リストは返信側（tpl_pinned_update）で差し替える。
+    貼りっぱなしにするので、**時間が経っても古くならない内容だけ**を書く。
+    在籍数や本命リストのような日々変わるものは入れない（毎回変えると
+    投稿ごとに約束の中身がズレて、固定ポストが何の場所か分からなくなる）。
+    変わるものは、着地先のワクストのプロフィールが毎日更新してくれる。
     """
     tcfg = cfg.get("threads") or {}
-    # 固定ポストからの着地はリンク集約ページ。未設定ならワクストへ直接
     url = (tcfg.get("pinned_link") or tcfg.get("wakust_landing_url") or "").strip()
     reveal = (tcfg.get("pinned_reveal") or "").strip()
+    areas = [a.get("area") for a in articles if a.get("area")]
+    # エリア名の一覧だけ使う。人数は日々変わるので出さない
+    order = ["東京都内", "神奈川", "埼玉", "多摩", "千葉"]
+    known = [a for a in order if a in areas] or sorted(set(areas))
 
-    lines = ["【保存版】ここに全部置いときます📌", "",
-             "いろんな投稿で「本命は書いてない」と言ってるやつ、",
-             "このスレッドの最新の返信にまとめてます。",
-             "毎週更新しているので、そこだけ見れば十分です。"]
+    lines = ["【保存版】まずここだけ読んでください📌", "",
+             "出勤情報と体験レポートを毎日出してます。",
+             "はじめての人はこの順番で。", "",
+             "① エリアを1つに絞る",
+             f"　{' / '.join(known)}",
+             "② 出勤日から逆算して予約する",
+             "　当日枠が埋まってる子＝人気の裏付け",
+             "③ 初回は相性を見る回と割り切る",
+             "　欲張らないほうが結果的に当たる"]
     if reveal:
-        lines += ["", "あと「初心者が損する5つの行動」で伏せてた最後の1つ。", "", reveal]
+        lines += ["", "あと、投稿で伏せてる「損する5つ目」。", "", reveal]
     lines += ["", "----", "", "出勤表は毎日0時に更新しています。"]
     if url:
         lines += ["全員の一覧 →", url]
     return {"text": "\n".join(lines).strip(), "reply": "", "url": url}
-
-
-def _pinned_row(a, header=""):
-    """本命リストの1行。見出しと同じ駅名は繰り返さない"""
-    tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
-            and t != a.get("station")]
-    cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
-    detail = " / ".join(x for x in [cup] + tags[:1] if x)
-    st = a.get("station") or ""
-    if not st or st == header:
-        return detail or header
-    return f"{st} {detail}".strip()
-
-
-def tpl_pinned_update(cfg, articles, area=None):
-    """固定ポストに返信する「本命」リスト（毎週貼り替える中身）"""
-    items = [a for a in articles if int(a.get("sales_count") or 0) > 0]
-    if len(items) < 3:
-        return None
-    items.sort(key=lambda a: -int(a.get("sales_count") or 0))
-
-    # エリアごとに上位を拾う。全部同じエリアにならないよう散らす
-    per_area = int((cfg.get("threads") or {}).get("pinned_per_area") or 3)
-    by_area, picked = {}, []
-    for a in items:
-        ar = a.get("area") or "その他"
-        by_area.setdefault(ar, [])
-        if len(by_area[ar]) >= per_area:
-            continue
-        by_area[ar].append(a)
-        picked.append(a)
-
-    d = datetime.now(JST).date()
-    focus = (_load_state().get("_threads_focus") or {})
-    flabel = (focus.get("label") or "").strip()
-    fstation = (focus.get("station") or "").strip()
-
-    lines = [f"【本命 更新 {d.month}/{d.day}】", "",
-             "実際に一番読まれている順です。"]
-
-    # 直近の投稿で触れた場所があれば、その本命を先に出す
-    if fstation:
-        top = [a for a in items if (a.get("station") or "") == fstation][:per_area]
-        if top:
-            lines += ["", f"《{flabel}》← さっきの投稿の分"]
-            for a in top:
-                lines.append(_pinned_row(a, flabel))
-            for a in top:
-                ar = a.get("area") or "その他"
-                if a in by_area.get(ar, []):
-                    by_area[ar].remove(a)
-
-    for ar, group in sorted(by_area.items(), key=lambda kv: -len(kv[1])):
-        if not group:
-            continue
-        lines += ["", f"《{ar}》"]
-        lines += [_pinned_row(a, ar) for a in group]
-    lines += ["", "迷ったらこの中から。"]
-    text = "\n".join(lines).strip()
-    if len(text) > 480:
-        text = text[:470].rsplit("\n", 1)[0] + "\n\n迷ったらこの中から。"
-    return {"text": text, "reply": "", "url": ""}
 
 
 def pickup_targets(articles, min_items=4):
@@ -754,8 +699,7 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     body = [head, ""] + lines + ["", sep, "",
                                  "正直、初回はこの中から選ぶだけで失敗率がグッと下がります。",
                                  "", tail, cta]
-    return {"text": "\n".join(body).strip(), "reply": "", "url": "",
-            "focus": {"area": area or "", "station": station or "", "label": label}}
+    return {"text": "\n".join(body).strip(), "reply": "", "url": ""}
 
 
 def tpl_flash(cfg, articles, area=None):
@@ -792,8 +736,6 @@ def tpl_flash(cfg, articles, area=None):
     # 1行目のタイトル枠は使わないので、先頭の空行を落とす
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
-    post["focus"] = {"area": a.get("area", ""), "station": a.get("station", ""),
-                     "label": a.get("station") or a.get("area", "")}
     return post
 
 
@@ -838,8 +780,6 @@ def tpl_story(cfg, articles, area=None):
                     _article_url(cfg, a))
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
-    post["focus"] = {"area": a.get("area", ""), "station": a.get("station", ""),
-                     "label": a.get("station") or a.get("area", "")}
     return post
 
 
@@ -860,8 +800,7 @@ TEMPLATES = {
     "price": ("料金帯ごとの在籍数", tpl_price),
     "lineup": ("在籍の内訳", tpl_lineup),
     "rank": ("よく読まれている順", tpl_rank),
-    "pinned": ("固定ポスト本体", tpl_pinned),
-    "pinned_update": ("固定ポストへの本命リスト", tpl_pinned_update),
+    "pinned": ("固定ポスト（貼りっぱなし）", tpl_pinned),
     "spec": ("本日公開のスペック表", tpl_spec),
     "pickup": ("エリア厳選（出し惜しみ型）", tpl_pickup),
     "flash": ("体験速報（反応を煽る）", tpl_flash),
@@ -933,46 +872,6 @@ def build_all(cfg, articles, area=None, tag=None):
     return posts
 
 
-def refresh_pinned(cfg, articles):
-    """固定ポストにぶら下げる「本命」の返信を貼り替える
-
-    Threads APIには投稿の編集もピン留めもないので、本体は貼りっぱなしにして
-    最新情報は返信で差し替える。古い返信は消してから新しいものを付ける。
-    """
-    from wakust_threads_api import ThreadsClient, ThreadsError
-
-    state = _load_state()
-    pinned = state.get("_threads_pinned") or {}
-    post_id = pinned.get("post_id")
-    if not post_id:
-        print("❌ 固定ポストがまだありません。先にこれを実行してください:\n"
-              "   python wakust_threads.py --template pinned --post")
-        return
-    p = tpl_pinned_update(cfg, articles)
-    if not p:
-        print("⏭️  本命リストを作れませんでした（販売実績のある記事が不足）")
-        return
-
-    client = ThreadsClient()
-    old_id = pinned.get("reply_id")
-    if old_id:
-        try:
-            client.delete_post(old_id)
-        except ThreadsError as e:
-            # 消せなくても新しい返信は付けたいので続行する
-            print(f"⚠️ 古い返信を削除できませんでした（手動で消してください）: {e}")
-    try:
-        new_id = client.post(p["text"], reply_to_id=post_id)
-    except ThreadsError as e:
-        print(f"❌ 返信の投稿に失敗: {e}")
-        return
-    pinned["reply_id"] = new_id
-    pinned["updated_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    state["_threads_pinned"] = pinned
-    _save_state(state)
-    print(f"✅ 固定ポストの本命リストを更新しました（reply={new_id}）")
-
-
 def main():
     ap = argparse.ArgumentParser(description="Threads/X 投稿文を生成する")
     ap.add_argument("--template", choices=list(TEMPLATES), help="1つだけ生成")
@@ -981,8 +880,6 @@ def main():
     ap.add_argument("--station", help="駅で絞る（例: 池袋）。pickupのみ")
     ap.add_argument("--tag", help="タグまとめも生成する（例: NN）")
     ap.add_argument("--json", action="store_true", help="JSONで出力")
-    ap.add_argument("--refresh-pinned", action="store_true",
-                    help="固定ポストにぶら下げる本命リストを貼り替える")
     ap.add_argument("--post", action="store_true",
                     help="Threads APIで実際に投稿する（認証情報が無ければdry-run）")
     args = ap.parse_args()
@@ -991,10 +888,6 @@ def main():
     articles = load_articles(cfg)
     if not articles:
         print("記事データがありません（site_content/articles/ が空）")
-        return
-
-    if args.refresh_pinned:
-        refresh_pinned(cfg, articles)
         return
 
     template = args.template
@@ -1099,8 +992,6 @@ def _publish(posts):
             state.setdefault("_threads_story", {})[p["story_id"]] = now
         if p.get("spec_no"):
             state["_threads_spec_no"] = p["spec_no"]
-        if p.get("focus"):
-            state["_threads_focus"] = dict(p["focus"], at=now)
         if p["template"] == "pinned":
             # あとで返信を貼り替えられるよう、固定ポストのIDを覚えておく
             state.setdefault("_threads_pinned", {})["post_id"] = post_id
