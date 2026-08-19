@@ -8,9 +8,10 @@ on:
   schedule:
     # 0:30 JST — 本日公開された記事の告知（無い日は何も投稿しない）
     - cron: '30 15 * * *'
-    # 10:00 / 13:00 / 21:00 JST
+    # 10:00 / 13:00 / 18:00 / 21:00 JST
     - cron: '0 1 * * *'
     - cron: '0 4 * * *'
+    - cron: '0 9 * * *'
     - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
@@ -61,6 +62,7 @@ jobs:
             "30 15 * * *") echo "slot=0"  >> "$GITHUB_OUTPUT" ;;
             "0 1 * * *")   echo "slot=10" >> "$GITHUB_OUTPUT" ;;
             "0 4 * * *")   echo "slot=13" >> "$GITHUB_OUTPUT" ;;
+            "0 9 * * *")   echo "slot=18" >> "$GITHUB_OUTPUT" ;;
             "0 12 * * *")  echo "slot=21" >> "$GITHUB_OUTPUT" ;;
             *)             echo "slot=10" >> "$GITHUB_OUTPUT" ;;
           esac

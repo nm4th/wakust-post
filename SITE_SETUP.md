@@ -275,6 +275,7 @@ python wakust_threads.py --template pickup --area 神奈川    # エリアを指
   "0":  ["spec"],            // 本日公開の記事がある日だけ
   "10": ["today"],           // 毎日
   "13": ["pickup"],          // 毎日（駅・エリアが日替わり、15日で一巡）
+  "18": ["flash", "story"],  // 1日交替
   "21": ["info", "aruaru"]   // 1日交替
 }
 ```
@@ -284,11 +285,16 @@ python wakust_threads.py --template pickup --area 神奈川    # エリアを指
 | 0:30 | `spec` — 本日公開の記事があれば告知。無い日は投稿しない |
 | 10:00 | `today` — 本日出勤の料金順 |
 | 13:00 | `pickup` — 駅・エリアが日替わり（新宿→池袋→…と15日で一巡） |
-| 21:00 | `info` と `aruaru` を1日交替 |
+| 18:00 | `flash` と `story` を1日交替。記事への直接導線 |
+| 21:00 | `info` と `aruaru` を1日交替。手書きストックから |
 
-`flash` / `story` / `week` / `rank` / `price` / `lineup` / `new` / `cheatsheet` は
-実装済みですがローテーションには入れていません。使いたくなったらリストに
-足すだけで戻せます。
+1日4〜5本です（0:30は該当日のみ）。
+
+**`spec` / `flash` / `story` は記事の使用履歴（`_threads_story`）を共有します。**
+どれかで出した記事は、他のテンプレートでもしばらく出てきません。
+
+`week` / `rank` / `price` / `lineup` / `new` / `cheatsheet` は実装済みですが
+ローテーションには入れていません。使いたくなったらリストに足すだけで戻せます。
 
 ### 誘導先を出し分ける
 
