@@ -41,12 +41,6 @@
     "wakust_landing_url": "https://wakust.com/user/Risingnoboru/",
     "post_schedule": {
       "10": [
-        "today",
-        "today",
-        "today",
-        "today",
-        "today",
-        "today",
         "today"
       ],
       "13": [
@@ -59,17 +53,28 @@
         "price"
       ],
       "21": [
-        "story",
-        "week",
+        "flash",
         "story",
         "aruaru",
+        "flash",
+        "week",
         "story",
-        "rank",
-        "story"
+        "rank"
       ]
     },
     "show_names": false,
-    "profile_cta": "詳細はプロフィールのリンクから"
+    "profile_cta": "詳細はプロフィールのリンクから",
+    "flash_heads": [
+      "{area}で特大{play}、レポート上げました💦",
+      "{area}、これは当たりでした、、、💦",
+      "{area}の{play}、久々に手応えありました💦",
+      "これは共有しておきたい。{area}で{play}💦"
+    ],
+    "flash_hooks": [
+      "いいね・コメント多かったら他エリアのも出します😍",
+      "反応あったら同じ条件で他の子も掘ります😍",
+      "いいね多かったら続きのエリアやります😍"
+    ]
   },
   "site_enabled": false
 }

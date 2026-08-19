@@ -408,6 +408,52 @@ def tpl_rank(cfg, articles, area=None):
         "販売数が多い＝満足度が高い、と見ています。")
 
 
+def tpl_flash(cfg, articles, area=None):
+    """体験速報型（短文＋反応を煽る）
+
+    実際に行っていない体験を自動生成すると、コメントで具体的に聞かれた時に
+    破綻する。そこで「レポートを追加した」という事実だけを速報の形にし、
+    煽りの構造（結果を先に出して続きを引く）だけを借りている。
+    """
+    items = [a for a in _filter(articles, area=area) if _next_shift(a)]
+    if not items:
+        return None
+    used = _load_state().get("_threads_story", {})
+    # 販売実績が高いものを優先しつつ、最近出したものは後回し
+    items.sort(key=lambda a: (used.get(str(a["id"]), ""),
+                              -int(a.get("sales_count") or 0)))
+    a = items[0]
+    tags = a.get("tags") or []
+    play = next((t for t in tags if re.fullmatch(r"[A-Z]{2,5}", t)), "")
+    dates = [d for d in (a.get("shift_dates") or []) if d >= today_iso()]
+
+    tcfg = cfg.get("threads") or {}
+    heads = tcfg.get("flash_heads") or ["レポート上げました"]
+    hooks = tcfg.get("flash_hooks") or ["いいね多かったら次も出します"]
+    seed = int(a["id"][-3:] or 0)
+
+    head = render_head(heads[seed % len(heads)],
+                       area=a.get("area", ""), play=play or "当たり")
+    lines = [head, ""]
+    lines.append(" / ".join(tags[:3]) or a.get("area", ""))
+    lines.append(f'{yen(a.get("price"))}　出勤 '
+                 + ("・".join(fmt_date(d) for d in dates[:2]) or "調整中"))
+    post = _compose(cfg, "", lines, hooks[seed % len(hooks)],
+                    _article_url(cfg, a))
+    # 1行目のタイトル枠は使わないので、先頭の空行を落とす
+    post["text"] = post["text"].lstrip("\n")
+    post["story_id"] = str(a["id"])
+    return post
+
+
+def render_head(tpl, **kw):
+    """速報の1行目テンプレートに値を差し込む"""
+    out = tpl
+    for k, v in kw.items():
+        out = out.replace("{" + k + "}", str(v))
+    return out
+
+
 def tpl_story(cfg, articles, area=None):
     """体験談を1本紹介する（最近出していないものから選ぶ）"""
     items = [a for a in _filter(articles, area=area) if _next_shift(a)]
@@ -449,6 +495,7 @@ TEMPLATES = {
     "price": ("料金帯ごとの在籍数", tpl_price),
     "lineup": ("在籍の内訳", tpl_lineup),
     "rank": ("よく読まれている順", tpl_rank),
+    "flash": ("体験速報（反応を煽る）", tpl_flash),
     "story": ("体験談を1本", tpl_story),
     "new": ("新着1件", tpl_new),
 }
@@ -476,7 +523,7 @@ def pick_for_slot(cfg, slot):
 
 
 DATA_TEMPLATES = [k for k in ("today", "cheatsheet", "week", "price",
-                              "lineup", "rank", "story", "new")]
+                              "lineup", "rank", "flash", "story", "new")]
 
 
 def build_all(cfg, articles, area=None, tag=None):
