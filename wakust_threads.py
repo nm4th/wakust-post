@@ -184,18 +184,28 @@ def tpl_pool(cfg, articles, area=None, kind="aruaru"):
 
     データから作れない「あるあるネタ」などを、重複させずに回すための枠。
     """
-    entries = [t for t in (load_pool().get(kind) or []) if t and t.strip()]
+    entries = []
+    for e in (load_pool().get(kind) or []):
+        # 文字列そのままか、{"text": ..., "cta": false} の形を受け付ける
+        if isinstance(e, str):
+            entries.append({"text": e, "cta": True})
+        elif isinstance(e, dict) and (e.get("text") or "").strip():
+            entries.append({"text": e["text"], "cta": e.get("cta", True)})
+    entries = [e for e in entries if e["text"].strip()]
     if not entries:
         return None
     used = _load_state().get("_threads_pool", {})
     # 未使用（""）が最優先、次に使用日が古い順
-    entries.sort(key=lambda t: used.get(_pool_key(kind, t), ""))
-    text = entries[0].strip()
+    entries.sort(key=lambda e: used.get(_pool_key(kind, e["text"]), ""))
+    entry = entries[0]
+    text = entry["text"].strip()
     tcfg = cfg.get("threads") or {}
     cta = (tcfg.get("profile_cta") or "").strip()
-    if cta and cta not in text:
+    # 独自の締め（「いいねだけ押してくれ」等）を持つ投稿には付け足さない
+    if entry["cta"] and cta and cta not in text:
         text = f"{text}\n\n{cta}"
-    return {"text": text, "reply": "", "url": "", "pool_key": _pool_key(kind, entries[0])}
+    return {"text": text, "reply": "", "url": "",
+            "pool_key": _pool_key(kind, entry["text"])}
 
 
 def tpl_today(cfg, articles, area=None):
