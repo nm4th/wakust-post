@@ -408,6 +408,52 @@ def tpl_rank(cfg, articles, area=None):
         "販売数が多い＝満足度が高い、と見ています。")
 
 
+def tpl_spec(cfg, articles, area=None):
+    """本日ワクストに公開された記事を、スペック表の形で紹介する
+
+    今日公開された記事が無ければ None を返すので、その日は別のテンプレートが出る。
+    """
+    today = today_iso()
+    items = [a for a in _filter(articles, area=area)
+             if (a.get("published_at") or "")[:10] == today]
+    if not items:
+        return None
+    items.sort(key=lambda a: -int(a.get("sales_count") or 0))
+    a = items[0]
+
+    tags = a.get("tags") or []
+    cup = next((t for t in tags if t.endswith("カップ")), "")
+    plays = [t for t in tags if re.fullmatch(r"[A-Z]{2,5}", t)]
+    dates = [d for d in (a.get("shift_dates") or []) if d >= today]
+
+    state = _load_state()
+    no = int(state.get("_threads_spec_no", 0)) + 1
+
+    place = a.get("station") or a.get("area") or ""
+    if a.get("station") and a.get("area") and a["station"] != a["area"]:
+        place = f'{a["station"]}（{a["area"]}）'
+
+    lines = [f"No.{no}", ""]
+    hook = _title_hook(a["title"])
+    if hook:
+        lines += [hook[:60], ""]
+    lines.append(f"エリア: {place}")
+    lines.append(f'料金: {yen(a.get("price"))}')
+    prof = "、".join(x for x in [cup, " / ".join(plays[:3])] if x)
+    if prof:
+        lines.append(f"セラピスト: {prof}")
+    if dates:
+        lines.append(f'出勤: {"・".join(fmt_date(d) for d in dates[:3])}')
+
+    tcfg = cfg.get("threads") or {}
+    closer = (tcfg.get("spec_closer") or "本日公開しました。続きは記事で。").strip()
+    post = _compose(cfg, "", lines, closer, _article_url(cfg, a))
+    post["text"] = post["text"].lstrip("\n")
+    post["spec_no"] = no
+    post["story_id"] = str(a["id"])
+    return post
+
+
 def pickup_targets(articles, min_items=4):
     """厳選投稿の対象一覧を作る
 
@@ -636,6 +682,7 @@ TEMPLATES = {
     "price": ("料金帯ごとの在籍数", tpl_price),
     "lineup": ("在籍の内訳", tpl_lineup),
     "rank": ("よく読まれている順", tpl_rank),
+    "spec": ("本日公開のスペック表", tpl_spec),
     "pickup": ("エリア厳選（出し惜しみ型）", tpl_pickup),
     "flash": ("体験速報（反応を煽る）", tpl_flash),
     "story": ("体験談を1本", tpl_story),
@@ -644,6 +691,24 @@ TEMPLATES = {
 
 # 手書きストックが尽きたときに代わりに出すテンプレート
 POOL_FALLBACK = {"aruaru": "cheatsheet", "info": "price"}
+
+
+def _pick_priority(cfg, articles, area=None):
+    """ローテーションより先に出したいテンプレートを選ぶ
+
+    spec（本日公開の記事）のように「該当がある日は必ず出したい」ものを
+    ここで拾う。該当が無ければ None を返してローテーションに任せる。
+    その日すでに投稿済みのものは対象外。
+    """
+    names = (cfg.get("threads") or {}).get("priority_templates") or []
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    posted = _load_state().get("_threads", {})
+    for name in names:
+        if name not in TEMPLATES or f"{today}:{name}" in posted:
+            continue
+        if TEMPLATES[name][1](cfg, articles, area):
+            return name
+    return None
 
 
 def pick_for_slot(cfg, slot):
@@ -665,7 +730,7 @@ def pick_for_slot(cfg, slot):
 
 
 DATA_TEMPLATES = [k for k in ("today", "cheatsheet", "week", "price",
-                              "lineup", "rank", "pickup", "flash",
+                              "lineup", "rank", "pickup", "spec", "flash",
                               "story", "new")]
 
 
@@ -708,11 +773,15 @@ def main():
 
     template = args.template
     if not template and args.slot:
-        template = pick_for_slot(cfg, args.slot)
-        if not template:
-            print(f"⏭️  スロット {args.slot} に割り当てがありません")
-            return
-        print(f"🎯 スロット {args.slot} → テンプレート「{template}」")
+        template = _pick_priority(cfg, articles, args.area)
+        if template:
+            print(f"⭐ 優先テンプレート「{template}」を採用（本日分の該当あり）")
+        else:
+            template = pick_for_slot(cfg, args.slot)
+            if not template:
+                print(f"⏭️  スロット {args.slot} に割り当てがありません")
+                return
+            print(f"🎯 スロット {args.slot} → テンプレート「{template}」")
 
     if template:
         if template == "pickup":
@@ -800,6 +869,8 @@ def _publish(posts):
             state.setdefault("_threads_pool", {})[p["pool_key"]] = now
         if p.get("story_id"):
             state.setdefault("_threads_story", {})[p["story_id"]] = now
+        if p.get("spec_no"):
+            state["_threads_spec_no"] = p["spec_no"]
         _save_state(state)
 
 

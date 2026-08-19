@@ -142,6 +142,36 @@ class ThreadsClient:
         return post_id, reply_id
 
     # ------------------------------------------------------------
+    def insights(self, post_id, metrics=None):
+        """投稿1件の反応を取る（表示数・いいね・返信・リポスト・引用）
+
+        戻り値: {"views": 1260, "likes": 53, ...}。取れない指標は0。
+        """
+        metrics = metrics or ["views", "likes", "replies", "reposts", "quotes"]
+        if self.dry_run:
+            return {m: 0 for m in metrics}
+        url = f"{API_BASE}/{post_id}/insights"
+        try:
+            r = requests.get(url, params={"metric": ",".join(metrics),
+                                          "access_token": self.token}, timeout=30)
+        except requests.RequestException as e:
+            raise ThreadsError(f"インサイト取得失敗 [{post_id}]: {e}") from e
+        if r.status_code != 200:
+            raise ThreadsError(f"インサイト HTTP {r.status_code} [{post_id}]: "
+                               f"{r.text[:300]}")
+        out = {m: 0 for m in metrics}
+        for row in (r.json().get("data") or []):
+            name = row.get("name")
+            if name not in out:
+                continue
+            # 指標によって total_value と values のどちらかで返る
+            if isinstance(row.get("total_value"), dict):
+                out[name] = int(row["total_value"].get("value") or 0)
+            elif row.get("values"):
+                out[name] = int((row["values"][0] or {}).get("value") or 0)
+        return out
+
+    # ------------------------------------------------------------
     def refresh_token(self):
         """長期トークンを延長する（有効期限が切れる前に実行すること）"""
         if self.dry_run:
