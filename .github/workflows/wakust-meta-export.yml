@@ -6,7 +6,9 @@ name: Wakust Meta Export
 
 on:
   schedule:
-    # 毎朝 9:30 JST（Threads投稿の前に最新化しておく）
+    # 0:20 JST — 0時モードで公開された記事を、0:30のThreads投稿前に取り込む
+    - cron: '20 15 * * *'
+    # 9:30 JST — 朝の投稿前に最新化しておく
     - cron: '30 0 * * *'
   workflow_dispatch: {}
 

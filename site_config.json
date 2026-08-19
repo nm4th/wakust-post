@@ -40,6 +40,9 @@
     "link_target": "wakust",
     "wakust_landing_url": "https://wakust.com/user/Risingnoboru/",
     "post_schedule": {
+      "0": [
+        "spec"
+      ],
       "10": [
         "today"
       ],

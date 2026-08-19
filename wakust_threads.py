@@ -800,8 +800,10 @@ def main():
             print(f"📭 「{template}」のストックが空 → 「{alt}」に切り替え")
             template = alt
             p = TEMPLATES[template][1](cfg, articles, args.area)
-        posts = [dict(p, template=template,
-                      label=TEMPLATES[template][0])] if p else []
+        if not p:
+            print(f"⏭️  「{template}」は今回該当なし（投稿するものがありません）")
+            return
+        posts = [dict(p, template=template, label=TEMPLATES[template][0])]
     else:
         posts = build_all(cfg, articles, args.area, args.tag)
 

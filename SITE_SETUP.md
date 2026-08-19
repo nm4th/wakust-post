@@ -451,8 +451,8 @@ THREADS_USER_ID=... THREADS_ACCESS_TOKEN=... \
 python wakust_threads_api.py
 ```
 
-GitHub Actions の `Wakust Threads Post` が 10:00 / 13:00 / 21:00 JST に
-それぞれ `today` / `cheatsheet` / `week` を投稿します。
+GitHub Actions の `Wakust Threads Post` が 0:30 / 10:00 / 13:00 / 21:00 JST に投稿します。
+何を出すかは `post_schedule` が時間帯ごとに日替わりで決めます。
 同じ日に同じテンプレートを二度投げないよう、`wakust_state.json` の
 `_threads` に投稿履歴を残しています。
 
@@ -585,3 +585,26 @@ today             1      300       4.0     0.0
 `Wakust Threads Insights` ワークフローが毎日23:30 JSTに収集します。
 数字が溜まったら `post_schedule` のローテーションを、伸びているテンプレートに
 寄せてください。
+
+## 0:30枠 — 本日公開の記事を告知する
+
+ワクストの記事は0時モードで **00:00 JST に公開**されます（1日1〜3件）。
+その直後に告知が流れるよう、0:30 の枠を `spec` 専用にしています。
+
+```
+00:00  Wakust Auto Update    記事が公開される（published_at = 00:00）
+00:20  Wakust Meta Export    新しい記事を取り込む
+00:30  Wakust Threads Post   spec を投稿
+```
+
+**`Wakust Meta Export` を0:20にも走らせているのはこのためです。** 9:30だけだと
+0:30の時点では前日のデータしか無く、新しい記事を拾えません。
+
+本日公開の記事が無い日は、**何も投稿せずに終わります**（他の枠には影響しません）。
+
+```
+⏭️  「spec」は今回該当なし（投稿するものがありません）
+```
+
+なお 0:30 は反応が取りにくい時間帯かもしれません。数字が溜まってから
+`Wakust Threads Post` の cron（`30 15 * * *` = 0:30 JST）を動かして調整してください。
