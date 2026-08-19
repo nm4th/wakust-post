@@ -70,6 +70,28 @@ def yen(v):
         return "―"
 
 
+def _next_shift(a):
+    """今日以降で最も近い出勤日を返す。過去しか無ければ None"""
+    today = today_iso()
+    future = [d for d in (a.get("shift_dates") or []) if d >= today]
+    return min(future) if future else None
+
+
+def _spread(items, limit):
+    """並び順を保ったまま、全体に散らして limit 件を選ぶ
+
+    同額が並ぶと「料金順（安→高）」が同じ値の羅列になってしまうため、
+    先頭から詰めるのではなく価格帯全体が見えるように間引く。
+    """
+    n = len(items)
+    if n <= limit:
+        return items
+    if limit == 1:
+        return [items[0]]
+    idx = sorted({round(i * (n - 1) / (limit - 1)) for i in range(limit)})
+    return [items[i] for i in idx]
+
+
 def _filter(articles, area=None, day=None, tag=None):
     out = []
     for a in articles:
@@ -145,7 +167,7 @@ def tpl_today(cfg, articles, area=None):
     limit = (cfg.get("threads") or {}).get("max_items", 8)
     label = area or "全エリア"
     lines = [f'{yen(a.get("price"))}　{label_of(cfg, a)}（{a.get("area")}）'
-             for a in items[:limit]]
+             for a in _spread(items, limit)]
     d = datetime.now(JST).date()
     note = f"本日は{len(items)}名が出勤。"
     return _compose(
@@ -182,10 +204,9 @@ def tpl_cheatsheet(cfg, articles, area=None):
         [a for a in items if today in (a.get("shift_dates") or [])])
     add("明日会えるのは",
         [a for a in items if today_iso(1) in (a.get("shift_dates") or [])])
-    add("直近の出勤が早いのは",
-        sorted([a for a in items if a.get("shift_dates")],
-               key=lambda a: a["shift_dates"][0]),
-        lambda a: fmt_date(a["shift_dates"][0]))
+    upcoming = [a for a in items if _next_shift(a)]
+    upcoming.sort(key=_next_shift)
+    add("直近の出勤が早いのは", upcoming, lambda a: fmt_date(_next_shift(a)))
     add("上を見るなら",
         sorted(items, key=lambda a: -int(a.get("price") or 0)),
         lambda a: yen(a.get("price")))
@@ -246,7 +267,7 @@ def tpl_tag(cfg, articles, tag, area=None):
     items.sort(key=lambda a: int(a.get("price") or 0))
     limit = (cfg.get("threads") or {}).get("max_items", 8)
     lines = [f'{yen(a.get("price"))}　{label_of(cfg, a)}（{a.get("area")}）'
-             for a in items[:limit]]
+             for a in _spread(items, limit)]
     scope = f"{area} " if area else ""
     return _compose(
         cfg, f'{scope}「{tag}」で絞った一覧 料金順',
@@ -260,7 +281,8 @@ def tpl_new(cfg, articles, area=None):
     if not items:
         return None
     a = items[0]
-    dates = a.get("shift_dates") or []
+    today = today_iso()
+    dates = [d for d in (a.get("shift_dates") or []) if d >= today]
     tcfg = cfg.get("threads") or {}
     lines = [f'{label_of(cfg, a)}（{a.get("area")}）',
              f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}',

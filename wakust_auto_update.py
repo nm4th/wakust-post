@@ -3617,6 +3617,90 @@ def _shift_dates_iso(title):
     return sorted(out)
 
 
+# タイトルに現れるプレイタグ（英字）。前後が英字でないものだけを拾う。
+# GHR より前に HR を置いても、境界チェックにより GHR が HR に誤マッチしない。
+TITLE_PLAY_TAGS = ["NN", "NS", "GHR", "HR", "PZ", "SKR", "OPI", "ANR",
+                   "SKSK", "CKB", "KP", "AF", "NF"]
+_PLAY_TAG_RE = re.compile(
+    r"(?<![A-Za-z])(" + "|".join(TITLE_PLAY_TAGS) + r")(?![A-Za-z])")
+_CUP_RE = re.compile(r"^[A-Z]カップ$")
+# タイトル末尾に付与される地域タグ（CATEGORY_AREA_TAG の値と対応）
+_AREA_TAG_RE = re.compile(r"#(東京都内|神奈川|千葉|埼玉|多摩)")
+
+
+def _meta_from_title(title):
+    """タイトルから エリア / 店舗地域 / タグ を取り出す
+
+    タイトルは自動更新スクリプト自身が組み立てているので形式が安定している。
+    記事ごとに編集ページを開かなくても、ここから絞り込み用の情報が取れる。
+
+      【8/19.20.22出勤】【Iカップ】【品川】…PZ(パイズリ)体験記 #8/19,… #東京都内
+       └ 出勤日          └ カップ    └ 地域              └ プレイ    └ エリア
+
+    戻り値: (area, station, tags)
+    """
+    title = title or ""
+    m = _AREA_TAG_RE.search(title)
+    area = m.group(1) if m else ""
+
+    cup = station = ""
+    for b in re.findall(r"【([^】]*)】", title):
+        b = b.strip()
+        if not b or "出勤" in b:
+            continue
+        if _CUP_RE.match(b):
+            cup = cup or b
+        elif b in TITLE_PLAY_TAGS:
+            continue  # プレイタグは本文側でまとめて拾う
+        elif not station:
+            station = b
+
+    tags = []
+    for t in (cup, station):
+        if t and t not in tags:
+            tags.append(t)
+    for t in _PLAY_TAG_RE.findall(title):
+        if t not in tags:
+            tags.append(t)
+    return area, station, tags
+
+
+# 地域タグが付いていない古い記事のための駅名→エリア表。
+# 記事から学習できる分（_build_station_area_map）で足りない駅だけをここに置く。
+STATION_AREA_FALLBACK = {
+    "登戸": "神奈川", "溝の口": "神奈川", "相模大野": "神奈川",
+    "吉祥寺": "多摩", "調布": "多摩", "国分寺": "多摩", "多摩": "多摩",
+    "荻窪": "東京都内",
+}
+
+
+def _build_station_area_map(posts):
+    """地域タグ付きの記事から「駅名→エリア」を学習する
+
+    同じ駅で複数のエリアが出た場合は多数決。表を手で持たなくても、
+    記事が増えれば自動で精度が上がる。
+    """
+    counts = {}
+    for p in posts:
+        area, station, _ = _meta_from_title(p.get("title"))
+        if area and station:
+            counts.setdefault(station, {})
+            counts[station][area] = counts[station].get(area, 0) + 1
+    return {st: max(c.items(), key=lambda kv: kv[1])[0] for st, c in counts.items()}
+
+
+def _resolve_area(station, learned):
+    """駅名からエリアを引く（学習結果 → 固定表 の順）"""
+    for key in [station] + [x.strip() for x in (station or "").split("/")]:
+        if not key:
+            continue
+        if key in learned:
+            return learned[key]
+        if key in STATION_AREA_FALLBACK:
+            return STATION_AREA_FALLBACK[key]
+    return ""
+
+
 def _site_area_of(category):
     """カテゴリ名を一覧の絞り込み用エリア名に正規化する"""
     return CATEGORY_TO_SET_AREA.get(category, category or "その他")
@@ -3701,6 +3785,10 @@ def run_meta_export(session):
         log.error("❌ 記事一覧が空、書き出し中止")
         return
 
+    # 地域タグ付きの記事から駅名→エリアを学習しておく
+    station_area = _build_station_area_map(all_posts)
+    log.info(f"    🗺️  駅名→エリアを{len(station_area)}件学習")
+
     os.makedirs(SITE_CONTENT_DIR, exist_ok=True)
     written = skipped = 0
     seen_ids = set()
@@ -3718,13 +3806,18 @@ def run_meta_export(session):
             except (OSError, ValueError):
                 prev = {}
 
-        category = prev.get("category") or "その他"
+        area, station, tags = _meta_from_title(p["title"])
+        # 地域タグが無い記事は駅名から補完し、それも無理なら前回値
+        area = (area or _resolve_area(station, station_area)
+                or prev.get("area") or "その他")
+        tags = tags or prev.get("tags") or []
         article = {
             "id": p["id"],
             "title": p["title"],
-            "category": category,
-            "area": _site_area_of(category),
-            "tags": prev.get("tags", []),
+            "category": station or prev.get("category") or area,
+            "area": area,
+            "station": station or prev.get("station") or "",
+            "tags": tags,
             "shift_dates": _shift_dates_iso(p["title"]),
             "sales_count": p.get("sales_count") or 0,
             "pv_total": p.get("pv_total") or 0,
