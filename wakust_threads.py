@@ -217,21 +217,50 @@ def tpl_pool(cfg, articles, area=None, kind="aruaru"):
 
 
 def tpl_today(cfg, articles, area=None):
-    """本日出勤を料金順に並べる（参考投稿の「価格（安→高）」型）"""
+    """本日出勤を並べる。料金は出さない"""
     day = today_iso()
     items = _filter(articles, area=area, day=day)
     if not items:
         return None
-    items.sort(key=lambda a: int(a.get("price") or 0))
     limit = (cfg.get("threads") or {}).get("max_items", 8)
     label = area or "全エリア"
-    lines = [f'{yen(a.get("price"))}　{label_of(cfg, a)}（{a.get("area")}）'
-             for a in _spread(items, limit)]
+    # 料金は出さないが、選ぶときは価格帯全体から散らす（同じ層ばかりにしない）。
+    # あわせて1駅あたりの件数に上限を設けて新宿だけにならないようにする
+    items.sort(key=lambda a: int(a.get("price") or 0))
+    spread = _spread(items, limit * 3)
+    per_station = 2
+    picks, used_station = [], {}
+    for a in spread:
+        st = a.get("station") or a.get("area") or ""
+        if used_station.get(st, 0) >= per_station:
+            continue
+        used_station[st] = used_station.get(st, 0) + 1
+        picks.append(a)
+        if len(picks) >= limit:
+            break
+    for a in spread:
+        if len(picks) >= limit:
+            break
+        if a not in picks:
+            picks.append(a)
+
+    seen, lines = set(), []
+    for a in picks:
+        tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
+                and t != a.get("station")]
+        cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+        detail = " / ".join(x for x in [cup] + tags[:2] if x) or a.get("area", "")
+        row = f'【{a.get("station") or a.get("area")}】{detail}'
+        if row in seen:
+            continue
+        seen.add(row)
+        lines.append(row)
+
     d = datetime.now(JST).date()
     note = f"本日は{len(items)}名が出勤。"
     return _compose(
         cfg,
-        f'{label} 本日{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})出勤 料金順（安→高）',
+        f'{label} 本日{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})出勤',
         lines, _closer(cfg, d.day),
         _list_link(cfg, "today", area=area, day="today"), note)
 
@@ -695,7 +724,7 @@ TEMPLATES = {
     "aruaru": ("あるあるネタ（手書き）", _pool_tpl("aruaru")),
     "info": ("情報投稿（手書き）", _pool_tpl("info")),
     # ワクストの記事データから生成
-    "today": ("本日出勤・料金順", tpl_today),
+    "today": ("本日出勤", tpl_today),
     "cheatsheet": ("目的別チートシート", tpl_cheatsheet),
     "week": ("今週の出勤まとめ", tpl_week),
     "price": ("料金帯ごとの在籍数", tpl_price),

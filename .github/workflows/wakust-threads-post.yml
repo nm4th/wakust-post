@@ -69,10 +69,16 @@ jobs:
 
       - name: Post to Threads
         env:
-          # dry_run が true のときはトークンを渡さない → 自動的に dry-run になる
-          THREADS_USER_ID: ${{ inputs.dry_run && '' || secrets.THREADS_USER_ID }}
-          THREADS_ACCESS_TOKEN: ${{ inputs.dry_run && '' || secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          # GitHub Actions の `A && '' || B` は A が true でも '' が falsy なため
+          # B が採用されてしまう。dry-run はシェル側で明示的に外す
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "🧪 dry-run のため認証情報を外します（実際には投稿しません）"
+            unset THREADS_ACCESS_TOKEN THREADS_USER_ID
+          fi
           if [ -n "${{ inputs.template }}" ]; then
             SELECT="--template ${{ inputs.template }}"
           else
