@@ -1,8 +1,11 @@
 name: Wakust Threads Post
 
 # 掲載済み記事から投稿文を組み立てて Threads に投稿する。
-# 認証情報（THREADS_USER_ID / THREADS_ACCESS_TOKEN）が未設定のときは
-# dry-run になり、ログに文面が出るだけで投稿はされない。
+# 手動実行で dry_run を選んだときだけ、ログに文面が出るだけで投稿はされない。
+# 定期実行でトークンが無効・未設定だった場合はワークフローを失敗させ、
+# GitHub の「ワークフロー失敗」メールで気づけるようにしている。
+# メールが届かないときは https://github.com/settings/notifications の
+# Actions で「Email」が有効か確認すること。
 
 on:
   schedule:
@@ -78,6 +81,12 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then
             echo "🧪 dry-run のため認証情報を外します（実際には投稿しません）"
             unset THREADS_ACCESS_TOKEN THREADS_USER_ID
+          elif [ -z "$THREADS_ACCESS_TOKEN" ]; then
+            # トークンが無いと dry-run に落ちて「成功したのに投稿ゼロ」になる。
+            # 黙って止まるのが一番まずいので、失敗させて通知に乗せる
+            echo "::error::THREADS_ACCESS_TOKEN が未設定です。Threadsへの投稿は" \
+                 "行われていません。Secrets を確認してください"
+            exit 1
           fi
           if [ -n "${{ inputs.template }}" ]; then
             SELECT="--template ${{ inputs.template }}"

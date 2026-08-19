@@ -1,16 +1,25 @@
 name: Wakust Threads Token Check
 
 # Threads の長期アクセストークンは60日で失効し、切れると延長できない。
-# 週1で生存確認し、死んでいたらワークフローを失敗させて通知を飛ばす。
+# 毎日生存確認し、死んでいる／期限が近いときはワークフローを失敗させて
+# GitHub の「ワークフロー失敗」メールを飛ばす。
+#
+# メールが届かない場合は、GitHub の通知設定を確認すること:
+#   https://github.com/settings/notifications
+#   → Actions →「Email」にチェック（Only notify for failed workflows でよい）
 
 on:
   schedule:
-    # 毎週月曜 9:00 JST
-    - cron: '0 0 * * 1'
+    # 毎日 9:00 JST
+    - cron: '0 0 * * *'
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: wakust-threads-token-check
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -29,18 +38,27 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
+      # トークンが空なら投稿は黙って止まる。それも失敗として扱う
       - name: Check token
         env:
           THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+        run: python wakust_threads_setup.py check
+
+      # トークンの使用開始日を残す（失効の何日前かを推定するのに使う）
+      - name: Commit token age record
+        if: always()
         run: |
-          if [ -z "$THREADS_ACCESS_TOKEN" ]; then
-            echo "::notice::THREADS_ACCESS_TOKEN が未設定です（Threads投稿はdry-runのまま）"
-            exit 0
-          fi
-          if ! python wakust_threads_setup.py check; then
-            echo "::error::Threadsのアクセストークンが無効です。" \
-                 "python wakust_threads_setup.py exchange で取り直して" \
-                 "Secrets の THREADS_ACCESS_TOKEN を更新してください"
-            exit 1
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f wakust_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "🔑 Threadsトークンの使用開始日を記録"
+            for i in 1 2 3 4; do
+              if git pull --rebase origin main && git push origin HEAD:main; then
+                exit 0
+              fi
+              sleep $((2 ** i))
+            done
+            echo "::warning::トークン記録のpushに失敗しました（確認自体は完了）"
           fi
