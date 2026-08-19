@@ -524,6 +524,52 @@ def tpl_spec(cfg, articles, area=None):
     return post
 
 
+def tpl_pinned(cfg, articles, area=None):
+    """固定ポスト用のまとめを作る
+
+    プロフィールにリンクを置けなくても機能する導線。1回投稿してアプリで
+    ピン留めすれば、以後すべての投稿の着地点になる。
+    在籍が変わったら作り直して貼り替える。
+    """
+    if len(articles) < 5:
+        return None
+    tcfg = cfg.get("threads") or {}
+    by_area, by_station = {}, {}
+    for a in articles:
+        ar = a.get("area") or "その他"
+        by_area[ar] = by_area.get(ar, 0) + 1
+        st = a.get("station")
+        if st:
+            by_station.setdefault(ar, {})
+            by_station[ar][st] = by_station[ar].get(st, 0) + 1
+
+    lines = []
+    for ar, n in sorted(by_area.items(), key=lambda kv: -kv[1]):
+        # 1名だけの駅を並べても情報にならないので、2名以上に絞る
+        sts = [(k, v) for k, v in
+               sorted((by_station.get(ar) or {}).items(), key=lambda kv: -kv[1])
+               if v >= 2]
+        lines.append(f"《{ar} {n}名》")
+        if sts:
+            head = " / ".join(f"{k}{v}" for k, v in sts[:6])
+            lines.append(head + (" …" if len(sts) > 6 else ""))
+
+    url = (tcfg.get("wakust_landing_url") or "").strip()
+    tail = [f"出勤情報は毎日0時に更新しています。", f"全{len(articles)}名の一覧 →"]
+    if url:
+        tail.append(url)
+    body = ["【保存版】エリア別まとめ", ""] + lines + ["", "----", ""] + tail
+    text = "\n".join(body).strip()
+
+    # Threadsの本文上限に収まらなければ、駅の羅列を落として詰める
+    if len(text) > 480:
+        lines = [f"《{ar} {n}名》" for ar, n in
+                 sorted(by_area.items(), key=lambda kv: -kv[1])]
+        body = ["【保存版】エリア別まとめ", ""] + lines + ["", "----", ""] + tail
+        text = "\n".join(body).strip()
+    return {"text": text, "reply": "", "url": url}
+
+
 def pickup_targets(articles, min_items=4):
     """厳選投稿の対象一覧を作る
 
@@ -660,7 +706,7 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     seed = datetime.now(JST).timetuple().tm_yday
     head = render_head(heads[seed % len(heads)], area=label, n=len(picks))
     tail = render_head(tails[seed % len(tails)], area=label, n=len(picks))
-    cta = (tcfg.get("profile_cta") or "気になる人はプロフィールのリンクへ").strip()
+    cta = (tcfg.get("profile_cta") or "詳細は固定ポストに置いてます📌").strip()
 
     sep = tcfg.get("separator", "----")
     body = [head, ""] + lines + ["", sep, "",
@@ -767,6 +813,7 @@ TEMPLATES = {
     "price": ("料金帯ごとの在籍数", tpl_price),
     "lineup": ("在籍の内訳", tpl_lineup),
     "rank": ("よく読まれている順", tpl_rank),
+    "pinned": ("固定ポスト用まとめ", tpl_pinned),
     "spec": ("本日公開のスペック表", tpl_spec),
     "pickup": ("エリア厳選（出し惜しみ型）", tpl_pickup),
     "flash": ("体験速報（反応を煽る）", tpl_flash),
