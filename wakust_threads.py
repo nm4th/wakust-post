@@ -326,8 +326,7 @@ def tpl_new(cfg, articles, area=None):
     dates = [d for d in (a.get("shift_dates") or []) if d >= today]
     tcfg = cfg.get("threads") or {}
     lines = [f'{label_of(cfg, a)}（{a.get("area")}）',
-             f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}',
-             f'料金　{yen(a.get("price"))}']
+             f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}']
     # show_names=False のときは見出しがタグなので、重ねて出さない
     if a.get("tags") and (cfg.get("threads") or {}).get("show_names"):
         lines.append(f'タグ　{" / ".join(a["tags"][:5])}')
@@ -400,7 +399,7 @@ def tpl_rank(cfg, articles, area=None):
         return None
     items.sort(key=lambda a: -int(a.get("sales_count") or 0))
     limit = (cfg.get("threads") or {}).get("max_items", 8)
-    lines = [f'{i}位　{label_of(cfg, a)}（{a.get("area")} / {yen(a.get("price"))}）'
+    lines = [f'{i}位　{label_of(cfg, a)}（{a.get("area")}）'
              for i, a in enumerate(items[:limit], 1)]
     return _compose(
         cfg, f'{area or "全エリア"} よく読まれている順',
@@ -438,7 +437,6 @@ def tpl_spec(cfg, articles, area=None):
     if hook:
         lines += [hook[:60], ""]
     lines.append(f"エリア: {place}")
-    lines.append(f'料金: {yen(a.get("price"))}')
     prof = "、".join(x for x in [cup, " / ".join(plays[:3])] if x)
     if prof:
         lines.append(f"セラピスト: {prof}")
@@ -623,8 +621,7 @@ def tpl_flash(cfg, articles, area=None):
                        area=a.get("area", ""), play=play or "当たり")
     lines = [head, ""]
     lines.append(" / ".join(tags[:3]) or a.get("area", ""))
-    lines.append(f'{yen(a.get("price"))}　出勤 '
-                 + ("・".join(fmt_date(d) for d in dates[:2]) or "調整中"))
+    lines.append("出勤 " + ("・".join(fmt_date(d) for d in dates[:2]) or "調整中"))
     post = _compose(cfg, "", lines, hooks[seed % len(hooks)],
                     _article_url(cfg, a))
     # 1行目のタイトル枠は使わないので、先頭の空行を落とす
@@ -658,7 +655,6 @@ def tpl_story(cfg, articles, area=None):
         lines.append(hook[:120])
         lines.append("")
     lines.append(f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}')
-    lines.append(f'料金　{yen(a.get("price"))}')
     post = _compose(cfg, "体験談を1本", lines, _closer(cfg, int(a["id"][-2:] or 0)),
                     _article_url(cfg, a))
     post["story_id"] = str(a["id"])
