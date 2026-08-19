@@ -40,9 +40,33 @@
     "link_target": "wakust",
     "wakust_landing_url": "https://wakust.com/user/Risingnoboru/",
     "post_schedule": {
-      "10": "today",
-      "13": "cheatsheet",
-      "21": "week"
+      "10": [
+        "today",
+        "today",
+        "today",
+        "today",
+        "today",
+        "today",
+        "today"
+      ],
+      "13": [
+        "info",
+        "aruaru",
+        "cheatsheet",
+        "info",
+        "aruaru",
+        "lineup",
+        "price"
+      ],
+      "21": [
+        "story",
+        "week",
+        "story",
+        "aruaru",
+        "story",
+        "rank",
+        "story"
+      ]
     },
     "show_names": false,
     "profile_cta": "詳細はプロフィールのリンクから"
