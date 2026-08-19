@@ -66,8 +66,9 @@ def cmd_exchange(args):
     me = _fetch_me(long_token)
 
     print("\n✅ 取得できました。GitHub の Secrets に以下を登録してください。\n")
-    print(f"  THREADS_USER_ID       {me.get('id')}")
     print(f"  THREADS_ACCESS_TOKEN  {long_token}")
+    print(f"  THREADS_USER_ID       {me.get('id')}"
+          "   ※省略可（未設定なら自動で自分を指します）")
     print(f"\n  アカウント : @{me.get('username')}")
     print(f"  有効期限   : 約{_days(data.get('expires_in'))}日")
     print("\n⚠️ 期限が切れると延長できません。切れる前に refresh を実行してください。")
@@ -90,8 +91,9 @@ def cmd_secrets(args):
     me = _fetch_me(token)
 
     print("\n✅ 確認できました。GitHub の Secrets に以下を登録してください。\n")
-    print(f"  THREADS_USER_ID       {me.get('id')}")
     print(f"  THREADS_ACCESS_TOKEN  {token}")
+    print(f"  THREADS_USER_ID       {me.get('id')}"
+          "   ※省略可（未設定なら自動で自分を指します）")
     print(f"\n  アカウント : @{me.get('username')}")
     print("\n⚠️ 長期トークンは約60日で失効し、切れると延長できません。")
     print("   期限前に refresh を実行して、Secrets を更新してください。")

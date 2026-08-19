@@ -6,8 +6,9 @@ Meta の Threads Graph API を叩いて投稿する。
   3. リプライ       1と同じだが reply_to_id を付ける
 
 必要な環境変数:
-  THREADS_USER_ID       Threads のユーザーID（数値）
   THREADS_ACCESS_TOKEN  長期アクセストークン（有効期限60日）
+  THREADS_USER_ID       Threads のユーザーID（数値）。省略可。
+                        未設定なら "me"（自分自身）として扱う
 
 トークンが未設定のときは dry-run になり、投稿せずに内容を表示するだけ。
 """
@@ -34,10 +35,12 @@ class ThreadsError(RuntimeError):
 
 class ThreadsClient:
     def __init__(self, user_id=None, token=None, dry_run=None):
-        self.user_id = user_id or os.environ.get("THREADS_USER_ID", "").strip()
+        # user_id は省略可。Threads API は "me" を自分自身のエイリアスとして受け付ける
+        self.user_id = (user_id or os.environ.get("THREADS_USER_ID", "").strip()
+                        or "me")
         self.token = token or os.environ.get("THREADS_ACCESS_TOKEN", "").strip()
-        # 明示指定がなければ、認証情報の有無で自動判定
-        self.dry_run = (not (self.user_id and self.token)) if dry_run is None else dry_run
+        # 明示指定がなければ、トークンの有無で自動判定
+        self.dry_run = (not self.token) if dry_run is None else dry_run
         if self.dry_run:
             log.info("🧪 Threads: dry-run モード（実際には投稿しません）")
 

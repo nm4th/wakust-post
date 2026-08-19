@@ -248,8 +248,8 @@ python wakust_threads_setup.py exchange \
 ```
 ✅ 確認できました。GitHub の Secrets に以下を登録してください。
 
-  THREADS_USER_ID       1784...
   THREADS_ACCESS_TOKEN  THQVJ...
+  THREADS_USER_ID       17841...   ※省略可（未設定なら自動で自分を指します）
 
   アカウント : @masa0_menes
 ```
@@ -266,10 +266,14 @@ THREADS_ACCESS_TOKEN=... python wakust_threads_setup.py check     # 生存確認
 `Wakust Threads Token Check` が毎週月曜9:00 JSTに生存確認をして、
 トークンが死んでいたらワークフローを失敗させて通知します。
 
-| Secret | 内容 |
-|---|---|
-| `THREADS_USER_ID` | Threads のユーザーID（数値） |
-| `THREADS_ACCESS_TOKEN` | 長期アクセストークン |
+| Secret | 内容 | 必須 |
+|---|---|---|
+| `THREADS_ACCESS_TOKEN` | 長期アクセストークン（60日） | 必須 |
+| `THREADS_USER_ID` | Threads のユーザーID（`17841...` のような**数値**） | 任意 |
+
+`THREADS_USER_ID` は省略できます。未設定なら Threads API の `me`
+（自分自身）として扱うので、実質トークンだけあれば動きます。
+**ユーザー名（`masa0_menes`）ではありません** — 数値IDです。
 
 **トークンは60日で切れます。** `ThreadsClient.refresh_token()` で延長できるので、
 期限前に実行して Secrets を更新してください。
