@@ -47,22 +47,11 @@
         "today"
       ],
       "13": [
-        "pickup",
-        "info",
-        "aruaru",
-        "pickup",
-        "info",
-        "aruaru",
         "pickup"
       ],
       "21": [
-        "flash",
-        "story",
-        "aruaru",
-        "flash",
         "info",
-        "story",
-        "rank"
+        "aruaru"
       ]
     },
     "show_names": false,
@@ -93,6 +82,9 @@
     "spec_closer": "本日公開しました。続きは記事で。",
     "priority_templates": [
       "spec"
+    ],
+    "cta_only_templates": [
+      "today"
     ]
   },
   "site_enabled": false

@@ -119,6 +119,14 @@ def _url(cfg, **params):
     return base + ("?" + q if q else "")
 
 
+def _list_link(cfg, name, **params):
+    """一覧系テンプレートの誘導先。cta_only_templates に入れたものは
+    リプライにURLを貼らず、本文末尾のプロフィール誘導だけで引く"""
+    if name in ((cfg.get("threads") or {}).get("cta_only_templates") or []):
+        return ""
+    return _url(cfg, **params)
+
+
 def _article_url(cfg, a):
     """記事1件の誘導先URL"""
     tcfg = cfg.get("threads") or {}
@@ -224,7 +232,8 @@ def tpl_today(cfg, articles, area=None):
     return _compose(
         cfg,
         f'{label} 本日{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})出勤 料金順（安→高）',
-        lines, _closer(cfg, d.day), _url(cfg, area=area, day="today"), note)
+        lines, _closer(cfg, d.day),
+        _list_link(cfg, "today", area=area, day="today"), note)
 
 
 def tpl_cheatsheet(cfg, articles, area=None):

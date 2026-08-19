@@ -272,15 +272,35 @@ python wakust_threads.py --template pickup --area 神奈川    # エリアを指
 
 ```json
 "post_schedule": {
-  "10": ["today"],
-  "13": ["pickup", "info", "aruaru", "pickup", "info", "aruaru", "pickup"],
-  "21": ["flash", "story", "aruaru", "flash", "info", "story", "rank"]
+  "0":  ["spec"],            // 本日公開の記事がある日だけ
+  "10": ["today"],           // 毎日
+  "13": ["pickup"],          // 毎日（駅・エリアが日替わり、15日で一巡）
+  "21": ["info", "aruaru"]   // 1日交替
 }
 ```
 
-朝は出勤情報で固定、昼は手書き（情報・あるある）を主軸にデータ系を混ぜ、
-夜は反応が取れる `flash` と体験談を厚めに、という配分です。手書きの比率を
-上げたいときはリスト内の `info` / `aruaru` を増やしてください。
+| 時刻 | 内容 |
+|---|---|
+| 0:30 | `spec` — 本日公開の記事があれば告知。無い日は投稿しない |
+| 10:00 | `today` — 本日出勤の料金順 |
+| 13:00 | `pickup` — 駅・エリアが日替わり（新宿→池袋→…と15日で一巡） |
+| 21:00 | `info` と `aruaru` を1日交替 |
+
+`flash` / `story` / `week` / `rank` / `price` / `lineup` / `new` / `cheatsheet` は
+実装済みですがローテーションには入れていません。使いたくなったらリストに
+足すだけで戻せます。
+
+### 誘導先を出し分ける
+
+`threads.cta_only_templates` に入れたテンプレートは、**リプライにURLを貼らず**
+本文末尾の「詳細はプロフィールのリンクから」だけで引きます。
+
+```json
+"cta_only_templates": ["today"]
+```
+
+`pickup` は元々この形（出し惜しみで締めるのが型なので）。記事1件を紹介する
+`spec` / `flash` / `story` / `new` は、リプライにその記事のURLを付けます。
 
 `flash` の1行目と締めの煽り文は `threads.flash_heads` / `threads.flash_hooks` で
 変えられます。`{area}` と `{play}` が記事の値に置き換わります。
