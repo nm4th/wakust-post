@@ -1,0 +1,66 @@
+name: Wakust Threads Insights
+
+# 投稿の表示数・いいね数を記録して、テンプレートごとに集計する。
+# 過去14日分の投稿を毎日追い直すので、後から伸びた分も拾える。
+
+on:
+  schedule:
+    # 毎日 23:30 JST（その日の投稿が出揃ってから）
+    - cron: '30 14 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wakust-threads-insights
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Collect insights
+        env:
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$THREADS_ACCESS_TOKEN" ]; then
+            echo "::notice::THREADS_ACCESS_TOKEN が未設定のためスキップします"
+            exit 0
+          fi
+          python wakust_threads_insights.py
+
+      - name: Commit insights
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add logs/threads_insights.csv || true
+          if ! git diff --cached --quiet; then
+            git commit -m "📊 Threads反応記録 $(date -u +%Y-%m-%d)"
+            pushed=0
+            for i in 1 2 3 4; do
+              if git pull --rebase origin main && git push origin HEAD:main; then
+                pushed=1; break
+              fi
+              sleep $((2 ** i))
+            done
+            if [ "$pushed" != "1" ]; then
+              echo "::error::git push に失敗しました"
+              exit 1
+            fi
+          fi

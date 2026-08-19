@@ -70,6 +70,28 @@ def yen(v):
         return "―"
 
 
+def _next_shift(a):
+    """今日以降で最も近い出勤日を返す。過去しか無ければ None"""
+    today = today_iso()
+    future = [d for d in (a.get("shift_dates") or []) if d >= today]
+    return min(future) if future else None
+
+
+def _spread(items, limit):
+    """並び順を保ったまま、全体に散らして limit 件を選ぶ
+
+    同額が並ぶと「料金順（安→高）」が同じ値の羅列になってしまうため、
+    先頭から詰めるのではなく価格帯全体が見えるように間引く。
+    """
+    n = len(items)
+    if n <= limit:
+        return items
+    if limit == 1:
+        return [items[0]]
+    idx = sorted({round(i * (n - 1) / (limit - 1)) for i in range(limit)})
+    return [items[i] for i in idx]
+
+
 def _filter(articles, area=None, day=None, tag=None):
     out = []
     for a in articles:
@@ -95,6 +117,14 @@ def _url(cfg, **params):
     base = cfg["base_url"] + "/"
     q = "&".join(f"{k}={quote(str(v))}" for k, v in params.items() if v)
     return base + ("?" + q if q else "")
+
+
+def _list_link(cfg, name, **params):
+    """一覧系テンプレートの誘導先。cta_only_templates に入れたものは
+    リプライにURLを貼らず、本文末尾のプロフィール誘導だけで引く"""
+    if name in ((cfg.get("threads") or {}).get("cta_only_templates") or []):
+        return ""
+    return _url(cfg, **params)
 
 
 def _article_url(cfg, a):
@@ -135,6 +165,57 @@ def _compose(cfg, title, lines, closer, reply_url, note=None):
 # ============================================================
 # テンプレート
 # ============================================================
+POOL_FILE = "threads_pool.json"
+
+
+def load_pool():
+    """手書きの投稿ストックを読む（無ければ空）"""
+    if not os.path.exists(POOL_FILE):
+        return {}
+    try:
+        with open(POOL_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"⚠️ {POOL_FILE} の読み込みに失敗: {e}")
+        return {}
+    return {k: v for k, v in data.items()
+            if isinstance(v, list) and not k.startswith("_")}
+
+
+def _pool_key(kind, text):
+    import hashlib
+    return f'{kind}:{hashlib.md5(text.encode("utf-8")).hexdigest()[:8]}'
+
+
+def tpl_pool(cfg, articles, area=None, kind="aruaru"):
+    """手書きストックから、一番長く使っていないものを1件出す
+
+    データから作れない「あるあるネタ」などを、重複させずに回すための枠。
+    """
+    entries = []
+    for e in (load_pool().get(kind) or []):
+        # 文字列そのままか、{"text": ..., "cta": false} の形を受け付ける
+        if isinstance(e, str):
+            entries.append({"text": e, "cta": True})
+        elif isinstance(e, dict) and (e.get("text") or "").strip():
+            entries.append({"text": e["text"], "cta": e.get("cta", True)})
+    entries = [e for e in entries if e["text"].strip()]
+    if not entries:
+        return None
+    used = _load_state().get("_threads_pool", {})
+    # 未使用（""）が最優先、次に使用日が古い順
+    entries.sort(key=lambda e: used.get(_pool_key(kind, e["text"]), ""))
+    entry = entries[0]
+    text = entry["text"].strip()
+    tcfg = cfg.get("threads") or {}
+    cta = (tcfg.get("profile_cta") or "").strip()
+    # 独自の締め（「いいねだけ押してくれ」等）を持つ投稿には付け足さない
+    if entry["cta"] and cta and cta not in text:
+        text = f"{text}\n\n{cta}"
+    return {"text": text, "reply": "", "url": "",
+            "pool_key": _pool_key(kind, entry["text"])}
+
+
 def tpl_today(cfg, articles, area=None):
     """本日出勤を料金順に並べる（参考投稿の「価格（安→高）」型）"""
     day = today_iso()
@@ -145,13 +226,14 @@ def tpl_today(cfg, articles, area=None):
     limit = (cfg.get("threads") or {}).get("max_items", 8)
     label = area or "全エリア"
     lines = [f'{yen(a.get("price"))}　{label_of(cfg, a)}（{a.get("area")}）'
-             for a in items[:limit]]
+             for a in _spread(items, limit)]
     d = datetime.now(JST).date()
     note = f"本日は{len(items)}名が出勤。"
     return _compose(
         cfg,
         f'{label} 本日{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})出勤 料金順（安→高）',
-        lines, _closer(cfg, d.day), _url(cfg, area=area, day="today"), note)
+        lines, _closer(cfg, d.day),
+        _list_link(cfg, "today", area=area, day="today"), note)
 
 
 def tpl_cheatsheet(cfg, articles, area=None):
@@ -182,10 +264,9 @@ def tpl_cheatsheet(cfg, articles, area=None):
         [a for a in items if today in (a.get("shift_dates") or [])])
     add("明日会えるのは",
         [a for a in items if today_iso(1) in (a.get("shift_dates") or [])])
-    add("直近の出勤が早いのは",
-        sorted([a for a in items if a.get("shift_dates")],
-               key=lambda a: a["shift_dates"][0]),
-        lambda a: fmt_date(a["shift_dates"][0]))
+    upcoming = [a for a in items if _next_shift(a)]
+    upcoming.sort(key=_next_shift)
+    add("直近の出勤が早いのは", upcoming, lambda a: fmt_date(_next_shift(a)))
     add("上を見るなら",
         sorted(items, key=lambda a: -int(a.get("price") or 0)),
         lambda a: yen(a.get("price")))
@@ -246,7 +327,7 @@ def tpl_tag(cfg, articles, tag, area=None):
     items.sort(key=lambda a: int(a.get("price") or 0))
     limit = (cfg.get("threads") or {}).get("max_items", 8)
     lines = [f'{yen(a.get("price"))}　{label_of(cfg, a)}（{a.get("area")}）'
-             for a in items[:limit]]
+             for a in _spread(items, limit)]
     scope = f"{area} " if area else ""
     return _compose(
         cfg, f'{scope}「{tag}」で絞った一覧 料金順',
@@ -260,11 +341,11 @@ def tpl_new(cfg, articles, area=None):
     if not items:
         return None
     a = items[0]
-    dates = a.get("shift_dates") or []
+    today = today_iso()
+    dates = [d for d in (a.get("shift_dates") or []) if d >= today]
     tcfg = cfg.get("threads") or {}
     lines = [f'{label_of(cfg, a)}（{a.get("area")}）',
-             f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}',
-             f'料金　{yen(a.get("price"))}']
+             f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}']
     # show_names=False のときは見出しがタグなので、重ねて出さない
     if a.get("tags") and (cfg.get("threads") or {}).get("show_names"):
         lines.append(f'タグ　{" / ".join(a["tags"][:5])}')
@@ -273,17 +354,410 @@ def tpl_new(cfg, articles, area=None):
                     _article_url(cfg, a))
 
 
+def _title_hook(title):
+    """タイトルから【】と末尾ハッシュタグを除いた「引き」の部分を取り出す"""
+    t = re.sub(r"【[^】]*】", "", title or "")
+    t = re.sub(r"\s*#\S+", "", t)
+    return t.strip()
+
+
+def tpl_price(cfg, articles, area=None):
+    """価格帯ごとの在籍数（参考アカウントの価格表型）"""
+    items = _filter(articles, area=area)
+    if len(items) < 5:
+        return None
+    dist = {}
+    for a in items:
+        dist[int(a.get("price") or 0)] = dist.get(int(a.get("price") or 0), 0) + 1
+    rows = sorted(dist.items())
+    width = max(v for _, v in rows)
+    lines = [f'{yen(p)}　{"■" * max(1, round(n / width * 10))} {n}名'
+             for p, n in rows if p]
+    lo, hi = rows[0][0], rows[-1][0]
+    return _compose(
+        cfg, f'{area or "全エリア"} 料金帯ごとの在籍数',
+        lines, _closer(cfg, len(items)), _url(cfg, area=area),
+        f"{yen(lo)}〜{yen(hi)}。迷ったら{yen(rows[0][0])}帯から。")
+
+
+def tpl_lineup(cfg, articles, area=None):
+    """タグ別・カップ別の在籍数"""
+    items = _filter(articles, area=area)
+    if len(items) < 5:
+        return None
+    cups, plays = {}, {}
+    for a in items:
+        for t in (a.get("tags") or []):
+            if t.endswith("カップ"):
+                cups[t] = cups.get(t, 0) + 1
+            elif re.fullmatch(r"[A-Z]{2,5}", t):
+                plays[t] = plays.get(t, 0) + 1
+    if not cups and not plays:
+        return None
+    lines = []
+    if cups:
+        top = sorted(cups.items(), key=lambda kv: -kv[1])[:6]
+        lines.append("カップ　" + "・".join(f"{k}{v}名" for k, v in top))
+    if plays:
+        top = sorted(plays.items(), key=lambda kv: -kv[1])[:6]
+        lines.append("タイプ　" + "・".join(f"{k}{v}名" for k, v in top))
+    by_area = {}
+    for a in items:
+        by_area[a.get("area") or "その他"] = by_area.get(a.get("area") or "その他", 0) + 1
+    lines.append("エリア　" + "・".join(
+        f"{k}{v}名" for k, v in sorted(by_area.items(), key=lambda kv: -kv[1])[:6]))
+    return _compose(
+        cfg, f'{area or "全エリア"} 在籍{len(items)}名の内訳',
+        lines, _closer(cfg, len(items)), _url(cfg, area=area))
+
+
+def tpl_rank(cfg, articles, area=None):
+    """販売実績の多い順（人気ランキング）"""
+    items = [a for a in _filter(articles, area=area) if a.get("sales_count")]
+    if len(items) < 3:
+        return None
+    items.sort(key=lambda a: -int(a.get("sales_count") or 0))
+    limit = (cfg.get("threads") or {}).get("max_items", 8)
+    lines = [f'{i}位　{label_of(cfg, a)}（{a.get("area")}）'
+             for i, a in enumerate(items[:limit], 1)]
+    return _compose(
+        cfg, f'{area or "全エリア"} よく読まれている順',
+        lines, _closer(cfg, len(items)), _url(cfg, area=area),
+        "販売数が多い＝満足度が高い、と見ています。")
+
+
+def tpl_spec(cfg, articles, area=None):
+    """本日ワクストに公開された記事を、スペック表の形で紹介する
+
+    今日公開された記事が無ければ None を返すので、その日は別のテンプレートが出る。
+    """
+    today = today_iso()
+    items = [a for a in _filter(articles, area=area)
+             if (a.get("published_at") or "")[:10] == today]
+    if not items:
+        return None
+    items.sort(key=lambda a: -int(a.get("sales_count") or 0))
+    a = items[0]
+
+    tags = a.get("tags") or []
+    cup = next((t for t in tags if t.endswith("カップ")), "")
+    plays = [t for t in tags if re.fullmatch(r"[A-Z]{2,5}", t)]
+    dates = [d for d in (a.get("shift_dates") or []) if d >= today]
+
+    state = _load_state()
+    no = int(state.get("_threads_spec_no", 0)) + 1
+
+    place = a.get("station") or a.get("area") or ""
+    if a.get("station") and a.get("area") and a["station"] != a["area"]:
+        place = f'{a["station"]}（{a["area"]}）'
+
+    lines = [f"No.{no}", ""]
+    hook = _title_hook(a["title"])
+    if hook:
+        lines += [hook[:60], ""]
+    lines.append(f"エリア: {place}")
+    prof = "、".join(x for x in [cup, " / ".join(plays[:3])] if x)
+    if prof:
+        lines.append(f"セラピスト: {prof}")
+    if dates:
+        lines.append(f'出勤: {"・".join(fmt_date(d) for d in dates[:3])}')
+
+    tcfg = cfg.get("threads") or {}
+    closer = (tcfg.get("spec_closer") or "本日公開しました。続きは記事で。").strip()
+    post = _compose(cfg, "", lines, closer, _article_url(cfg, a))
+    post["text"] = post["text"].lstrip("\n")
+    post["spec_no"] = no
+    post["story_id"] = str(a["id"])
+    return post
+
+
+def pickup_targets(articles, min_items=4):
+    """厳選投稿の対象一覧を作る
+
+    記事が min_items 以上ある駅は駅単体で、エリアはエリアとして対象にする。
+    東京都内のように広いエリアでも、新宿・池袋のような駅単位の投稿が回る。
+    戻り値: [("station", "新宿"), ("area", "神奈川"), ...]
+    """
+    st_counts, area_counts = {}, {}
+    for a in articles:
+        st = a.get("station") or ""
+        ar = a.get("area") or "その他"
+        if st:
+            st_counts[st] = st_counts.get(st, 0) + 1
+        area_counts[ar] = area_counts.get(ar, 0) + 1
+    targets = [("station", k) for k, v in sorted(st_counts.items()) if v >= min_items]
+    targets += [("area", k) for k, v in sorted(area_counts.items())
+                if v >= min_items and k != "その他"]
+    return targets
+
+
+def tpl_pickup(cfg, articles, area=None, station=None):
+    """エリア厳選型（【駅名】+ 特徴 のリスト＋出し惜しみで締める）
+
+    参考アカウントで最も反応が取れている型。店名の代わりに記事を並べる。
+    「一番の本命はここには書いてない」でプロフィールへ引くのが肝なので、
+    リプライにURLは付けず、締めの一文だけで誘導する。
+    """
+    tcfg = cfg.get("threads") or {}
+    min_items = int(tcfg.get("pickup_min_items") or 4)
+
+    # 対象は日替わりで回す。東京都内のような広いエリアは駅ごとに分けたいので、
+    # 記事が十分ある駅は駅単体を、エリアはエリアとして、それぞれ対象に入れる。
+    if station:
+        items = [a for a in articles if (a.get("station") or "") == station]
+        label = station
+    elif area:
+        items = _filter(articles, area=area)
+        label = area
+    else:
+        targets = pickup_targets(articles, min_items)
+        if not targets:
+            return None
+        kind, label = targets[datetime.now(JST).timetuple().tm_yday % len(targets)]
+        if kind == "station":
+            items = [a for a in articles if (a.get("station") or "") == label]
+            station = label
+        else:
+            items = _filter(articles, area=label)
+            area = label
+
+    if len(items) < min_items:
+        return None
+
+    # 「外しにくい」= 販売実績が多いもの。実績順に取りつつ、
+    # 同じ駅ばかりにならないよう1駅あたりの上限を設ける
+    limit = min(10, max(5, (tcfg.get("max_items") or 8) + 2))
+    ranked = sorted(items, key=lambda a: -int(a.get("sales_count") or 0))
+    n_st = len({a.get("station") for a in items})
+    per_station = limit if station else max(2, -(-limit // max(1, n_st)))
+    picks, used_station = [], {}
+    for a in ranked:
+        st = a.get("station") or label
+        if used_station.get(st, 0) >= per_station:
+            continue
+        used_station[st] = used_station.get(st, 0) + 1
+        picks.append(a)
+        if len(picks) >= limit:
+            break
+    # 上限で弾かれて件数が足りない場合は実績順で埋める
+    for a in ranked:
+        if len(picks) >= limit:
+            break
+        if a not in picks:
+            picks.append(a)
+    # 駅単体は出勤日順に並べる。同じ「Fカップ / GHR」が並んでも
+    # 日付が昇順なら重複ではなくスケジュールとして読める
+    if station:
+        picks.sort(key=lambda a: _next_shift(a) or "9999-12-31")
+
+    # 駅が散っていれば駅ごとにまとめる（参考投稿の《エリア》グルーピング）
+    by_station = {}
+    for a in picks:
+        by_station.setdefault(a.get("station") or area, []).append(a)
+
+    def row(a):
+        tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
+                and t != a.get("station")]
+        cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+        detail = " / ".join(x for x in [cup] + tags[:2] if x) or label
+        if station:
+            # 駅単体では【駅名】が全行同じになるので付けない。代わりに
+            # 「Gカップ / HR」が並んで見分けが付かなくなるため出勤日を添える
+            nxt = _next_shift(a)
+            return f"{detail}　{fmt_date(nxt)}" if nxt else detail
+        return f'【{a.get("station") or label}】{detail}'
+
+    # 見出しは2件以上ある駅だけに立てる。1件だけの駅は最後にまとめて並べる
+    # （1行の《駅》が並ぶと、かえって読みにくくなるため）
+    multi = {} if station else {st: g for st, g in by_station.items() if len(g) >= 2}
+    singles = [a for st, g in by_station.items() if len(g) < 2 for a in g]
+    seen_rows = set()
+
+    def rows(group):
+        out = []
+        for a in group:
+            r = row(a)
+            if r in seen_rows:
+                continue
+            seen_rows.add(r)
+            out.append(r)
+        return out
+
+    lines = []
+    if len(multi) >= 2:
+        for st, group in sorted(multi.items(), key=lambda kv: -len(kv[1])):
+            block = rows(group)
+            if not block:
+                continue
+            lines.append(f"《{st}》")
+            lines.extend(block)
+            lines.append("")
+        block = rows(singles)
+        if block:
+            lines.append("《その他のエリア》")
+            lines.extend(block)
+            lines.append("")
+        if lines and not lines[-1]:
+            lines.pop()
+    else:
+        lines = rows(picks)
+
+    heads = tcfg.get("pickup_heads") or ["【初心者必見🔰】\n{area}で迷ってるなら、この{n}人から選べば外しにくい"]
+    tails = tcfg.get("pickup_tails") or ["ちなみに{area}の一番の本命は、あえてここには書いてない。"]
+    seed = datetime.now(JST).timetuple().tm_yday
+    head = render_head(heads[seed % len(heads)], area=label, n=len(picks))
+    tail = render_head(tails[seed % len(tails)], area=label, n=len(picks))
+    cta = (tcfg.get("profile_cta") or "気になる人はプロフィールのリンクへ").strip()
+
+    sep = tcfg.get("separator", "----")
+    body = [head, ""] + lines + ["", sep, "",
+                                 "正直、初回はこの中から選ぶだけで失敗率がグッと下がります。",
+                                 "", tail, cta]
+    return {"text": "\n".join(body).strip(), "reply": "", "url": ""}
+
+
+def tpl_flash(cfg, articles, area=None):
+    """体験速報型（短文＋反応を煽る）
+
+    実際に行っていない体験を自動生成すると、コメントで具体的に聞かれた時に
+    破綻する。そこで「レポートを追加した」という事実だけを速報の形にし、
+    煽りの構造（結果を先に出して続きを引く）だけを借りている。
+    """
+    items = [a for a in _filter(articles, area=area) if _next_shift(a)]
+    if not items:
+        return None
+    used = _load_state().get("_threads_story", {})
+    # 販売実績が高いものを優先しつつ、最近出したものは後回し
+    items.sort(key=lambda a: (used.get(str(a["id"]), ""),
+                              -int(a.get("sales_count") or 0)))
+    a = items[0]
+    tags = a.get("tags") or []
+    play = next((t for t in tags if re.fullmatch(r"[A-Z]{2,5}", t)), "")
+    dates = [d for d in (a.get("shift_dates") or []) if d >= today_iso()]
+
+    tcfg = cfg.get("threads") or {}
+    heads = tcfg.get("flash_heads") or ["レポート上げました"]
+    hooks = tcfg.get("flash_hooks") or ["いいね多かったら次も出します"]
+    seed = int(a["id"][-3:] or 0)
+
+    head = render_head(heads[seed % len(heads)],
+                       area=a.get("area", ""), play=play or "当たり")
+    lines = [head, ""]
+    lines.append(" / ".join(tags[:3]) or a.get("area", ""))
+    lines.append("出勤 " + ("・".join(fmt_date(d) for d in dates[:2]) or "調整中"))
+    post = _compose(cfg, "", lines, hooks[seed % len(hooks)],
+                    _article_url(cfg, a))
+    # 1行目のタイトル枠は使わないので、先頭の空行を落とす
+    post["text"] = post["text"].lstrip("\n")
+    post["story_id"] = str(a["id"])
+    return post
+
+
+def render_head(tpl, **kw):
+    """速報の1行目テンプレートに値を差し込む"""
+    out = tpl
+    for k, v in kw.items():
+        out = out.replace("{" + k + "}", str(v))
+    return out
+
+
+def tpl_story(cfg, articles, area=None):
+    """体験談を1本紹介する（最近出していないものから選ぶ）"""
+    items = [a for a in _filter(articles, area=area) if _next_shift(a)]
+    if not items:
+        items = _filter(articles, area=area)
+    if not items:
+        return None
+    used = _load_state().get("_threads_story", {})
+    items.sort(key=lambda a: (used.get(str(a["id"]), ""), -int(a.get("sales_count") or 0)))
+    a = items[0]
+    hook = _title_hook(a["title"])
+    dates = [d for d in (a.get("shift_dates") or []) if d >= today_iso()]
+    lines = [" / ".join((a.get("tags") or [])[:3]) or a.get("area", ""), ""]
+    if hook:
+        lines.append(hook[:120])
+        lines.append("")
+    lines.append(f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}')
+    post = _compose(cfg, "体験談を1本", lines, _closer(cfg, int(a["id"][-2:] or 0)),
+                    _article_url(cfg, a))
+    post["story_id"] = str(a["id"])
+    return post
+
+
+def _pool_tpl(kind):
+    def fn(cfg, articles, area=None):
+        return tpl_pool(cfg, articles, area, kind=kind)
+    return fn
+
+
 TEMPLATES = {
+    # 手書きストック（threads_pool.json）
+    "aruaru": ("あるあるネタ（手書き）", _pool_tpl("aruaru")),
+    "info": ("情報投稿（手書き）", _pool_tpl("info")),
+    # ワクストの記事データから生成
     "today": ("本日出勤・料金順", tpl_today),
     "cheatsheet": ("目的別チートシート", tpl_cheatsheet),
     "week": ("今週の出勤まとめ", tpl_week),
+    "price": ("料金帯ごとの在籍数", tpl_price),
+    "lineup": ("在籍の内訳", tpl_lineup),
+    "rank": ("よく読まれている順", tpl_rank),
+    "spec": ("本日公開のスペック表", tpl_spec),
+    "pickup": ("エリア厳選（出し惜しみ型）", tpl_pickup),
+    "flash": ("体験速報（反応を煽る）", tpl_flash),
+    "story": ("体験談を1本", tpl_story),
     "new": ("新着1件", tpl_new),
 }
 
+# 手書きストックが尽きたときに代わりに出すテンプレート
+POOL_FALLBACK = {"aruaru": "cheatsheet", "info": "price"}
+
+
+def _pick_priority(cfg, articles, area=None):
+    """ローテーションより先に出したいテンプレートを選ぶ
+
+    spec（本日公開の記事）のように「該当がある日は必ず出したい」ものを
+    ここで拾う。該当が無ければ None を返してローテーションに任せる。
+    その日すでに投稿済みのものは対象外。
+    """
+    names = (cfg.get("threads") or {}).get("priority_templates") or []
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    posted = _load_state().get("_threads", {})
+    for name in names:
+        if name not in TEMPLATES or f"{today}:{name}" in posted:
+            continue
+        if TEMPLATES[name][1](cfg, articles, area):
+            return name
+    return None
+
+
+def pick_for_slot(cfg, slot):
+    """時間帯（"10"/"13"/"21"）に割り当てられたテンプレートを日替わりで選ぶ
+
+    post_schedule の値をリストにしておくと、日ごとに順番に回る。
+    文字列1つならその枠は常に同じテンプレートになる。
+    """
+    sched = (cfg.get("threads") or {}).get("post_schedule") or {}
+    entry = sched.get(str(slot))
+    if not entry:
+        return None
+    if isinstance(entry, str):
+        return entry
+    if not entry:
+        return None
+    doy = datetime.now(JST).timetuple().tm_yday
+    return entry[doy % len(entry)]
+
+
+DATA_TEMPLATES = [k for k in ("today", "cheatsheet", "week", "price",
+                              "lineup", "rank", "pickup", "spec", "flash",
+                              "story", "new")]
+
 
 def build_all(cfg, articles, area=None, tag=None):
+    """データ由来のテンプレートをまとめて生成（手書き枠は含めない）"""
     posts = []
-    for key, (label, fn) in TEMPLATES.items():
+    for key in DATA_TEMPLATES:
+        label, fn = TEMPLATES[key]
         p = fn(cfg, articles, area)
         if p:
             p["template"] = key
@@ -301,7 +775,9 @@ def build_all(cfg, articles, area=None, tag=None):
 def main():
     ap = argparse.ArgumentParser(description="Threads/X 投稿文を生成する")
     ap.add_argument("--template", choices=list(TEMPLATES), help="1つだけ生成")
-    ap.add_argument("--area", help="エリアで絞る（例: 新宿）")
+    ap.add_argument("--slot", help="時間帯から日替わりで選ぶ（例: 10 / 13 / 21）")
+    ap.add_argument("--area", help="エリアで絞る（例: 神奈川）")
+    ap.add_argument("--station", help="駅で絞る（例: 池袋）。pickupのみ")
     ap.add_argument("--tag", help="タグまとめも生成する（例: NN）")
     ap.add_argument("--json", action="store_true", help="JSONで出力")
     ap.add_argument("--post", action="store_true",
@@ -314,10 +790,33 @@ def main():
         print("記事データがありません（site_content/articles/ が空）")
         return
 
-    if args.template:
-        fn = TEMPLATES[args.template][1]
-        p = fn(cfg, articles, args.area)
-        posts = [dict(p, template=args.template)] if p else []
+    template = args.template
+    if not template and args.slot:
+        template = _pick_priority(cfg, articles, args.area)
+        if template:
+            print(f"⭐ 優先テンプレート「{template}」を採用（本日分の該当あり）")
+        else:
+            template = pick_for_slot(cfg, args.slot)
+            if not template:
+                print(f"⏭️  スロット {args.slot} に割り当てがありません")
+                return
+            print(f"🎯 スロット {args.slot} → テンプレート「{template}」")
+
+    if template:
+        if template == "pickup":
+            p = tpl_pickup(cfg, articles, args.area, args.station)
+        else:
+            p = TEMPLATES[template][1](cfg, articles, args.area)
+        if not p and template in POOL_FALLBACK:
+            # 手書きストックが空なら、データ由来のテンプレートで埋める
+            alt = POOL_FALLBACK[template]
+            print(f"📭 「{template}」のストックが空 → 「{alt}」に切り替え")
+            template = alt
+            p = TEMPLATES[template][1](cfg, articles, args.area)
+        if not p:
+            print(f"⏭️  「{template}」は今回該当なし（投稿するものがありません）")
+            return
+        posts = [dict(p, template=template, label=TEMPLATES[template][0])]
     else:
         posts = build_all(cfg, articles, args.area, args.tag)
 
@@ -384,8 +883,15 @@ def _publish(posts):
         except ThreadsError as e:
             print(f'❌ 投稿失敗 [{p["template"]}]: {e}')
             continue
-        posted[key] = {"post_id": post_id, "reply_id": reply_id,
-                       "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")}
+        now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        posted[key] = {"post_id": post_id, "reply_id": reply_id, "at": now}
+        # 同じ手書きネタ・同じ体験談が続かないよう使用日を記録する
+        if p.get("pool_key"):
+            state.setdefault("_threads_pool", {})[p["pool_key"]] = now
+        if p.get("story_id"):
+            state.setdefault("_threads_story", {})[p["story_id"]] = now
+        if p.get("spec_no"):
+            state["_threads_spec_no"] = p["spec_no"]
         _save_state(state)
 
 

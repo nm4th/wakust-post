@@ -6,17 +6,20 @@ name: Wakust Threads Post
 
 on:
   schedule:
-    # 10:00 / 13:00 / 21:00 JST
+    # 0:30 JST — 本日公開された記事の告知（無い日は何も投稿しない）
+    - cron: '30 15 * * *'
+    # 10:00 / 13:00 / 18:00 / 21:00 JST
     - cron: '0 1 * * *'
     - cron: '0 4 * * *'
+    - cron: '0 9 * * *'
     - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
       template:
-        description: '投稿テンプレート'
+        description: '投稿テンプレート（空ならスケジュールに従う）'
         type: choice
-        options: [today, cheatsheet, week, new]
-        default: today
+        options: ['', aruaru, info, today, cheatsheet, week, price, lineup, rank, story, new]
+        default: ''
       area:
         description: 'エリアで絞る（空なら全エリア）'
         type: string
@@ -50,14 +53,18 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Pick template for this run
+      - name: Pick time slot for this run
         id: pick
         run: |
+          # スロット（時間帯）だけ決める。どのテンプレートを出すかは
+          # site_config.json の threads.post_schedule が日替わりで決める
           case "${{ github.event.schedule }}" in
-            "0 1 * * *")  echo "template=today"      >> "$GITHUB_OUTPUT" ;;
-            "0 4 * * *")  echo "template=cheatsheet" >> "$GITHUB_OUTPUT" ;;
-            "0 12 * * *") echo "template=week"       >> "$GITHUB_OUTPUT" ;;
-            *)            echo "template=${{ inputs.template || 'today' }}" >> "$GITHUB_OUTPUT" ;;
+            "30 15 * * *") echo "slot=0"  >> "$GITHUB_OUTPUT" ;;
+            "0 1 * * *")   echo "slot=10" >> "$GITHUB_OUTPUT" ;;
+            "0 4 * * *")   echo "slot=13" >> "$GITHUB_OUTPUT" ;;
+            "0 9 * * *")   echo "slot=18" >> "$GITHUB_OUTPUT" ;;
+            "0 12 * * *")  echo "slot=21" >> "$GITHUB_OUTPUT" ;;
+            *)             echo "slot=10" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Post to Threads
@@ -66,8 +73,12 @@ jobs:
           THREADS_USER_ID: ${{ inputs.dry_run && '' || secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ inputs.dry_run && '' || secrets.THREADS_ACCESS_TOKEN }}
         run: |
-          python wakust_threads.py \
-            --template "${{ steps.pick.outputs.template }}" \
+          if [ -n "${{ inputs.template }}" ]; then
+            SELECT="--template ${{ inputs.template }}"
+          else
+            SELECT="--slot ${{ steps.pick.outputs.slot }}"
+          fi
+          python wakust_threads.py $SELECT \
             ${{ inputs.area && format('--area {0}', inputs.area) || '' }} \
             --post
 
@@ -76,6 +87,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 投稿履歴・手書きストックの使用履歴を保存する
           git add -f wakust_state.json || true
           if ! git diff --cached --quiet; then
             git commit -m "📣 Threads投稿履歴 $(date -u +%Y-%m-%d_%H:%M)"
