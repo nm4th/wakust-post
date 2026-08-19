@@ -408,7 +408,27 @@ def tpl_rank(cfg, articles, area=None):
         "販売数が多い＝満足度が高い、と見ています。")
 
 
-def tpl_pickup(cfg, articles, area=None):
+def pickup_targets(articles, min_items=4):
+    """厳選投稿の対象一覧を作る
+
+    記事が min_items 以上ある駅は駅単体で、エリアはエリアとして対象にする。
+    東京都内のように広いエリアでも、新宿・池袋のような駅単位の投稿が回る。
+    戻り値: [("station", "新宿"), ("area", "神奈川"), ...]
+    """
+    st_counts, area_counts = {}, {}
+    for a in articles:
+        st = a.get("station") or ""
+        ar = a.get("area") or "その他"
+        if st:
+            st_counts[st] = st_counts.get(st, 0) + 1
+        area_counts[ar] = area_counts.get(ar, 0) + 1
+    targets = [("station", k) for k, v in sorted(st_counts.items()) if v >= min_items]
+    targets += [("area", k) for k, v in sorted(area_counts.items())
+                if v >= min_items and k != "その他"]
+    return targets
+
+
+def tpl_pickup(cfg, articles, area=None, station=None):
     """エリア厳選型（【駅名】+ 特徴 のリスト＋出し惜しみで締める）
 
     参考アカウントで最も反応が取れている型。店名の代わりに記事を並べる。
@@ -416,28 +436,40 @@ def tpl_pickup(cfg, articles, area=None):
     リプライにURLは付けず、締めの一文だけで誘導する。
     """
     tcfg = cfg.get("threads") or {}
-    # エリアは日替わりで回す（指定があればそれを優先）
-    if not area:
-        counts = {}
-        for a in articles:
-            counts[a.get("area") or "その他"] = counts.get(a.get("area") or "その他", 0) + 1
-        pool = sorted(k for k, v in counts.items() if v >= 5 and k != "その他")
-        if not pool:
-            return None
-        area = pool[datetime.now(JST).timetuple().tm_yday % len(pool)]
+    min_items = int(tcfg.get("pickup_min_items") or 4)
 
-    items = _filter(articles, area=area)
-    if len(items) < 4:
+    # 対象は日替わりで回す。東京都内のような広いエリアは駅ごとに分けたいので、
+    # 記事が十分ある駅は駅単体を、エリアはエリアとして、それぞれ対象に入れる。
+    if station:
+        items = [a for a in articles if (a.get("station") or "") == station]
+        label = station
+    elif area:
+        items = _filter(articles, area=area)
+        label = area
+    else:
+        targets = pickup_targets(articles, min_items)
+        if not targets:
+            return None
+        kind, label = targets[datetime.now(JST).timetuple().tm_yday % len(targets)]
+        if kind == "station":
+            items = [a for a in articles if (a.get("station") or "") == label]
+            station = label
+        else:
+            items = _filter(articles, area=label)
+            area = label
+
+    if len(items) < min_items:
         return None
 
     # 「外しにくい」= 販売実績が多いもの。実績順に取りつつ、
     # 同じ駅ばかりにならないよう1駅あたりの上限を設ける
     limit = min(10, max(5, (tcfg.get("max_items") or 8) + 2))
     ranked = sorted(items, key=lambda a: -int(a.get("sales_count") or 0))
-    per_station = max(2, -(-limit // max(1, len({a.get("station") for a in items}))))
+    n_st = len({a.get("station") for a in items})
+    per_station = limit if station else max(2, -(-limit // max(1, n_st)))
     picks, used_station = [], {}
     for a in ranked:
-        st = a.get("station") or area
+        st = a.get("station") or label
         if used_station.get(st, 0) >= per_station:
             continue
         used_station[st] = used_station.get(st, 0) + 1
@@ -460,33 +492,54 @@ def tpl_pickup(cfg, articles, area=None):
         tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
                 and t != a.get("station")]
         cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
-        detail = " / ".join(x for x in [cup] + tags[:1] if x)
-        return f'【{a.get("station") or area}】{detail}　{yen(a.get("price"))}'
+        detail = " / ".join(x for x in [cup] + tags[:2] if x) or label
+        if station:
+            # 駅単体では【駅名】が全行同じになるので付けない。代わりに
+            # 「Gカップ / HR」が並んで見分けが付かなくなるため出勤日を添える
+            nxt = _next_shift(a)
+            return f"{detail}　{fmt_date(nxt)}" if nxt else detail
+        return f'【{a.get("station") or label}】{detail}'
 
     # 見出しは2件以上ある駅だけに立てる。1件だけの駅は最後にまとめて並べる
     # （1行の《駅》が並ぶと、かえって読みにくくなるため）
-    multi = {st: g for st, g in by_station.items() if len(g) >= 2}
+    multi = {} if station else {st: g for st, g in by_station.items() if len(g) >= 2}
     singles = [a for st, g in by_station.items() if len(g) < 2 for a in g]
+    seen_rows = set()
+
+    def rows(group):
+        out = []
+        for a in group:
+            r = row(a)
+            if r in seen_rows:
+                continue
+            seen_rows.add(r)
+            out.append(r)
+        return out
+
     lines = []
     if len(multi) >= 2:
         for st, group in sorted(multi.items(), key=lambda kv: -len(kv[1])):
+            block = rows(group)
+            if not block:
+                continue
             lines.append(f"《{st}》")
-            lines.extend(row(a) for a in group)
+            lines.extend(block)
             lines.append("")
-        if singles:
+        block = rows(singles)
+        if block:
             lines.append("《その他のエリア》")
-            lines.extend(row(a) for a in singles)
+            lines.extend(block)
             lines.append("")
         if lines and not lines[-1]:
             lines.pop()
     else:
-        lines = [row(a) for a in picks]
+        lines = rows(picks)
 
     heads = tcfg.get("pickup_heads") or ["【初心者必見🔰】\n{area}で迷ってるなら、この{n}人から選べば外しにくい"]
     tails = tcfg.get("pickup_tails") or ["ちなみに{area}の一番の本命は、あえてここには書いてない。"]
     seed = datetime.now(JST).timetuple().tm_yday
-    head = render_head(heads[seed % len(heads)], area=area, n=len(picks))
-    tail = render_head(tails[seed % len(tails)], area=area, n=len(picks))
+    head = render_head(heads[seed % len(heads)], area=label, n=len(picks))
+    tail = render_head(tails[seed % len(tails)], area=label, n=len(picks))
     cta = (tcfg.get("profile_cta") or "気になる人はプロフィールのリンクへ").strip()
 
     sep = tcfg.get("separator", "----")
@@ -639,7 +692,8 @@ def main():
     ap = argparse.ArgumentParser(description="Threads/X 投稿文を生成する")
     ap.add_argument("--template", choices=list(TEMPLATES), help="1つだけ生成")
     ap.add_argument("--slot", help="時間帯から日替わりで選ぶ（例: 10 / 13 / 21）")
-    ap.add_argument("--area", help="エリアで絞る（例: 新宿）")
+    ap.add_argument("--area", help="エリアで絞る（例: 神奈川）")
+    ap.add_argument("--station", help="駅で絞る（例: 池袋）。pickupのみ")
     ap.add_argument("--tag", help="タグまとめも生成する（例: NN）")
     ap.add_argument("--json", action="store_true", help="JSONで出力")
     ap.add_argument("--post", action="store_true",
@@ -661,7 +715,10 @@ def main():
         print(f"🎯 スロット {args.slot} → テンプレート「{template}」")
 
     if template:
-        p = TEMPLATES[template][1](cfg, articles, args.area)
+        if template == "pickup":
+            p = tpl_pickup(cfg, articles, args.area, args.station)
+        else:
+            p = TEMPLATES[template][1](cfg, articles, args.area)
         if not p and template in POOL_FALLBACK:
             # 手書きストックが空なら、データ由来のテンプレートで埋める
             alt = POOL_FALLBACK[template]
