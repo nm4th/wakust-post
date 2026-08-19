@@ -1,29 +1,26 @@
-name: Wakust Auto Update
+name: Wakust Meta Export
+
+# SNS投稿用に、記事の「メタデータだけ」をワクストから書き出す。
+# codocには一切触れず、本文（無料部分・有料部分とも）も保存しない。
+# 保存するのは タイトル / エリア / タグ / 出勤日 / 価格 / 販売回数 / 記事URL のみ。
 
 on:
   schedule:
-    # 毎日16:30 JSTに実行（UTC 07:30 = JST 16:30）タイトル＋回遊リストのみ
-    - cron: '30 7 * * *'
-  workflow_dispatch:
-    inputs:
-      calendar_only:
-        description: 'カレンダーのみ更新する'
-        type: boolean
-        default: false
-      title_only:
-        description: 'タイトル＋回遊リストのみ更新する（16:30モード）'
-        type: boolean
-        default: false
-  repository_dispatch:
-    types: [midnight-update]
+    # 毎朝 9:30 JST（Threads投稿の前に最新化しておく）
+    - cron: '30 0 * * *'
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
+concurrency:
+  group: wakust-meta-export
+  cancel-in-progress: false
+
 jobs:
-  update:
+  export:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -39,32 +36,22 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
-      - name: Run wakust auto update
+      - name: Export metadata
         env:
           WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
           WAKUST_COOKIE: ${{ secrets.WAKUST_COOKIE }}
-          CODOC_COOKIE: ${{ secrets.CODOC_COOKIE }}
-          CODOC_USERCODE: ${{ vars.CODOC_USERCODE || secrets.CODOC_USERCODE }}
-          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
-          CODOC_LIMITED: ${{ vars.CODOC_LIMITED || '1' }}
-          CALENDAR_ONLY: ${{ inputs.calendar_only == true && '1' || '0' }}
-          TITLE_ONLY: ${{ (github.event.schedule == '30 7 * * *' || inputs.title_only == true) && '1' || '0' }}
-          REPORT_EMAIL: ${{ secrets.REPORT_EMAIL }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          CODOC_MODE: meta_export
         run: python wakust_auto_update.py
 
-      - name: Commit and push logs / site content
+      - name: Commit metadata
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add logs/ site_content/ || true
-          # wakust_state.json は .gitignore 対象だが、掲載済み判定に必要なので -f で追跡する
-          git add -f wakust_state.json || true
+          git add site_content/ || true
           if ! git diff --cached --quiet; then
-            git commit -m "📊 PVログ・自社サイト同期 $(date -u +%Y-%m-%d)"
+            git commit -m "🗂️ 記事メタデータ更新 $(date -u +%Y-%m-%d)"
             pushed=0
             for i in 1 2 3 4; do
               if git pull --rebase origin main && git push origin HEAD:main; then
@@ -84,6 +71,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: wakust-logs-${{ github.run_id }}
+          name: wakust-meta-export-logs-${{ github.run_id }}
           path: logs/
-          retention-days: 30
+          retention-days: 14

@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import csv
+import glob
 import html as html_module
 import logging
 import math
@@ -104,6 +105,14 @@ CODOC_MODE = os.environ.get("CODOC_MODE", "").strip()
 # CODOC_COOKIE: ブラウザで2FA突破後のCookie文字列
 # 形式: "XSRF-TOKEN=xxx; codoc_session=yyy; remember_web_...=zzz"
 CODOC_COOKIE = os.environ.get("CODOC_COOKIE", "").strip()
+# CODOC_LIMITED: "1" = codoc上は限定公開にして、販売導線は自社サイトのみにする
+#                "0" = codoc.jp の記事一覧にも載せる
+CODOC_LIMITED = os.environ.get("CODOC_LIMITED", "1").strip() or "1"
+# SITE_PUBLISH_LIMIT: 1回の実行で自社サイトに新規掲載する記事数
+try:
+    SITE_PUBLISH_LIMIT = max(1, int(os.environ.get("SITE_PUBLISH_LIMIT", "1")))
+except ValueError:
+    SITE_PUBLISH_LIMIT = 1
 
 
 # ============================================================
@@ -1123,12 +1132,14 @@ def fetch_post_details(session, post):
 # ============================================================
 # 記事公開ページからタグを取得
 # ============================================================
-def fetch_post_tags(session, post_url):
-    """記事の公開ページからアルファベットのみのタグとタイトル画像URLを抽出する。
+def fetch_post_tags(session, post_url, alpha_only=True):
+    """記事の公開ページからタグとタイトル画像URLを抽出する。
 
     タグは「KEYWORD(NUMBER)」形式で表示されている。
     例: CKB(127), F(1473), HR(23397), 中野(989), 巨乳(19987)
-    → アルファベットのみ: ["CKB", "F", "HR"]
+    → alpha_only=True (既定): ["CKB", "F", "HR"]   ※セット組成のプレイタグ用
+    → alpha_only=False:       ["CKB", "F", "HR", "中野", "巨乳"]
+                              ※自社サイトの絞り込み用。日本語タグも拾う
 
     戻り値: (tags: list[str], image_url: str|None)
     """
@@ -1141,10 +1152,12 @@ def fetch_post_tags(session, post_url):
 
         tags = []
         # ページ内のリンク・スパンからタグ形式テキストを探す
+        tag_re = (re.compile(r'^([A-Za-z]+)\(\d+\)$') if alpha_only
+                  else re.compile(r'^(.{1,20}?)\((\d+)\)$'))
         for el in soup.find_all(["a", "span"]):
             text = el.get_text(strip=True)
-            m = re.match(r'^([A-Za-z]+)\(\d+\)$', text)
-            if m:
+            m = tag_re.match(text)
+            if m and m.group(1) not in tags:
                 tags.append(m.group(1))
 
         if tags:
@@ -3549,6 +3562,430 @@ def _run_codoc_post_only():
     log.info(f"\n✅ codoc投稿処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
 
+# ============================================================
+# 自社サイト販売（codocをペイウォールとして自社サイトに埋め込む）
+# ============================================================
+# 記事の「無料部分」は自社サイトの静的HTMLとして出力し、「有料部分」はcodocの
+# エントリーに保存する。有料部分を静的HTMLに置くとソースを見るだけで読めてしまう
+# ため、本文はサイト側には一切書き出さない。
+# codocエントリーは binded_url を自社サイトの記事URLに向けて作成する。
+
+SITE_CONTENT_DIR = "site_content/articles"
+
+
+def _site_enabled():
+    """自社サイト/codoc掲載を使うかどうか"""
+    try:
+        return bool(_site_config().get("site_enabled", True))
+    except Exception:
+        return False
+
+
+def _site_config():
+    """site_config.json を読み込む（wakust_site と同じローダーを使う）"""
+    from wakust_site import load_config
+    return load_config()
+
+
+def _site_article_url(cfg, post_id):
+    return f"{cfg['base_url']}/articles/{post_id}.html"
+
+
+def _shift_dates_iso(title):
+    """タイトルの【8/20,21出勤】から実日付(YYYY-MM-DD)のリストを作る。
+
+    年はタイトルに入っていないので、JSTの今日を基準に推定する
+    （60日以上前の日付になる場合は翌年扱い）。
+    """
+    today = datetime.now(JST).date()
+    out = []
+    for md in _extract_dates_from_title(title):
+        try:
+            month, day = (int(x) for x in md.split("/", 1))
+        except (TypeError, ValueError):
+            continue
+        for year in (today.year, today.year + 1):
+            try:
+                d = datetime(year, month, day).date()
+            except ValueError:
+                break  # 2/30 のような不正日付
+            if (today - d).days <= 60:
+                iso = d.isoformat()
+                if iso not in out:
+                    out.append(iso)
+                break
+    return sorted(out)
+
+
+def _site_area_of(category):
+    """カテゴリ名を一覧の絞り込み用エリア名に正規化する"""
+    return CATEGORY_TO_SET_AREA.get(category, category or "その他")
+
+
+def _site_price_for(post, details):
+    """記事の販売価格を決める（ワクスト側の販売ポイントが基準）"""
+    payload = details.get("payload") or {}
+    point_field = details.get("point_field") or "post_price"
+    try:
+        price = int(payload.get(point_field) or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if price < 100:
+        price = calculate_sales_point(post.get("sales_count") or 0)
+    # codocの価格レンジ 100〜50,000円 にクランプ
+    return max(100, min(price, 50000))
+
+
+def _write_site_article(cfg, post, details, price, entry_id, entry_code,
+                        tags=None, image_url=None, published_at=None):
+    """site_content/articles/{id}.json を書き出す"""
+    payload = details.get("payload") or {}
+    os.makedirs(SITE_CONTENT_DIR, exist_ok=True)
+    path = os.path.join(SITE_CONTENT_DIR, f"{post['id']}.json")
+    prev = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+        except (OSError, ValueError):
+            prev = {}
+    now = jst_strftime("%Y-%m-%d %H:%M:%S")
+    category = details.get("category") or prev.get("category") or "その他"
+    article = {
+        "id": post["id"],
+        "title": post["title"],
+        "category": category,
+        # 一覧の絞り込みに使うフィールド群
+        "area": _site_area_of(category),
+        "tags": tags if tags is not None else prev.get("tags", []),
+        "shift_dates": _shift_dates_iso(post["title"]),
+        "sales_count": post.get("sales_count") or prev.get("sales_count") or 0,
+        "pv_total": post.get("pv_total") or prev.get("pv_total") or 0,
+        "price": price,
+        # 無料部分だけをサイトに出す（有料部分 edit_text_2 は絶対に含めない）
+        "free_html": payload.get("edit_text_1", "") or "",
+        "image_url": image_url or prev.get("image_url") or "",
+        "codoc_entry_id": entry_id,
+        "codoc_entry_code": entry_code or "",
+        "source_url": post.get("url", ""),
+        "published_at": prev.get("published_at") or published_at or now,
+        "content_updated_at": now,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(article, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def _site_fetch_tags_image(session, post):
+    try:
+        # 自社サイトの絞り込み用なので日本語タグも含めて取得する
+        return fetch_post_tags(session, post["url"], alpha_only=False)
+    except Exception as e:
+        log.warning(f"    ⚠️ タグ/画像取得スキップ: {e}")
+        return [], None
+
+
+def run_meta_export(session):
+    """SNS投稿用に、記事の「メタデータだけ」を書き出す
+
+    codocには一切触れず、有料部分(edit_text_2)も無料部分(edit_text_1)も
+    保存しない。タイトル・エリア・タグ・出勤日・価格・販売回数と、
+    ワクストの記事URLだけを持つ。Threads投稿はこれだけで組み立てられる。
+    """
+    log.info(f"\n{'='*55}")
+    log.info(f"🗂️  記事メタデータの書き出し ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    all_posts = fetch_post_list(session)
+    if not all_posts:
+        log.error("❌ 記事一覧が空、書き出し中止")
+        return
+
+    os.makedirs(SITE_CONTENT_DIR, exist_ok=True)
+    written = skipped = 0
+    seen_ids = set()
+    for p in all_posts:
+        if _codoc_skip_post(p):
+            skipped += 1
+            continue
+        seen_ids.add(p["id"])
+        path = os.path.join(SITE_CONTENT_DIR, f"{p['id']}.json")
+        prev = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    prev = json.load(f)
+            except (OSError, ValueError):
+                prev = {}
+
+        category = prev.get("category") or "その他"
+        article = {
+            "id": p["id"],
+            "title": p["title"],
+            "category": category,
+            "area": _site_area_of(category),
+            "tags": prev.get("tags", []),
+            "shift_dates": _shift_dates_iso(p["title"]),
+            "sales_count": p.get("sales_count") or 0,
+            "pv_total": p.get("pv_total") or 0,
+            "price": prev.get("price") or calculate_sales_point(p.get("sales_count") or 0),
+            # 本文は保存しない（無料部分・有料部分ともに書き出さない）
+            "free_html": "",
+            "image_url": prev.get("image_url") or "",
+            "codoc_entry_id": prev.get("codoc_entry_id", ""),
+            "codoc_entry_code": prev.get("codoc_entry_code", ""),
+            "source_url": p.get("url", ""),
+            "published_at": prev.get("published_at") or p.get("posted_at")
+                            or jst_strftime("%Y-%m-%d %H:%M:%S"),
+            "content_updated_at": jst_strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(article, f, ensure_ascii=False, indent=2)
+        written += 1
+
+    # 非公開・予約になった記事のJSONは消す（一覧に出したままにしない）
+    removed = 0
+    for path in glob.glob(os.path.join(SITE_CONTENT_DIR, "*.json")):
+        pid = os.path.splitext(os.path.basename(path))[0]
+        if pid not in seen_ids:
+            os.remove(path)
+            removed += 1
+
+    log.info(f"📊 メタデータ書き出し完了: {written}件 / 対象外{skipped}件 / 削除{removed}件")
+
+
+def _run_meta_export_only():
+    """メタデータ書き出しモード。codocには触れない"""
+    log.info(f"\n{'='*55}")
+    log.info(f"🚀 メタデータ書き出しモード ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+    session = login_wakust()
+    if not session:
+        log.error("❌ wakustログイン失敗のため処理を中断します")
+        sys.exit(1)
+    try:
+        run_meta_export(session)
+    finally:
+        session.close()
+    log.info(f"\n✅ 書き出し完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+
+
+def run_site_publish(session, limit=1):
+    """自社サイト未掲載の記事から販売回数が多い順に codoc エントリーを作成し、
+    サイト用の記事JSONを書き出す"""
+    from wakust_codoc import codoc_create_entry, codoc_fetch_entry_code
+    log.info(f"\n{'='*55}")
+    log.info(f"🏬 自社サイト掲載 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    cfg = _site_config()
+    if not cfg.get("base_url"):
+        log.error("❌ site_config.json の base_url が未設定です")
+        return
+
+    all_posts = fetch_post_list(session)
+    if not all_posts:
+        log.error("❌ 記事一覧が空、サイト掲載中止")
+        return
+
+    state = load_state()
+    candidates = []
+    for p in all_posts:
+        if _codoc_skip_post(p):
+            continue
+        if state.get(p["id"], {}).get("site_entry_id"):
+            continue
+        if os.path.exists(os.path.join(SITE_CONTENT_DIR, f"{p['id']}.json")):
+            continue
+        candidates.append(p)
+
+    if not candidates:
+        log.info("📝 サイト掲載候補なし（対象記事すべて掲載済み）")
+        return
+
+    candidates.sort(key=lambda p: p.get("sales_count") or 0, reverse=True)
+    targets = candidates[:max(1, limit)]
+    log.info(f"📝 掲載対象 {len(targets)}件 / 残候補 {len(candidates)}件")
+
+    session_codoc = _codoc_login_any()
+    if not session_codoc:
+        log.error("❌ codocログイン失敗")
+        return
+
+    published = 0
+    try:
+        for target in targets:
+            log.info(f"\n📝 [{target['id']}] {target['title']}  "
+                     f"(販売{target.get('sales_count') or 0}回)")
+            try:
+                details = fetch_post_details(session, target)
+            except Exception as e:
+                log.error(f"❌ 記事詳細取得失敗 [{target['id']}]: {e}")
+                continue
+            payload = details.get("payload") or {}
+            body_free = payload.get("edit_text_1", "") or ""
+            body_paywalled = payload.get("edit_text_2", "") or ""
+            if not body_paywalled.strip():
+                log.warning(f"  ⏭️  有料部分が空のためスキップ [{target['id']}]")
+                continue
+            price = _site_price_for(target, details)
+            site_url = _site_article_url(cfg, target["id"])
+
+            entry_id = codoc_create_entry(
+                session_codoc,
+                title=target["title"],
+                body_free=body_free,
+                body_paywalled=body_paywalled,
+                price=price,
+                binded_url=site_url,      # ← 自社サイトの記事URLに紐付ける
+                limited=CODOC_LIMITED,    # ← codoc上は限定公開（自社サイトで販売）
+            )
+            if not entry_id:
+                log.error(f"❌ codocエントリー作成失敗 [{target['id']}]")
+                continue
+
+            entry_code = codoc_fetch_entry_code(session_codoc, entry_id)
+            tags, image_url = _site_fetch_tags_image(session, target)
+            path = _write_site_article(cfg, target, details, price,
+                                       entry_id, entry_code,
+                                       tags=tags, image_url=image_url)
+            log.info(f"  ✅ 掲載 {site_url}  ({price}円 / entry={entry_id}"
+                     f"{'/' + entry_code if entry_code else ' ⚠️コード未取得'})")
+            log.info(f"  💾 {path}")
+
+            st = state.setdefault(target["id"], {})
+            st["site_entry_id"] = entry_id
+            st["site_entry_code"] = entry_code or ""
+            st["site_title"] = target["title"]
+            st["site_price"] = price
+            st["site_url"] = site_url
+            st["site_published_at"] = jst_strftime("%Y-%m-%d %H:%M:%S")
+            save_state(state)
+            published += 1
+            time.sleep(1)
+    finally:
+        session_codoc.close()
+
+    log.info(f"\n📊 自社サイト掲載完了: {published}件")
+
+
+def run_site_sync(session, posts, post_infos):
+    """掲載済み記事のタイトル・価格・無料部分を最新化する（0時モードから呼ばれる）"""
+    from wakust_codoc import codoc_update_entry, codoc_fetch_entry_code
+    log.info(f"\n{'='*55}")
+    log.info(f"🔄 自社サイト掲載記事の同期 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    cfg = _site_config()
+    state = load_state()
+    posts_by_id = {p["id"]: p for p in posts}
+    infos_by_id = {info["post"]["id"]: info for info in post_infos}
+
+    target_ids = [pid for pid, s in state.items() if s.get("site_entry_id")]
+    if not target_ids:
+        log.info("📝 サイト同期対象なし")
+        return
+
+    log.info(f"📝 掲載済み: {len(target_ids)}件")
+    session_codoc = None
+    updated = skipped = failed = 0
+    try:
+        for pid in target_ids:
+            s = state[pid]
+            p = posts_by_id.get(pid)
+            info = infos_by_id.get(pid)
+            if not p or not info or _codoc_skip_post(p):
+                continue
+            details = info.get("details") or {}
+            payload = details.get("payload") or {}
+            new_title = info.get("new_title") or p["title"]
+            new_price = _site_price_for(p, details)
+            body_free = payload.get("edit_text_1", "") or ""
+            body_paywalled = payload.get("edit_text_2", "") or ""
+
+            # サイト側のJSONは無料部分が変わっていれば毎回書き直す
+            path = os.path.join(SITE_CONTENT_DIR, f"{pid}.json")
+            prev = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        prev = json.load(f)
+                except (OSError, ValueError):
+                    prev = {}
+            content_changed = (prev.get("free_html") != body_free
+                               or prev.get("title") != new_title
+                               or prev.get("price") != new_price)
+            codoc_changed = (new_title != s.get("site_title")
+                             or new_price != s.get("site_price"))
+
+            if not content_changed and not codoc_changed:
+                skipped += 1
+                continue
+
+            if codoc_changed:
+                if session_codoc is None:
+                    session_codoc = _codoc_login_any()
+                    if not session_codoc:
+                        log.error("❌ codocログイン失敗、同期中止")
+                        return
+                ok = codoc_update_entry(
+                    session_codoc, s["site_entry_id"], new_title,
+                    body_free, body_paywalled, new_price,
+                    binded_url=_site_article_url(cfg, pid),
+                    limited=CODOC_LIMITED,
+                )
+                if not ok:
+                    log.warning(f"  ⚠️ codoc更新失敗 [{pid}]")
+                    failed += 1
+                    continue
+                s["site_title"] = new_title
+                s["site_price"] = new_price
+                s["site_updated_at"] = jst_strftime("%Y-%m-%d %H:%M:%S")
+
+            # エントリーコードが未取得なら再取得を試みる
+            if not s.get("site_entry_code"):
+                if session_codoc is None:
+                    session_codoc = _codoc_login_any()
+                if session_codoc:
+                    code = codoc_fetch_entry_code(session_codoc, s["site_entry_id"])
+                    if code:
+                        s["site_entry_code"] = code
+
+            _write_site_article(cfg, dict(p, title=new_title), details,
+                                new_price, s["site_entry_id"],
+                                s.get("site_entry_code"))
+            save_state(state)
+            log.info(f"  ✅ 同期 [{pid}] {new_title} / {new_price}円")
+            updated += 1
+            time.sleep(1)
+    finally:
+        if session_codoc:
+            session_codoc.close()
+
+    log.info(f"📊 サイト同期完了: 更新{updated}件 / 差分なし{skipped}件 / 失敗{failed}件")
+
+
+def _run_site_publish_only():
+    """朝昼夜モード: wakustログイン→自社サイト掲載→サイト生成"""
+    log.info(f"\n{'='*55}")
+    log.info(f"🚀 自社サイト掲載モード ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+    session = login_wakust()
+    if not session:
+        log.error("❌ wakustログイン失敗のため処理を中断します")
+        sys.exit(1)
+    try:
+        run_site_publish(session, limit=SITE_PUBLISH_LIMIT)
+    finally:
+        session.close()
+    try:
+        from wakust_site import build
+        build()
+    except Exception as e:
+        log.error(f"❌ サイト生成でエラー: {e}", exc_info=True)
+    log.info(f"\n✅ 自社サイト掲載処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+
+
 def run_organize_sets(session, post_infos, mode="today"):
     """セット販売の再構築 + プロフィールリンク更新
 
@@ -4177,6 +4614,20 @@ def run_update():
     # except Exception as e:
     #     log.error(f"❌ codoc同期でエラー: {e}", exc_info=True)
 
+    # 自社サイト掲載済み記事の同期 → サイト再生成（site_enabled=true のときだけ）
+    if _site_enabled():
+        try:
+            run_site_sync(session, posts, post_infos)
+        except Exception as e:
+            log.error(f"❌ 自社サイト同期でエラー: {e}", exc_info=True)
+        try:
+            from wakust_site import build
+            build()
+        except Exception as e:
+            log.error(f"❌ サイト生成でエラー: {e}", exc_info=True)
+    else:
+        log.info("⏸ 自社サイトは無効（site_config.json の site_enabled=false）")
+
     session.close()
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
@@ -4410,9 +4861,19 @@ def run_title_only():
 # エントリーポイント
 # ============================================================
 if __name__ == "__main__":
-    if CODOC_MODE == "post_new":
-        # codoc投稿は一時停止中
-        log.info(f"⏸️ codoc投稿モードは一時停止中です（何もせず終了）")
+    if CODOC_MODE == "meta_export":
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [メタデータ書き出しモード]")
+        _run_meta_export_only()
+    elif CODOC_MODE == "site_publish":
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [自社サイト掲載モード]")
+        _run_site_publish_only()
+    elif CODOC_MODE == "site_build":
+        log.info(f"🚀 サイト生成のみ")
+        from wakust_site import build
+        build()
+    elif CODOC_MODE == "post_new":
+        # codoc投稿は停止中（Threads投稿→ワクスト誘導に移行したため）
+        log.info(f"⏸️ codoc投稿モードは停止中です（何もせず終了）")
         sys.exit(0)
     elif CALENDAR_ONLY:
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [カレンダーのみモード]")
