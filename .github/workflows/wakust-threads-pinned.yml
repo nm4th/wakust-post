@@ -1,6 +1,7 @@
 name: Wakust Threads Pinned Refresh
 
-# 固定ポストにぶら下げる「本命」の返信を貼り替える。
+# 固定ポストの返信を貼り替える保険。通常は Wakust Threads Post が
+# 投稿のたびに更新するので、これは取りこぼし用の週1バックアップ。
 # Threads API には投稿の編集もピン留めも無いので、本体は貼りっぱなしにして
 # 中身だけ返信で差し替える。古い返信は削除してから新しいものを付ける。
 #
@@ -9,7 +10,7 @@ name: Wakust Threads Pinned Refresh
 
 on:
   schedule:
-    # 毎週月曜 9:10 JST
+    # 毎週月曜 9:10 JST（通常は投稿ごとに更新されるので保険）
     - cron: '10 0 * * 1'
   workflow_dispatch: {}
 

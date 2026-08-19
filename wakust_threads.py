@@ -521,6 +521,8 @@ def tpl_spec(cfg, articles, area=None):
     post["text"] = post["text"].lstrip("\n")
     post["spec_no"] = no
     post["story_id"] = str(a["id"])
+    post["focus"] = {"area": a.get("area", ""), "station": a.get("station", ""),
+                     "label": a.get("station") or a.get("area", "")}
     return post
 
 
@@ -548,6 +550,18 @@ def tpl_pinned(cfg, articles, area=None):
     return {"text": "\n".join(lines).strip(), "reply": "", "url": url}
 
 
+def _pinned_row(a, header=""):
+    """本命リストの1行。見出しと同じ駅名は繰り返さない"""
+    tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
+            and t != a.get("station")]
+    cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+    detail = " / ".join(x for x in [cup] + tags[:1] if x)
+    st = a.get("station") or ""
+    if not st or st == header:
+        return detail or header
+    return f"{st} {detail}".strip()
+
+
 def tpl_pinned_update(cfg, articles, area=None):
     """固定ポストに返信する「本命」リスト（毎週貼り替える中身）"""
     items = [a for a in articles if int(a.get("sales_count") or 0) > 0]
@@ -567,18 +581,30 @@ def tpl_pinned_update(cfg, articles, area=None):
         picked.append(a)
 
     d = datetime.now(JST).date()
+    focus = (_load_state().get("_threads_focus") or {})
+    flabel = (focus.get("label") or "").strip()
+    fstation = (focus.get("station") or "").strip()
+
     lines = [f"【本命 更新 {d.month}/{d.day}】", "",
              "実際に一番読まれている順です。"]
+
+    # 直近の投稿で触れた場所があれば、その本命を先に出す
+    if fstation:
+        top = [a for a in items if (a.get("station") or "") == fstation][:per_area]
+        if top:
+            lines += ["", f"《{flabel}》← さっきの投稿の分"]
+            for a in top:
+                lines.append(_pinned_row(a, flabel))
+            for a in top:
+                ar = a.get("area") or "その他"
+                if a in by_area.get(ar, []):
+                    by_area[ar].remove(a)
+
     for ar, group in sorted(by_area.items(), key=lambda kv: -len(kv[1])):
         if not group:
             continue
         lines += ["", f"《{ar}》"]
-        for a in group:
-            tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
-                    and t != a.get("station")]
-            cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
-            detail = " / ".join(x for x in [cup] + tags[:1] if x)
-            lines.append(f'{a.get("station") or ar} {detail}'.strip())
+        lines += [_pinned_row(a, ar) for a in group]
     lines += ["", "迷ったらこの中から。"]
     text = "\n".join(lines).strip()
     if len(text) > 480:
@@ -728,7 +754,8 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     body = [head, ""] + lines + ["", sep, "",
                                  "正直、初回はこの中から選ぶだけで失敗率がグッと下がります。",
                                  "", tail, cta]
-    return {"text": "\n".join(body).strip(), "reply": "", "url": ""}
+    return {"text": "\n".join(body).strip(), "reply": "", "url": "",
+            "focus": {"area": area or "", "station": station or "", "label": label}}
 
 
 def tpl_flash(cfg, articles, area=None):
@@ -765,6 +792,8 @@ def tpl_flash(cfg, articles, area=None):
     # 1行目のタイトル枠は使わないので、先頭の空行を落とす
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
+    post["focus"] = {"area": a.get("area", ""), "station": a.get("station", ""),
+                     "label": a.get("station") or a.get("area", "")}
     return post
 
 
@@ -809,6 +838,8 @@ def tpl_story(cfg, articles, area=None):
                     _article_url(cfg, a))
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
+    post["focus"] = {"area": a.get("area", ""), "station": a.get("station", ""),
+                     "label": a.get("station") or a.get("area", "")}
     return post
 
 
@@ -1068,6 +1099,8 @@ def _publish(posts):
             state.setdefault("_threads_story", {})[p["story_id"]] = now
         if p.get("spec_no"):
             state["_threads_spec_no"] = p["spec_no"]
+        if p.get("focus"):
+            state["_threads_focus"] = dict(p["focus"], at=now)
         if p["template"] == "pinned":
             # あとで返信を貼り替えられるよう、固定ポストのIDを覚えておく
             state.setdefault("_threads_pinned", {})["post_id"] = post_id
