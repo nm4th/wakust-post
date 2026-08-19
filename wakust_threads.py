@@ -111,8 +111,15 @@ def _url(cfg, **params):
 
     link_target="site"   … 自社サイトの絞り込み済み一覧URL
     link_target="wakust" … ワクストの着地URL（wakust_landing_url）
+    link_target="none"   … リプライにURLを貼らない（プロフィール誘導のみ）
+
+    "none" は、リンク先ごと判定されて投稿が削除される場合の対応。
+    別ドメインを噛ませて遷移先を隠すのは規約回避であり、見つかれば
+    アカウント停止になるので取らない。貼らないことで対応する。
     """
     tcfg = cfg.get("threads") or {}
+    if tcfg.get("link_target") == "none":
+        return ""
     if tcfg.get("link_target") == "wakust":
         return (tcfg.get("wakust_landing_url") or "").strip()
     base = cfg["base_url"] + "/"
@@ -131,6 +138,8 @@ def _list_link(cfg, name, **params):
 def _article_url(cfg, a):
     """記事1件の誘導先URL"""
     tcfg = cfg.get("threads") or {}
+    if tcfg.get("link_target") == "none":
+        return ""
     if tcfg.get("link_target") == "wakust":
         return a.get("source_url") or (tcfg.get("wakust_landing_url") or "").strip()
     return f'{cfg["base_url"]}/articles/{a["id"]}/'
