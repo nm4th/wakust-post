@@ -8,6 +8,7 @@ logs/threads_insights.csv に追記する。同じ投稿を何日か追うこと
   python wakust_threads_insights.py --report   # 収集せず、CSVから集計だけ
 """
 
+import sys
 import os
 import csv
 import json
@@ -35,7 +36,7 @@ def _load_state():
 
 def collect():
     """投稿履歴をたどってインサイトを取り、CSVに追記する"""
-    from wakust_threads_api import ThreadsClient, ThreadsError
+    from wakust_threads_api import ThreadsClient
 
     posted = _load_state().get("_threads") or {}
     if not posted:
@@ -46,6 +47,17 @@ def collect():
     client = ThreadsClient()
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
     rows = []
+    try:
+        _gather(client, posted, cutoff, now, rows)
+    finally:
+        # 途中でトークン失効に当たっても、取れた分は必ず残す
+        _flush(rows)
+    return rows
+
+
+def _gather(client, posted, cutoff, now, rows):
+    from wakust_threads_api import ThreadsError, ThreadsAuthError
+
     for key, rec in sorted(posted.items()):
         # key は "YYYY-MM-DD:template"
         date, _, template = key.partition(":")
@@ -56,6 +68,13 @@ def collect():
             continue
         try:
             m = client.insights(post_id)
+        except ThreadsAuthError as e:
+            # 1件でもトークン失効なら以降も全部落ちる。ここで打ち切って知らせる
+            print(f"❌ {e}")
+            print("::error::Threadsのアクセストークンが失効しました。"
+                  "Metaダッシュボードで再発行し、Secrets の "
+                  "THREADS_ACCESS_TOKEN を更新してください")
+            raise
         except ThreadsError as e:
             print(f"  ⚠️ {key}: {e}")
             continue
@@ -73,16 +92,18 @@ def collect():
         print(f"  📊 {template:10} 表示{m.get('views', 0):5}  "
               f"いいね{m.get('likes', 0):4}  返信{m.get('replies', 0):3}")
 
-    if rows:
-        os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
-        exists = os.path.exists(CSV_PATH)
-        with open(CSV_PATH, "a", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=COLUMNS)
-            if not exists:
-                w.writeheader()
-            w.writerows(rows)
-        print(f"\n💾 {len(rows)}件を {CSV_PATH} に記録しました")
-    return rows
+
+def _flush(rows):
+    if not rows:
+        return
+    os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
+    exists = os.path.exists(CSV_PATH)
+    with open(CSV_PATH, "a", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=COLUMNS)
+        if not exists:
+            w.writeheader()
+        w.writerows(rows)
+    print(f"\n💾 {len(rows)}件を {CSV_PATH} に記録しました")
 
 
 def report():
@@ -125,7 +146,13 @@ def main():
     ap.add_argument("--report", action="store_true", help="収集せず集計だけ表示")
     args = ap.parse_args()
     if not args.report:
-        collect()
+        from wakust_threads_api import ThreadsAuthError
+        try:
+            collect()
+        except ThreadsAuthError:
+            # ここまでに集めた分は CSV に書けているので、集計だけ出して落とす
+            report()
+            sys.exit(2)
     report()
 
 

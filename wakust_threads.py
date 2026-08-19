@@ -17,6 +17,7 @@ SNSにそのまま貼れる投稿文を組み立てる。投稿APIは叩かず�
 各テンプレートは本文とリプライ文をセットで返す。
 """
 
+import sys
 import os
 import re
 import json
@@ -929,8 +930,9 @@ def main():
         return
 
     if args.post:
-        _publish(posts)
-        return
+        # 失敗をここで握りつぶすと、トークン失効に誰も気づけないまま
+        # 投稿が止まり続ける。異常終了させてワークフローの通知に乗せる
+        sys.exit(_publish(posts))
 
     for p in posts:
         print("=" * 52)
@@ -962,20 +964,29 @@ def _save_state(state):
 
 
 def _publish(posts):
-    """Threads APIで投稿する。同じ日に同じテンプレートを二度投げない"""
-    from wakust_threads_api import ThreadsClient, ThreadsError
+    """Threads APIで投稿する。同じ日に同じテンプレートを二度投げない
+
+    戻り値は終了コード。0=成功、1=投稿失敗あり、2=トークンが無効。
+    トークン失効は「切れたら延長できない」ので、ログに出すだけでは足りない。
+    必ず非ゼロで終わらせて GitHub Actions の失敗通知に乗せる。
+    """
+    from wakust_threads_api import ThreadsClient, ThreadsError, ThreadsAuthError
 
     client = ThreadsClient()
-    left, total = client.remaining_quota()
+    try:
+        left, total = client.remaining_quota()
+    except ThreadsAuthError as e:
+        return _token_dead(e)
     if left is not None:
         print(f"本日の残り投稿数: {left} / {total}")
         if left <= 0:
             print("投稿上限に達しています。中止します。")
-            return
+            return 0
 
     state = _load_state()
     posted = state.setdefault("_threads", {})
     today = datetime.now(JST).strftime("%Y-%m-%d")
+    failed = 0
 
     for p in posts:
         key = f'{today}:{p["template"]}'
@@ -984,8 +995,12 @@ def _publish(posts):
             continue
         try:
             post_id, reply_id = client.post_with_reply(p["text"], p["reply"])
+        except ThreadsAuthError as e:
+            return _token_dead(e)
         except ThreadsError as e:
             print(f'❌ 投稿失敗 [{p["template"]}]: {e}')
+            _annotate(f'Threads投稿に失敗しました [{p["template"]}]: {e}')
+            failed += 1
             continue
         now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
         posted[key] = {"post_id": post_id, "reply_id": reply_id, "at": now}
@@ -1002,6 +1017,23 @@ def _publish(posts):
             print(f"📌 固定ポストのIDを記録しました: {post_id}\n"
                   f"   Threadsアプリでこの投稿をピン留めしてください")
         _save_state(state)
+    return 1 if failed else 0
+
+
+def _annotate(message, level="error"):
+    """GitHub Actions のログに注釈として出す（メール本文にも載る）"""
+    print(f"::{level}::{message}")
+
+
+def _token_dead(err):
+    """トークン失効時の共通処理。ワークフローを必ず失敗させる"""
+    print(f"❌ {err}")
+    _annotate(
+        "Threadsのアクセストークンが失効しました。投稿は止まっています。"
+        "Metaダッシュボードでトークンを再発行し、"
+        "Secrets の THREADS_ACCESS_TOKEN を更新してください "
+        "（長期トークンは60日で失効し、切れた後は延長できません）")
+    return 2
 
 
 if __name__ == "__main__":

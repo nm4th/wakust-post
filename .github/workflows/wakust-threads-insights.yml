@@ -39,8 +39,8 @@ jobs:
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
         run: |
           if [ -z "$THREADS_ACCESS_TOKEN" ]; then
-            echo "::notice::THREADS_ACCESS_TOKEN が未設定のためスキップします"
-            exit 0
+            echo "::error::THREADS_ACCESS_TOKEN が未設定です。Secrets を確認してください"
+            exit 1
           fi
           python wakust_threads_insights.py
 

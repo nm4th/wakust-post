@@ -33,6 +33,52 @@ class ThreadsError(RuntimeError):
     pass
 
 
+class ThreadsAuthError(ThreadsError):
+    """トークンが無効・失効している（放置すると全投稿が止まる）
+
+    長期トークンは60日で失効し、切れると延長できないため、通信エラーなどの
+    一時的な失敗とは区別して、必ずワークフローを失敗させて通知に乗せる。
+    """
+
+
+# トークン起因と判断する Graph API のエラーコード
+# 190=トークン失効/不正, 102=セッション切れ, 463=期限切れ, 467=無効化
+AUTH_CODES = {102, 190, 463, 467}
+# 同じ OAuthException でも、これは流量制限であってトークンは生きている。
+# 混同すると「トークンが切れた」という誤報になる
+# 4=アプリ単位, 17=ユーザー単位, 32=ページ単位, 341=一時制限, 613=秒間制限
+RATE_CODES = {4, 17, 32, 341, 613}
+
+
+def is_auth_error(status, err):
+    """Graph API のエラー内容が「トークンが死んでいる」かどうかを判定する"""
+    err = err or {}
+    try:
+        code = int(err.get("code"))
+    except (TypeError, ValueError):
+        code = None
+    if code in RATE_CODES:
+        return False
+    if code in AUTH_CODES or status == 401:
+        return True
+    return err.get("type") == "OAuthException"
+
+
+def _raise_for_error(path, resp):
+    """HTTPエラーを、トークン起因かどうかで投げ分ける"""
+    body = resp.text[:400]
+    err = {}
+    try:
+        err = (resp.json() or {}).get("error") or {}
+    except ValueError:
+        pass
+    if is_auth_error(resp.status_code, err):
+        raise ThreadsAuthError(
+            f"アクセストークンが無効です（{path} HTTP {resp.status_code}）: "
+            f"{err.get('message') or body}")
+    raise ThreadsError(f"{path} HTTP {resp.status_code}: {body}")
+
+
 class ThreadsClient:
     def __init__(self, user_id=None, token=None, dry_run=None):
         # user_id は省略可。Threads API は "me" を自分自身のエイリアスとして受け付ける
@@ -53,7 +99,7 @@ class ThreadsClient:
         except requests.RequestException as e:
             raise ThreadsError(f"リクエスト失敗 {path}: {e}") from e
         if r.status_code != 200:
-            raise ThreadsError(f"{path} HTTP {r.status_code}: {r.text[:400]}")
+            _raise_for_error(path, r)
         try:
             return r.json()
         except ValueError as e:
@@ -67,7 +113,7 @@ class ThreadsClient:
         except requests.RequestException as e:
             raise ThreadsError(f"リクエスト失敗 {path}: {e}") from e
         if r.status_code != 200:
-            raise ThreadsError(f"{path} HTTP {r.status_code}: {r.text[:400]}")
+            _raise_for_error(path, r)
         return r.json()
 
     # ------------------------------------------------------------
@@ -85,6 +131,8 @@ class ThreadsClient:
             used = int(d.get("quota_usage") or 0)
             total = int((d.get("config") or {}).get("quota_total") or 250)
             return max(0, total - used), total
+        except ThreadsAuthError:
+            raise
         except ThreadsError as e:
             log.warning(f"    ⚠️ Threads: 投稿上限の取得に失敗: {e}")
             return None, None
@@ -153,7 +201,7 @@ class ThreadsClient:
         except requests.RequestException as e:
             raise ThreadsError(f"削除失敗 [{post_id}]: {e}") from e
         if r.status_code != 200:
-            raise ThreadsError(f"削除 HTTP {r.status_code} [{post_id}]: {r.text[:200]}")
+            _raise_for_error(f"削除 [{post_id}]", r)
         log.info(f"    🗑️  削除しました id={post_id}")
         return True
 
@@ -173,8 +221,7 @@ class ThreadsClient:
         except requests.RequestException as e:
             raise ThreadsError(f"インサイト取得失敗 [{post_id}]: {e}") from e
         if r.status_code != 200:
-            raise ThreadsError(f"インサイト HTTP {r.status_code} [{post_id}]: "
-                               f"{r.text[:300]}")
+            _raise_for_error(f"インサイト [{post_id}]", r)
         out = {m: 0 for m in metrics}
         for row in (r.json().get("data") or []):
             name = row.get("name")
@@ -201,7 +248,7 @@ class ThreadsClient:
         except requests.RequestException as e:
             raise ThreadsError(f"トークン更新リクエスト失敗: {e}") from e
         if r.status_code != 200:
-            raise ThreadsError(f"トークン更新 HTTP {r.status_code}: {r.text[:300]}")
+            _raise_for_error("トークン更新", r)
         data = r.json()
         log.info(f"    🔑 トークン更新成功（残り{data.get('expires_in')}秒）")
         return data.get("access_token")
