@@ -1,0 +1,70 @@
+name: Wakust Threads Pinned Refresh
+
+# 固定ポストにぶら下げる「本命」の返信を貼り替える。
+# Threads API には投稿の編集もピン留めも無いので、本体は貼りっぱなしにして
+# 中身だけ返信で差し替える。古い返信は削除してから新しいものを付ける。
+#
+# 事前に一度だけ、固定ポスト本体を投稿してアプリでピン留めしておくこと:
+#   python wakust_threads.py --template pinned --post
+
+on:
+  schedule:
+    # 毎週月曜 9:10 JST
+    - cron: '10 0 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wakust-threads-pinned
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Refresh pinned reply
+        env:
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$THREADS_ACCESS_TOKEN" ]; then
+            echo "::notice::THREADS_ACCESS_TOKEN が未設定のためスキップします"
+            exit 0
+          fi
+          python wakust_threads.py --refresh-pinned
+
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f wakust_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "📌 固定ポストの本命リスト更新 $(date -u +%Y-%m-%d)"
+            pushed=0
+            for i in 1 2 3 4; do
+              if git pull --rebase origin main && git push origin HEAD:main; then
+                pushed=1; break
+              fi
+              sleep $((2 ** i))
+            done
+            if [ "$pushed" != "1" ]; then
+              echo "::error::git push に失敗しました"
+              exit 1
+            fi
+          fi

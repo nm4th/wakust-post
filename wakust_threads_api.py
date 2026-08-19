@@ -142,6 +142,22 @@ class ThreadsClient:
         return post_id, reply_id
 
     # ------------------------------------------------------------
+    def delete_post(self, post_id):
+        """投稿を削除する（固定ポストの古い返信を消すのに使う）"""
+        if self.dry_run:
+            log.info(f"🧪 [dry-run] 削除 id={post_id}")
+            return True
+        try:
+            r = requests.delete(f"{API_BASE}/{post_id}",
+                                params={"access_token": self.token}, timeout=30)
+        except requests.RequestException as e:
+            raise ThreadsError(f"削除失敗 [{post_id}]: {e}") from e
+        if r.status_code != 200:
+            raise ThreadsError(f"削除 HTTP {r.status_code} [{post_id}]: {r.text[:200]}")
+        log.info(f"    🗑️  削除しました id={post_id}")
+        return True
+
+    # ------------------------------------------------------------
     def insights(self, post_id, metrics=None):
         """投稿1件の反応を取る（表示数・いいね・返信・リポスト・引用）
 
