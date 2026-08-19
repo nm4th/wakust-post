@@ -408,6 +408,94 @@ def tpl_rank(cfg, articles, area=None):
         "販売数が多い＝満足度が高い、と見ています。")
 
 
+def tpl_pickup(cfg, articles, area=None):
+    """エリア厳選型（【駅名】+ 特徴 のリスト＋出し惜しみで締める）
+
+    参考アカウントで最も反応が取れている型。店名の代わりに記事を並べる。
+    「一番の本命はここには書いてない」でプロフィールへ引くのが肝なので、
+    リプライにURLは付けず、締めの一文だけで誘導する。
+    """
+    tcfg = cfg.get("threads") or {}
+    # エリアは日替わりで回す（指定があればそれを優先）
+    if not area:
+        counts = {}
+        for a in articles:
+            counts[a.get("area") or "その他"] = counts.get(a.get("area") or "その他", 0) + 1
+        pool = sorted(k for k, v in counts.items() if v >= 5 and k != "その他")
+        if not pool:
+            return None
+        area = pool[datetime.now(JST).timetuple().tm_yday % len(pool)]
+
+    items = _filter(articles, area=area)
+    if len(items) < 4:
+        return None
+
+    # 「外しにくい」= 販売実績が多いもの。実績順に取りつつ、
+    # 同じ駅ばかりにならないよう1駅あたりの上限を設ける
+    limit = min(10, max(5, (tcfg.get("max_items") or 8) + 2))
+    ranked = sorted(items, key=lambda a: -int(a.get("sales_count") or 0))
+    per_station = max(2, -(-limit // max(1, len({a.get("station") for a in items}))))
+    picks, used_station = [], {}
+    for a in ranked:
+        st = a.get("station") or area
+        if used_station.get(st, 0) >= per_station:
+            continue
+        used_station[st] = used_station.get(st, 0) + 1
+        picks.append(a)
+        if len(picks) >= limit:
+            break
+    # 上限で弾かれて件数が足りない場合は実績順で埋める
+    for a in ranked:
+        if len(picks) >= limit:
+            break
+        if a not in picks:
+            picks.append(a)
+
+    # 駅が散っていれば駅ごとにまとめる（参考投稿の《エリア》グルーピング）
+    by_station = {}
+    for a in picks:
+        by_station.setdefault(a.get("station") or area, []).append(a)
+
+    def row(a):
+        tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
+                and t != a.get("station")]
+        cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+        detail = " / ".join(x for x in [cup] + tags[:1] if x)
+        return f'【{a.get("station") or area}】{detail}　{yen(a.get("price"))}'
+
+    # 見出しは2件以上ある駅だけに立てる。1件だけの駅は最後にまとめて並べる
+    # （1行の《駅》が並ぶと、かえって読みにくくなるため）
+    multi = {st: g for st, g in by_station.items() if len(g) >= 2}
+    singles = [a for st, g in by_station.items() if len(g) < 2 for a in g]
+    lines = []
+    if len(multi) >= 2:
+        for st, group in sorted(multi.items(), key=lambda kv: -len(kv[1])):
+            lines.append(f"《{st}》")
+            lines.extend(row(a) for a in group)
+            lines.append("")
+        if singles:
+            lines.append("《その他のエリア》")
+            lines.extend(row(a) for a in singles)
+            lines.append("")
+        if lines and not lines[-1]:
+            lines.pop()
+    else:
+        lines = [row(a) for a in picks]
+
+    heads = tcfg.get("pickup_heads") or ["【初心者必見🔰】\n{area}で迷ってるなら、この{n}人から選べば外しにくい"]
+    tails = tcfg.get("pickup_tails") or ["ちなみに{area}の一番の本命は、あえてここには書いてない。"]
+    seed = datetime.now(JST).timetuple().tm_yday
+    head = render_head(heads[seed % len(heads)], area=area, n=len(picks))
+    tail = render_head(tails[seed % len(tails)], area=area, n=len(picks))
+    cta = (tcfg.get("profile_cta") or "気になる人はプロフィールのリンクへ").strip()
+
+    sep = tcfg.get("separator", "----")
+    body = [head, ""] + lines + ["", sep, "",
+                                 "正直、初回はこの中から選ぶだけで失敗率がグッと下がります。",
+                                 "", tail, cta]
+    return {"text": "\n".join(body).strip(), "reply": "", "url": ""}
+
+
 def tpl_flash(cfg, articles, area=None):
     """体験速報型（短文＋反応を煽る）
 
@@ -495,6 +583,7 @@ TEMPLATES = {
     "price": ("料金帯ごとの在籍数", tpl_price),
     "lineup": ("在籍の内訳", tpl_lineup),
     "rank": ("よく読まれている順", tpl_rank),
+    "pickup": ("エリア厳選（出し惜しみ型）", tpl_pickup),
     "flash": ("体験速報（反応を煽る）", tpl_flash),
     "story": ("体験談を1本", tpl_story),
     "new": ("新着1件", tpl_new),
@@ -523,7 +612,8 @@ def pick_for_slot(cfg, slot):
 
 
 DATA_TEMPLATES = [k for k in ("today", "cheatsheet", "week", "price",
-                              "lineup", "rank", "flash", "story", "new")]
+                              "lineup", "rank", "pickup", "flash",
+                              "story", "new")]
 
 
 def build_all(cfg, articles, area=None, tag=None):
