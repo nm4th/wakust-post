@@ -390,6 +390,29 @@ def _title_hook(title):
     return t.strip()
 
 
+_QUOTE_RE = re.compile(r"「([^」]{4,40})」")
+_PUNCH_RE = re.compile(r"^([^。！!]{4,24}[！!])")
+
+
+def _title_lead(title):
+    """タイトルを「引き」と「残り」に分ける
+
+    タイトルは自分で書いた宣伝文なので、そのまま使える素材が入っている。
+      「このGカップ、本物だ…」  ← 会話の引用があればそれが一番強い
+      神乳PZで絶頂！             ← 無ければ冒頭の惹句を使う
+    戻り値: (引き, 残りの説明)
+    """
+    body = _title_hook(title)
+    m = _QUOTE_RE.search(body)
+    if m:
+        rest = (body[:m.start()] + " " + body[m.end():]).strip(" 　、。")
+        return f"「{m.group(1)}」", re.sub(r"\s+", " ", rest)
+    m = _PUNCH_RE.match(body)
+    if m:
+        return m.group(1), body[m.end():].strip(" 　、。")
+    return "", body
+
+
 def tpl_price(cfg, articles, area=None):
     """価格帯ごとの在籍数（参考アカウントの価格表型）"""
     items = _filter(articles, area=area)
@@ -481,9 +504,10 @@ def tpl_spec(cfg, articles, area=None):
         place = f'{a["station"]}（{a["area"]}）'
 
     lines = [f"No.{no}", ""]
-    hook = _title_hook(a["title"])
-    if hook:
-        lines += [hook[:60], ""]
+    lead, rest = _title_lead(a["title"])
+    for x in (lead, rest[:70] if rest else ""):
+        if x:
+            lines += [x, ""]
     lines.append(f"エリア: {place}")
     prof = "、".join(x for x in [cup, " / ".join(plays[:3])] if x)
     if prof:
@@ -498,6 +522,43 @@ def tpl_spec(cfg, articles, area=None):
     post["spec_no"] = no
     post["story_id"] = str(a["id"])
     return post
+
+
+def tpl_pinned(cfg, articles, area=None):
+    """固定ポストの本体
+
+    貼りっぱなしにするので、**時間が経っても古くならない内容だけ**を書く。
+    在籍数や本命リストのような日々変わるものは入れない（毎回変えると
+    投稿ごとに約束の中身がズレて、固定ポストが何の場所か分からなくなる）。
+    変わるものは、着地先のワクストのプロフィールが毎日更新してくれる。
+
+    リンク先はワクストの体験談一覧なので、「レポートが読める場所」だと
+    分かる書き方にしておく。他の投稿の締め（profile_cta / pickup_tails）も
+    同じ約束に揃えてある。
+    """
+    tcfg = cfg.get("threads") or {}
+    url = (tcfg.get("pinned_link") or tcfg.get("wakust_landing_url") or "").strip()
+    areas = [a.get("area") for a in articles if a.get("area")]
+    # エリア名の一覧だけ使う。人数は日々変わるので出さない
+    order = ["東京都内", "神奈川", "埼玉", "多摩", "千葉"]
+    known = [a for a in order if a in areas] or sorted(set(areas))
+
+    lines = ["【保存版】まずここだけ読んでください📌", "",
+             "行ってきた人の体験レポートを毎日書いてます。",
+             "写真と紹介文だけじゃ分からないところを、",
+             "実際どうだったかで残してます。", "",
+             "読み方はこの順番で。", "",
+             "① エリアを1つに絞る",
+             f"　{' / '.join(known)}",
+             "② 気になった子のレポートを2〜3本まとめて読む",
+             "　1本だけだと、相性の当たり外れか実力か分からない",
+             "③ 出勤日から逆算して予約する",
+             "　当日枠が埋まってる子＝人気の裏付け",
+             "", "----", "",
+             "レポートは毎日増えていきます。"]
+    if url:
+        lines += ["ぜんぶここから読めます →", url]
+    return {"text": "\n".join(lines).strip(), "reply": "", "url": url}
 
 
 def pickup_targets(articles, min_items=4):
@@ -636,7 +697,7 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     seed = datetime.now(JST).timetuple().tm_yday
     head = render_head(heads[seed % len(heads)], area=label, n=len(picks))
     tail = render_head(tails[seed % len(tails)], area=label, n=len(picks))
-    cta = (tcfg.get("profile_cta") or "気になる人はプロフィールのリンクへ").strip()
+    cta = (tcfg.get("profile_cta") or "詳細は固定ポストに置いてます📌").strip()
 
     sep = tcfg.get("separator", "----")
     body = [head, ""] + lines + ["", sep, "",
@@ -700,15 +761,28 @@ def tpl_story(cfg, articles, area=None):
     used = _load_state().get("_threads_story", {})
     items.sort(key=lambda a: (used.get(str(a["id"]), ""), -int(a.get("sales_count") or 0)))
     a = items[0]
-    hook = _title_hook(a["title"])
+    lead, rest = _title_lead(a["title"])
     dates = [d for d in (a.get("shift_dates") or []) if d >= today_iso()]
-    lines = [" / ".join((a.get("tags") or [])[:3]) or a.get("area", ""), ""]
-    if hook:
-        lines.append(hook[:120])
-        lines.append("")
+    tcfg = cfg.get("threads") or {}
+    seed = int(a["id"][-3:] or 0)
+
+    # 引きを1行目に置く。引用が取れなければ煽り文で始める
+    heads = tcfg.get("story_heads") or ["これは書いておきたい。"]
+    head = lead or render_head(heads[seed % len(heads)],
+                               area=a.get("station") or a.get("area", ""),
+                               play=next((t for t in (a.get("tags") or [])
+                                          if re.fullmatch(r"[A-Z]{2,5}", t)), "当たり"))
+
+    lines = [head, ""]
+    lines.append(" / ".join((a.get("tags") or [])[:3]) or a.get("area", ""))
     lines.append(f'出勤　{"・".join(fmt_date(d) for d in dates[:3]) or "調整中"}')
-    post = _compose(cfg, "体験談を1本", lines, _closer(cfg, int(a["id"][-2:] or 0)),
+    if rest:
+        lines += ["", rest[:110]]
+
+    closers = tcfg.get("story_closers") or ["続きは記事に全部書きました。"]
+    post = _compose(cfg, "", lines, closers[seed % len(closers)],
                     _article_url(cfg, a))
+    post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
     return post
 
@@ -730,6 +804,7 @@ TEMPLATES = {
     "price": ("料金帯ごとの在籍数", tpl_price),
     "lineup": ("在籍の内訳", tpl_lineup),
     "rank": ("よく読まれている順", tpl_rank),
+    "pinned": ("固定ポスト（貼りっぱなし）", tpl_pinned),
     "spec": ("本日公開のスペック表", tpl_spec),
     "pickup": ("エリア厳選（出し惜しみ型）", tpl_pickup),
     "flash": ("体験速報（反応を煽る）", tpl_flash),
@@ -921,6 +996,11 @@ def _publish(posts):
             state.setdefault("_threads_story", {})[p["story_id"]] = now
         if p.get("spec_no"):
             state["_threads_spec_no"] = p["spec_no"]
+        if p["template"] == "pinned":
+            # あとで返信を貼り替えられるよう、固定ポストのIDを覚えておく
+            state.setdefault("_threads_pinned", {})["post_id"] = post_id
+            print(f"📌 固定ポストのIDを記録しました: {post_id}\n"
+                  f"   Threadsアプリでこの投稿をピン留めしてください")
         _save_state(state)
 
 
