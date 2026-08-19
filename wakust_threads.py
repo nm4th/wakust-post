@@ -536,6 +536,10 @@ def tpl_pickup(cfg, articles, area=None, station=None):
             break
         if a not in picks:
             picks.append(a)
+    # 駅単体は出勤日順に並べる。同じ「Fカップ / GHR」が並んでも
+    # 日付が昇順なら重複ではなくスケジュールとして読める
+    if station:
+        picks.sort(key=lambda a: _next_shift(a) or "9999-12-31")
 
     # 駅が散っていれば駅ごとにまとめる（参考投稿の《エリア》グルーピング）
     by_station = {}
