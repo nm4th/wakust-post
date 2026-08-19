@@ -123,6 +123,12 @@ def codoc_login(email, password):
     # 302で /login 以外にリダイレクト → 成功
     if r.status_code in (301, 302):
         loc = r.headers.get("location", "")
+        # 2FAページへのリダイレクトは「成功」ではない。ここを通すと
+        # 未認証セッションのまま処理が進み、後段で不可解に失敗する
+        if "two_factor" in loc.lower():
+            log.error(f"❌ codoc: 2要素認証が要求されました ({loc})。"
+                      f"CODOC_COOKIE を再取得してください")
+            return None
         if loc and "/login" not in loc:
             log.info(f"✅ codocログイン成功 (login POSTのredirect先: {loc})")
             return session
