@@ -223,7 +223,8 @@ def tpl_pool(cfg, articles, area=None, kind="aruaru"):
     if entry["cta"] and cta and cta not in text:
         text = f"{text}\n\n{cta}"
     return {"text": text, "reply": "", "url": "",
-            "pool_key": _pool_key(kind, entry["text"])}
+            "pool_key": _pool_key(kind, entry["text"]),
+            "variant": _pool_key(kind, entry["text"]).split(":", 1)[1]}
 
 
 def tpl_today(cfg, articles, area=None):
@@ -267,7 +268,9 @@ def tpl_today(cfg, articles, area=None):
         lines.append(row)
 
     d = datetime.now(JST).date()
-    note = f"本日は{len(items)}名が出勤。"
+    # 店舗全体の出勤数ではなく「体験レポートを書いた子のうち」の数。
+    # そこが伝わらないと在籍数の話に読めてしまう
+    note = f"体験レポートがある子のうち、本日は{len(items)}名が出勤。"
     return _compose(
         cfg,
         f'{label} 本日{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})出勤',
@@ -591,7 +594,7 @@ def pickup_targets(articles, min_items=4):
     return targets
 
 
-def tpl_pickup(cfg, articles, area=None, station=None):
+def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
     """エリア厳選型（【駅名】+ 特徴 のリスト＋出し惜しみで締める）
 
     参考アカウントで最も反応が取れている型。店名の代わりに記事を並べる。
@@ -601,25 +604,50 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     tcfg = cfg.get("threads") or {}
     min_items = int(tcfg.get("pickup_min_items") or 4)
 
+    def _by_station(name):
+        return [a for a in articles if (a.get("station") or "") == name]
+
+    # これから出勤予定がある子だけを載せる。予約できない子を並べても
+    # 「いつ行けるか」で選べないので、出勤日が無いものは対象外にする
+    def _bookable(items):
+        return [a for a in items if _next_shift(a)]
+
     # 対象は日替わりで回す。東京都内のような広いエリアは駅ごとに分けたいので、
     # 記事が十分ある駅は駅単体を、エリアはエリアとして、それぞれ対象に入れる。
     if station:
-        items = [a for a in articles if (a.get("station") or "") == station]
+        items = _bookable(_by_station(station))
         label = station
     elif area:
-        items = _filter(articles, area=area)
+        items = _bookable(_filter(articles, area=area))
         label = area
     else:
         targets = pickup_targets(articles, min_items)
         if not targets:
             return None
-        kind, label = targets[datetime.now(JST).timetuple().tm_yday % len(targets)]
-        if kind == "station":
-            items = [a for a in articles if (a.get("station") or "") == label]
-            station = label
-        else:
-            items = _filter(articles, area=label)
-            area = label
+        # rotate は「同じ日に2回出すときに別の駅を選ぶ」ためのずらし幅。
+        # 1日1回だけなら0のままで従来どおり日替わりで回る
+        start = (datetime.now(JST).timetuple().tm_yday + int(rotate)) % len(targets)
+        # 出勤予定を持つ子だけに絞ると件数が足りなくなる対象があるので、
+        # 足りたところで確定するまで順に見ていく。
+        # あわせて、その日すでに出した対象は飛ばす（1日2回出すため、
+        # 件数不足で送りが発生すると2回とも同じ駅になることがある）
+        today_key = datetime.now(JST).strftime("%Y-%m-%d") + ":pickup:"
+        done = {k[len(today_key):] for k in _load_state().get("_threads", {})
+                if k.startswith(today_key)}
+        items, label = [], ""
+        for n in range(len(targets)):
+            kind, name = targets[(start + n) % len(targets)]
+            if name in done:
+                continue
+            cand = _bookable(_by_station(name) if kind == "station"
+                             else _filter(articles, area=name))
+            if len(cand) >= min_items:
+                items, label = cand, name
+                if kind == "station":
+                    station = name
+                else:
+                    area = name
+                break
 
     if len(items) < min_items:
         return None
@@ -652,20 +680,21 @@ def tpl_pickup(cfg, articles, area=None, station=None):
 
     # 駅が散っていれば駅ごとにまとめる（参考投稿の《エリア》グルーピング）
     by_station = {}
-    for a in picks:
+    for a in sorted(picks, key=lambda a: _next_shift(a) or "9999-12-31"):
         by_station.setdefault(a.get("station") or area, []).append(a)
 
-    def row(a):
+    def row(a, with_station=True):
         tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
                 and t != a.get("station")]
         cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
         detail = " / ".join(x for x in [cup] + tags[:2] if x) or label
-        if station:
-            # 駅単体では【駅名】が全行同じになるので付けない。代わりに
-            # 「Gカップ / HR」が並んで見分けが付かなくなるため出勤日を添える
-            nxt = _next_shift(a)
-            return f"{detail}　{fmt_date(nxt)}" if nxt else detail
-        return f'【{a.get("station") or label}】{detail}'
+        # 先頭を出勤日に揃える。読む側は「いつ行けるか」で絞るので、
+        # 日付が行頭に来ていた方が縦に流し読みできる
+        head = fmt_date(_next_shift(a))
+        # 駅単体、または《駅名》の見出しの下では【駅名】が重複するので付けない
+        if station or not with_station:
+            return f"{head}　{detail}"
+        return f'{head}　【{a.get("station") or label}】{detail}'
 
     # 見出しは2件以上ある駅だけに立てる。1件だけの駅は最後にまとめて並べる
     # （1行の《駅》が並ぶと、かえって読みにくくなるため）
@@ -673,10 +702,10 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     singles = [a for st, g in by_station.items() if len(g) < 2 for a in g]
     seen_rows = set()
 
-    def rows(group):
+    def rows(group, with_station=True):
         out = []
         for a in group:
-            r = row(a)
+            r = row(a, with_station)
             if r in seen_rows:
                 continue
             seen_rows.add(r)
@@ -686,7 +715,7 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     lines = []
     if len(multi) >= 2:
         for st, group in sorted(multi.items(), key=lambda kv: -len(kv[1])):
-            block = rows(group)
+            block = rows(group, with_station=False)
             if not block:
                 continue
             lines.append(f"《{st}》")
@@ -704,16 +733,25 @@ def tpl_pickup(cfg, articles, area=None, station=None):
 
     heads = tcfg.get("pickup_heads") or ["【初心者必見🔰】\n{area}で迷ってるなら、この{n}人から選べば外しにくい"]
     tails = tcfg.get("pickup_tails") or ["ちなみに{area}の一番の本命は、あえてここには書いてない。"]
-    seed = datetime.now(JST).timetuple().tm_yday
+    # 1日に2回（別の駅で）出すので、日付だけを種にすると見出しが同じになる。
+    # 対象名も混ぜて、同じ日でも文面が変わるようにする
+    seed = datetime.now(JST).timetuple().tm_yday + sum(ord(c) for c in label)
     head = render_head(heads[seed % len(heads)], area=label, n=len(picks))
     tail = render_head(tails[seed % len(tails)], area=label, n=len(picks))
     cta = (tcfg.get("profile_cta") or "詳細は固定ポストに置いてます📌").strip()
+    # 締めの一文が既に固定ポストへ誘導しているなら、共通CTAは足さない
+    # （「固定ポストからまとめて読めます」が2行続いてしまうため）
+    if "固定ポスト" in tail:
+        cta = ""
 
     sep = tcfg.get("separator", "----")
     body = [head, ""] + lines + ["", sep, "",
                                  "正直、初回はこの中から選ぶだけで失敗率がグッと下がります。",
                                  "", tail, cta]
-    return {"text": "\n".join(body).strip(), "reply": "", "url": ""}
+    # variant は「同じテンプレートでも中身が別」を表す印。
+    # これが違えば同じ日に2回投稿できる（_publish の重複判定で使う）
+    return {"text": "\n".join(body).strip(), "reply": "", "url": "",
+            "variant": label}
 
 
 def tpl_flash(cfg, articles, area=None):
@@ -738,7 +776,12 @@ def tpl_flash(cfg, articles, area=None):
     tcfg = cfg.get("threads") or {}
     heads = tcfg.get("flash_heads") or ["レポート上げました"]
     hooks = tcfg.get("flash_hooks") or ["いいね多かったら次も出します"]
-    seed = int(a["id"][-3:] or 0)
+    # 記事IDだけを種にすると、同じ日の速報どうしで書き出しが被ることがある。
+    # その日すでに出した本数を足して、必ず別の書き出しになるようにする
+    today_key = datetime.now(JST).strftime("%Y-%m-%d") + ":flash"
+    n_today = sum(1 for k in _load_state().get("_threads", {})
+                  if k.startswith(today_key))
+    seed = int(a["id"][-3:] or 0) + n_today
 
     head = render_head(heads[seed % len(heads)],
                        area=a.get("area", ""), play=play or "当たり")
@@ -750,6 +793,7 @@ def tpl_flash(cfg, articles, area=None):
     # 1行目のタイトル枠は使わないので、先頭の空行を落とす
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
+    post["variant"] = str(a["id"])
     return post
 
 
@@ -794,6 +838,7 @@ def tpl_story(cfg, articles, area=None):
                     _article_url(cfg, a))
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
+    post["variant"] = str(a["id"])
     return post
 
 
@@ -823,7 +868,9 @@ TEMPLATES = {
 }
 
 # 手書きストックが尽きたときに代わりに出すテンプレート
-POOL_FALLBACK = {"aruaru": "cheatsheet", "info": "price"}
+# 手書きストックが尽きたときの代役。
+# cheatsheet / price は料金を出すので使わない（投稿に料金は載せない方針）
+POOL_FALLBACK = {"aruaru": "flash", "info": "flash"}
 
 
 def _pick_priority(cfg, articles, area=None):
@@ -847,19 +894,29 @@ def _pick_priority(cfg, articles, area=None):
 def pick_for_slot(cfg, slot):
     """時間帯（"10"/"13"/"21"）に割り当てられたテンプレートを日替わりで選ぶ
 
-    post_schedule の値をリストにしておくと、日ごとに順番に回る。
-    文字列1つならその枠は常に同じテンプレートになる。
+    post_schedule の値の書き方は3通り。
+
+      "10": "today"                        … その枠は常に today
+      "21": ["info", "aruaru"]             … 日ごとに順番に回る
+      "15": {"template": "pickup",         … オプション付き
+             "rotate": 7}                     （同じ日の別枠と対象をずらす）
+
+    戻り値は (テンプレート名, オプション辞書)。割り当てが無ければ (None, {})。
     """
     sched = (cfg.get("threads") or {}).get("post_schedule") or {}
     entry = sched.get(str(slot))
-    if not entry:
-        return None
-    if isinstance(entry, str):
-        return entry
-    if not entry:
-        return None
-    doy = datetime.now(JST).timetuple().tm_yday
-    return entry[doy % len(entry)]
+    if isinstance(entry, list):
+        if not entry:
+            return None, {}
+        doy = datetime.now(JST).timetuple().tm_yday
+        entry = entry[doy % len(entry)]
+    if isinstance(entry, dict):
+        opts = dict(entry)
+        name = opts.pop("template", None)
+        return (name or None), opts
+    if isinstance(entry, str) and entry:
+        return entry, {}
+    return None, {}
 
 
 DATA_TEMPLATES = [k for k in ("today", "cheatsheet", "week", "price",
@@ -905,26 +962,38 @@ def main():
         return
 
     template = args.template
+    opts = {}
     if not template and args.slot:
         template = _pick_priority(cfg, articles, args.area)
         if template:
             print(f"⭐ 優先テンプレート「{template}」を採用（本日分の該当あり）")
         else:
-            template = pick_for_slot(cfg, args.slot)
+            template, opts = pick_for_slot(cfg, args.slot)
             if not template:
                 print(f"⏭️  スロット {args.slot} に割り当てがありません")
                 return
-            print(f"🎯 スロット {args.slot} → テンプレート「{template}」")
+            detail = f"（{opts}）" if opts else ""
+            print(f"🎯 スロット {args.slot} → テンプレート「{template}」{detail}")
 
     if template:
         if template == "pickup":
-            p = tpl_pickup(cfg, articles, args.area, args.station)
+            p = tpl_pickup(cfg, articles,
+                           args.area or opts.get("area"),
+                           args.station or opts.get("station"),
+                           rotate=opts.get("rotate", 0))
         else:
             p = TEMPLATES[template][1](cfg, articles, args.area)
         if not p and template in POOL_FALLBACK:
             # 手書きストックが空なら、データ由来のテンプレートで埋める
             alt = POOL_FALLBACK[template]
             print(f"📭 「{template}」のストックが空 → 「{alt}」に切り替え")
+            template = alt
+            p = TEMPLATES[template][1](cfg, articles, args.area)
+        # スロット側で代役を指定できる。spec のように「該当がある日だけ出す」
+        # テンプレートで、枠を空振りさせないために使う
+        alt = opts.get("fallback")
+        if not p and alt and alt in TEMPLATES:
+            print(f"📭 「{template}」は該当なし → 「{alt}」に切り替え")
             template = alt
             p = TEMPLATES[template][1](cfg, articles, args.area)
         if not p:
@@ -998,7 +1067,10 @@ def _publish(posts):
     failed = 0
 
     for p in posts:
-        key = f'{today}:{p["template"]}'
+        # 同じテンプレートでも中身（駅・記事・ネタ）が違えば別物として投稿する。
+        # variant が無いものは従来どおり1日1回まで
+        variant = str(p.get("variant") or "")
+        key = f'{today}:{p["template"]}' + (f":{variant}" if variant else "")
         if key in posted:
             print(f'⏭️  投稿済みなのでスキップ: {p["template"]}')
             continue

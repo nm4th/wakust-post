@@ -273,31 +273,64 @@ python wakust_threads.py --template pickup --area 神奈川    # エリアを指
 `site_config.json` の `threads.post_schedule` で、時間帯ごとに**日替わりの
 ローテーション**を組みます。リストの長さは自由で、通し日数で順番に回ります。
 
-```json
-"post_schedule": {
-  "0":  ["spec"],            // 本日公開の記事がある日だけ
-  "10": ["today"],           // 毎日
-  "13": ["pickup"],          // 毎日（駅・エリアが日替わり、15日で一巡）
-  "18": ["flash", "story"],  // 1日交替
-  "21": ["info", "aruaru"]   // 1日交替
-}
-```
+値の書き方は3通りあります。
+
+| 書き方 | 意味 |
+|---|---|
+| `"today"` | その枠は常に `today` |
+| `["info", "aruaru"]` | 通し日数で日替わりに回す |
+| `{"template": "pickup", "rotate": 7}` | オプション付き |
+
+オプションは `rotate`（対象のずらし幅。同じ日の別枠と違う駅を選ばせる）、
+`station` / `area`（対象の固定）、`fallback`（該当が無いときの代役）です。
 
 | 時刻 | 内容 |
 |---|---|
-| 0:30 | `spec` — 本日公開の記事があれば告知。無い日は投稿しない |
-| 10:00 | `today` — 本日出勤の料金順 |
-| 13:00 | `pickup` — 駅・エリアが日替わり（新宿→池袋→…と15日で一巡） |
-| 18:00 | `flash` と `story` を1日交替。記事への直接導線 |
-| 21:00 | `info` と `aruaru` を1日交替。手書きストックから |
+| 0:30 | `spec` — 本日公開の記事を告知。無い日は `flash` に切り替え |
+| 7:30 | `aruaru` / `info` — 通勤時間 |
+| 10:00 | `today` — 本日出勤 |
+| 12:15 | `info` / `aruaru` — 昼休み |
+| 14:00 | `flash` — 速報 |
+| 15:30 | `pickup` — 駅・エリア厳選（`rotate: 0`）。出勤予定がある子だけ |
+| 18:00 | `story` — 体験レポート |
+| 19:30 | `pickup` — 15:30とは別の駅（`rotate: 7`） |
+| 20:45 | `flash` — 速報 |
+| 22:45 | `flash` — 速報 |
 
-1日4〜5本です（0:30は該当日のみ）。
+**1日10本です。** Threads の上限は24時間あたり250件なので余裕があります。
+
+手書き枠（7:30 / 12:15）は並びをずらしてあるので、`aruaru` と `info` が
+1日で偏らず、2日単位で1.5本ずつになります。ストックは各21件あるので、
+同じネタが回ってくるのは約14日後です。
+
+`flash` は1日3本（0:30の代役に回ると4本）。記事IDに加えて
+「その日すでに出した本数」を種にしているので、同じ日の速報でも
+書き出しが必ず変わります。
+
+### 同じテンプレートを1日に2回出す仕組み
+
+投稿の重複判定キーに **variant（中身の識別子）** を含めています。
+
+| テンプレート | variant | 例 |
+|---|---|---|
+| `pickup` | 対象の駅・エリア名 | `2026-08-20:pickup:池袋` |
+| `story` / `flash` | 記事ID | `2026-08-20:story:1601302` |
+| `aruaru` / `info` | ネタのハッシュ | `2026-08-20:info:9de10d16` |
+| その他 | 無し（1日1回まで） | `2026-08-20:today` |
+
+variant が違えば別物として投稿されるので、15:00と19:30の `pickup` は
+必ず違う駅になります。`today` や `spec` のように1日1回で十分なものは
+variant を持たせていないので、二重投稿は起きません。
 
 **`spec` / `flash` / `story` は記事の使用履歴（`_threads_story`）を共有します。**
 どれかで出した記事は、他のテンプレートでもしばらく出てきません。
 
-`week` / `rank` / `price` / `lineup` / `new` / `cheatsheet` は実装済みですが
+`week` / `rank` / `price` / `new` / `cheatsheet` / `lineup` は実装済みですが
 ローテーションには入れていません。使いたくなったらリストに足すだけで戻せます。
+
+⚠️ `price` と `cheatsheet` は**料金を表示します**。投稿に料金を載せない方針なので、
+ローテーションには入れないでください。手書きストックが尽きたときの代役
+（`POOL_FALLBACK`）も、この2つを避けて `flash` に向けてあります。
 
 ### 誘導先を出し分ける
 
@@ -456,7 +489,7 @@ THREADS_ACCESS_TOKEN=... python wakust_threads_setup.py check --issued 2026-07-1
 
 | ワークフロー | トークン失効時 |
 |---|---|
-| `Wakust Threads Post`（1日5回） | 終了コード2で失敗 → メール |
+| `Wakust Threads Post`（1日10回） | 終了コード2で失敗 → メール |
 | `Wakust Threads Insights`（23:30） | 終了コード2で失敗 → メール。取れた分のCSVは保存 |
 | `Wakust Threads Token Check`（9:00） | 終了コード1で失敗 → メール |
 
@@ -551,7 +584,8 @@ THREADS_USER_ID=... THREADS_ACCESS_TOKEN=... \
 python wakust_threads_api.py
 ```
 
-GitHub Actions の `Wakust Threads Post` が 0:30 / 10:00 / 13:00 / 21:00 JST に投稿します。
+GitHub Actions の `Wakust Threads Post` が 1日10回（0:30 / 7:30 / 10:00 / 12:15 /
+14:00 / 15:30 / 18:00 / 19:30 / 20:45 / 22:45 JST）投稿します。
 何を出すかは `post_schedule` が時間帯ごとに日替わりで決めます。
 同じ日に同じテンプレートを二度投げないよう、`wakust_state.json` の
 `_threads` に投稿履歴を残しています。
@@ -620,7 +654,7 @@ Threads 投稿（名前は伏せ、タグで表現）
 | ワークフロー | 状態 |
 |---|---|
 | `Wakust Meta Export` | 稼働（毎朝9:30 JST） |
-| `Wakust Threads Post` | 稼働（10:00 / 13:00 / 21:00 JST） |
+| `Wakust Threads Post` | 稼働（1日10回。0:30 / 7:30 / 10:00 / 12:15 / 14:00 / 15:30 / 18:00 / 19:30 / 20:45 / 22:45 JST） |
 | `Wakust Auto Update` | 稼働（0:00 / 16:30 JST） |
 | `Wakust Site Publish` | **停止**（手動実行のみ残置） |
 | `Wakust Site Deploy` | **停止**（手動実行のみ残置） |

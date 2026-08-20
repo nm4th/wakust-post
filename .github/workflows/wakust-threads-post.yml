@@ -9,13 +9,17 @@ name: Wakust Threads Post
 
 on:
   schedule:
-    # 0:30 JST — 本日公開された記事の告知（無い日は何も投稿しない）
-    - cron: '30 15 * * *'
-    # 10:00 / 13:00 / 18:00 / 21:00 JST
-    - cron: '0 1 * * *'
-    - cron: '0 4 * * *'
-    - cron: '0 9 * * *'
-    - cron: '0 12 * * *'
+    # JST基準。cron は UTC なので -9時間して書いている（JST = UTC+9）
+    - cron: '30 15 * * *'   # 0:30  本日公開された記事の告知（無い日は速報に切替）
+    - cron: '30 22 * * *'   # 7:30  通勤時間
+    - cron: '0 1 * * *'     # 10:00 本日出勤
+    - cron: '15 3 * * *'    # 12:15 昼休み
+    - cron: '0 5 * * *'     # 14:00 速報
+    - cron: '30 6 * * *'    # 15:30 エリア厳選（駅A）
+    - cron: '0 9 * * *'     # 18:00 体験レポート
+    - cron: '30 10 * * *'   # 19:30 エリア厳選（駅B）
+    - cron: '45 11 * * *'   # 20:45 速報
+    - cron: '45 13 * * *'   # 22:45 速報
   workflow_dispatch:
     inputs:
       template:
@@ -63,10 +67,15 @@ jobs:
           # site_config.json の threads.post_schedule が日替わりで決める
           case "${{ github.event.schedule }}" in
             "30 15 * * *") echo "slot=0"  >> "$GITHUB_OUTPUT" ;;
+            "30 22 * * *") echo "slot=7"  >> "$GITHUB_OUTPUT" ;;
             "0 1 * * *")   echo "slot=10" >> "$GITHUB_OUTPUT" ;;
-            "0 4 * * *")   echo "slot=13" >> "$GITHUB_OUTPUT" ;;
+            "15 3 * * *")  echo "slot=12" >> "$GITHUB_OUTPUT" ;;
+            "0 5 * * *")   echo "slot=14" >> "$GITHUB_OUTPUT" ;;
+            "30 6 * * *")  echo "slot=15" >> "$GITHUB_OUTPUT" ;;
             "0 9 * * *")   echo "slot=18" >> "$GITHUB_OUTPUT" ;;
-            "0 12 * * *")  echo "slot=21" >> "$GITHUB_OUTPUT" ;;
+            "30 10 * * *") echo "slot=19" >> "$GITHUB_OUTPUT" ;;
+            "45 11 * * *") echo "slot=20" >> "$GITHUB_OUTPUT" ;;
+            "45 13 * * *") echo "slot=22" >> "$GITHUB_OUTPUT" ;;
             *)             echo "slot=10" >> "$GITHUB_OUTPUT" ;;
           esac
 
