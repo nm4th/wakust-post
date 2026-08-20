@@ -712,6 +712,10 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
     head = render_head(heads[seed % len(heads)], area=label, n=len(picks))
     tail = render_head(tails[seed % len(tails)], area=label, n=len(picks))
     cta = (tcfg.get("profile_cta") or "詳細は固定ポストに置いてます📌").strip()
+    # 締めの一文が既に固定ポストへ誘導しているなら、共通CTAは足さない
+    # （「固定ポストからまとめて読めます」が2行続いてしまうため）
+    if "固定ポスト" in tail:
+        cta = ""
 
     sep = tcfg.get("separator", "----")
     body = [head, ""] + lines + ["", sep, "",
