@@ -604,13 +604,21 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
     tcfg = cfg.get("threads") or {}
     min_items = int(tcfg.get("pickup_min_items") or 4)
 
+    def _by_station(name):
+        return [a for a in articles if (a.get("station") or "") == name]
+
+    # これから出勤予定がある子だけを載せる。予約できない子を並べても
+    # 「いつ行けるか」で選べないので、出勤日が無いものは対象外にする
+    def _bookable(items):
+        return [a for a in items if _next_shift(a)]
+
     # 対象は日替わりで回す。東京都内のような広いエリアは駅ごとに分けたいので、
     # 記事が十分ある駅は駅単体を、エリアはエリアとして、それぞれ対象に入れる。
     if station:
-        items = [a for a in articles if (a.get("station") or "") == station]
+        items = _bookable(_by_station(station))
         label = station
     elif area:
-        items = _filter(articles, area=area)
+        items = _bookable(_filter(articles, area=area))
         label = area
     else:
         targets = pickup_targets(articles, min_items)
@@ -618,14 +626,28 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
             return None
         # rotate は「同じ日に2回出すときに別の駅を選ぶ」ためのずらし幅。
         # 1日1回だけなら0のままで従来どおり日替わりで回る
-        idx = (datetime.now(JST).timetuple().tm_yday + int(rotate)) % len(targets)
-        kind, label = targets[idx]
-        if kind == "station":
-            items = [a for a in articles if (a.get("station") or "") == label]
-            station = label
-        else:
-            items = _filter(articles, area=label)
-            area = label
+        start = (datetime.now(JST).timetuple().tm_yday + int(rotate)) % len(targets)
+        # 出勤予定を持つ子だけに絞ると件数が足りなくなる対象があるので、
+        # 足りたところで確定するまで順に見ていく。
+        # あわせて、その日すでに出した対象は飛ばす（1日2回出すため、
+        # 件数不足で送りが発生すると2回とも同じ駅になることがある）
+        today_key = datetime.now(JST).strftime("%Y-%m-%d") + ":pickup:"
+        done = {k[len(today_key):] for k in _load_state().get("_threads", {})
+                if k.startswith(today_key)}
+        items, label = [], ""
+        for n in range(len(targets)):
+            kind, name = targets[(start + n) % len(targets)]
+            if name in done:
+                continue
+            cand = _bookable(_by_station(name) if kind == "station"
+                             else _filter(articles, area=name))
+            if len(cand) >= min_items:
+                items, label = cand, name
+                if kind == "station":
+                    station = name
+                else:
+                    area = name
+                break
 
     if len(items) < min_items:
         return None
@@ -668,8 +690,7 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
         detail = " / ".join(x for x in [cup] + tags[:2] if x) or label
         # 先頭を出勤日に揃える。読む側は「いつ行けるか」で絞るので、
         # 日付が行頭に来ていた方が縦に流し読みできる
-        nxt = _next_shift(a)
-        head = fmt_date(nxt) if nxt else "出勤未定"
+        head = fmt_date(_next_shift(a))
         # 駅単体、または《駅名》の見出しの下では【駅名】が重複するので付けない
         if station or not with_station:
             return f"{head}　{detail}"

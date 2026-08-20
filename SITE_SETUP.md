@@ -291,7 +291,7 @@ python wakust_threads.py --template pickup --area 神奈川    # エリアを指
 | 10:00 | `today` — 本日出勤 |
 | 12:15 | `info` / `aruaru` — 昼休み |
 | 14:00 | `flash` — 速報 |
-| 15:30 | `pickup` — 駅・エリア厳選（`rotate: 0`） |
+| 15:30 | `pickup` — 駅・エリア厳選（`rotate: 0`）。出勤予定がある子だけ |
 | 18:00 | `story` — 体験レポート |
 | 19:30 | `pickup` — 15:30とは別の駅（`rotate: 7`） |
 | 20:45 | `flash` — 速報 |
