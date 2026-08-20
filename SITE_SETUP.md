@@ -286,21 +286,26 @@ python wakust_threads.py --template pickup --area 神奈川    # エリアを指
 
 | 時刻 | 内容 |
 |---|---|
-| 0:30 | `spec` — 本日公開の記事を告知。無い日は `lineup` に切り替え |
+| 0:30 | `spec` — 本日公開の記事を告知。無い日は `flash` に切り替え |
 | 7:30 | `aruaru` / `info` — 通勤時間 |
 | 10:00 | `today` — 本日出勤 |
 | 12:15 | `info` / `aruaru` — 昼休み |
-| 15:00 | `pickup` — 駅・エリア厳選（`rotate: 0`） |
+| 14:00 | `flash` — 速報 |
+| 15:30 | `pickup` — 駅・エリア厳選（`rotate: 0`） |
 | 18:00 | `story` — 体験レポート |
-| 19:30 | `pickup` — 15:00とは別の駅（`rotate: 7`） |
-| 21:00 | `aruaru` / `info` — ゴールデンタイム |
+| 19:30 | `pickup` — 15:30とは別の駅（`rotate: 7`） |
+| 20:45 | `flash` — 速報 |
 | 22:45 | `flash` — 速報 |
 
-**1日9本です。** Threads の上限は24時間あたり250件なので余裕があります。
+**1日10本です。** Threads の上限は24時間あたり250件なので余裕があります。
 
-手書き枠（7:30 / 12:15 / 21:00）は並びをずらしてあるので、
-`aruaru` と `info` が1日で偏らず、2日単位で1.5本ずつになります。
-ストックは各21件あるので、同じネタが回ってくるのは約14日後です。
+手書き枠（7:30 / 12:15）は並びをずらしてあるので、`aruaru` と `info` が
+1日で偏らず、2日単位で1.5本ずつになります。ストックは各21件あるので、
+同じネタが回ってくるのは約14日後です。
+
+`flash` は1日3本（0:30の代役に回ると4本）。記事IDに加えて
+「その日すでに出した本数」を種にしているので、同じ日の速報でも
+書き出しが必ず変わります。
 
 ### 同じテンプレートを1日に2回出す仕組み
 
@@ -320,13 +325,12 @@ variant を持たせていないので、二重投稿は起きません。
 **`spec` / `flash` / `story` は記事の使用履歴（`_threads_story`）を共有します。**
 どれかで出した記事は、他のテンプレートでもしばらく出てきません。
 
-`week` / `rank` / `price` / `new` / `cheatsheet` は実装済みですが
+`week` / `rank` / `price` / `new` / `cheatsheet` / `lineup` は実装済みですが
 ローテーションには入れていません。使いたくなったらリストに足すだけで戻せます。
-（`lineup` は 0:30 の代役として使っています）
 
 ⚠️ `price` と `cheatsheet` は**料金を表示します**。投稿に料金を載せない方針なので、
 ローテーションには入れないでください。手書きストックが尽きたときの代役
-（`POOL_FALLBACK`）も、この2つを避けて `lineup` に向けてあります。
+（`POOL_FALLBACK`）も、この2つを避けて `flash` に向けてあります。
 
 ### 誘導先を出し分ける
 
@@ -485,7 +489,7 @@ THREADS_ACCESS_TOKEN=... python wakust_threads_setup.py check --issued 2026-07-1
 
 | ワークフロー | トークン失効時 |
 |---|---|
-| `Wakust Threads Post`（1日9回） | 終了コード2で失敗 → メール |
+| `Wakust Threads Post`（1日10回） | 終了コード2で失敗 → メール |
 | `Wakust Threads Insights`（23:30） | 終了コード2で失敗 → メール。取れた分のCSVは保存 |
 | `Wakust Threads Token Check`（9:00） | 終了コード1で失敗 → メール |
 
@@ -580,8 +584,8 @@ THREADS_USER_ID=... THREADS_ACCESS_TOKEN=... \
 python wakust_threads_api.py
 ```
 
-GitHub Actions の `Wakust Threads Post` が 1日9回（0:30 / 7:30 / 10:00 / 12:15 /
-15:00 / 18:00 / 19:30 / 21:00 / 22:45 JST）投稿します。
+GitHub Actions の `Wakust Threads Post` が 1日10回（0:30 / 7:30 / 10:00 / 12:15 /
+14:00 / 15:30 / 18:00 / 19:30 / 20:45 / 22:45 JST）投稿します。
 何を出すかは `post_schedule` が時間帯ごとに日替わりで決めます。
 同じ日に同じテンプレートを二度投げないよう、`wakust_state.json` の
 `_threads` に投稿履歴を残しています。
@@ -650,7 +654,7 @@ Threads 投稿（名前は伏せ、タグで表現）
 | ワークフロー | 状態 |
 |---|---|
 | `Wakust Meta Export` | 稼働（毎朝9:30 JST） |
-| `Wakust Threads Post` | 稼働（1日9回。0:30 / 7:30 / 10:00 / 12:15 / 15:00 / 18:00 / 19:30 / 21:00 / 22:45 JST） |
+| `Wakust Threads Post` | 稼働（1日10回。0:30 / 7:30 / 10:00 / 12:15 / 14:00 / 15:30 / 18:00 / 19:30 / 20:45 / 22:45 JST） |
 | `Wakust Auto Update` | 稼働（0:00 / 16:30 JST） |
 | `Wakust Site Publish` | **停止**（手動実行のみ残置） |
 | `Wakust Site Deploy` | **停止**（手動実行のみ残置） |

@@ -268,7 +268,9 @@ def tpl_today(cfg, articles, area=None):
         lines.append(row)
 
     d = datetime.now(JST).date()
-    note = f"本日は{len(items)}名が出勤。"
+    # 店舗全体の出勤数ではなく「体験レポートを書いた子のうち」の数。
+    # そこが伝わらないと在籍数の話に読めてしまう
+    note = f"体験レポートがある子のうち、本日は{len(items)}名が出勤。"
     return _compose(
         cfg,
         f'{label} 本日{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})出勤',
@@ -656,20 +658,22 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
 
     # 駅が散っていれば駅ごとにまとめる（参考投稿の《エリア》グルーピング）
     by_station = {}
-    for a in picks:
+    for a in sorted(picks, key=lambda a: _next_shift(a) or "9999-12-31"):
         by_station.setdefault(a.get("station") or area, []).append(a)
 
-    def row(a):
+    def row(a, with_station=True):
         tags = [t for t in (a.get("tags") or []) if not t.endswith("カップ")
                 and t != a.get("station")]
         cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
         detail = " / ".join(x for x in [cup] + tags[:2] if x) or label
-        if station:
-            # 駅単体では【駅名】が全行同じになるので付けない。代わりに
-            # 「Gカップ / HR」が並んで見分けが付かなくなるため出勤日を添える
-            nxt = _next_shift(a)
-            return f"{detail}　{fmt_date(nxt)}" if nxt else detail
-        return f'【{a.get("station") or label}】{detail}'
+        # 先頭を出勤日に揃える。読む側は「いつ行けるか」で絞るので、
+        # 日付が行頭に来ていた方が縦に流し読みできる
+        nxt = _next_shift(a)
+        head = fmt_date(nxt) if nxt else "出勤未定"
+        # 駅単体、または《駅名》の見出しの下では【駅名】が重複するので付けない
+        if station or not with_station:
+            return f"{head}　{detail}"
+        return f'{head}　【{a.get("station") or label}】{detail}'
 
     # 見出しは2件以上ある駅だけに立てる。1件だけの駅は最後にまとめて並べる
     # （1行の《駅》が並ぶと、かえって読みにくくなるため）
@@ -677,10 +681,10 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
     singles = [a for st, g in by_station.items() if len(g) < 2 for a in g]
     seen_rows = set()
 
-    def rows(group):
+    def rows(group, with_station=True):
         out = []
         for a in group:
-            r = row(a)
+            r = row(a, with_station)
             if r in seen_rows:
                 continue
             seen_rows.add(r)
@@ -690,7 +694,7 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
     lines = []
     if len(multi) >= 2:
         for st, group in sorted(multi.items(), key=lambda kv: -len(kv[1])):
-            block = rows(group)
+            block = rows(group, with_station=False)
             if not block:
                 continue
             lines.append(f"《{st}》")
@@ -708,7 +712,9 @@ def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
 
     heads = tcfg.get("pickup_heads") or ["【初心者必見🔰】\n{area}で迷ってるなら、この{n}人から選べば外しにくい"]
     tails = tcfg.get("pickup_tails") or ["ちなみに{area}の一番の本命は、あえてここには書いてない。"]
-    seed = datetime.now(JST).timetuple().tm_yday
+    # 1日に2回（別の駅で）出すので、日付だけを種にすると見出しが同じになる。
+    # 対象名も混ぜて、同じ日でも文面が変わるようにする
+    seed = datetime.now(JST).timetuple().tm_yday + sum(ord(c) for c in label)
     head = render_head(heads[seed % len(heads)], area=label, n=len(picks))
     tail = render_head(tails[seed % len(tails)], area=label, n=len(picks))
     cta = (tcfg.get("profile_cta") or "詳細は固定ポストに置いてます📌").strip()
@@ -749,7 +755,12 @@ def tpl_flash(cfg, articles, area=None):
     tcfg = cfg.get("threads") or {}
     heads = tcfg.get("flash_heads") or ["レポート上げました"]
     hooks = tcfg.get("flash_hooks") or ["いいね多かったら次も出します"]
-    seed = int(a["id"][-3:] or 0)
+    # 記事IDだけを種にすると、同じ日の速報どうしで書き出しが被ることがある。
+    # その日すでに出した本数を足して、必ず別の書き出しになるようにする
+    today_key = datetime.now(JST).strftime("%Y-%m-%d") + ":flash"
+    n_today = sum(1 for k in _load_state().get("_threads", {})
+                  if k.startswith(today_key))
+    seed = int(a["id"][-3:] or 0) + n_today
 
     head = render_head(heads[seed % len(heads)],
                        area=a.get("area", ""), play=play or "当たり")
@@ -838,7 +849,7 @@ TEMPLATES = {
 # 手書きストックが尽きたときに代わりに出すテンプレート
 # 手書きストックが尽きたときの代役。
 # cheatsheet / price は料金を出すので使わない（投稿に料金は載せない方針）
-POOL_FALLBACK = {"aruaru": "lineup", "info": "lineup"}
+POOL_FALLBACK = {"aruaru": "flash", "info": "flash"}
 
 
 def _pick_priority(cfg, articles, area=None):
