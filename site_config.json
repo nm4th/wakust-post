@@ -41,21 +41,43 @@
     "wakust_landing_url": "https://wakust.com/user/Risingnoboru/",
     "post_schedule": {
       "0": [
-        "spec"
+        {
+          "template": "spec",
+          "fallback": "lineup"
+        }
+      ],
+      "7": [
+        "aruaru",
+        "info"
       ],
       "10": [
         "today"
       ],
-      "13": [
-        "pickup"
-      ],
-      "18": [
-        "flash",
-        "story"
-      ],
-      "21": [
+      "12": [
         "info",
         "aruaru"
+      ],
+      "15": [
+        {
+          "template": "pickup",
+          "rotate": 0
+        }
+      ],
+      "18": [
+        "story"
+      ],
+      "19": [
+        {
+          "template": "pickup",
+          "rotate": 7
+        }
+      ],
+      "21": [
+        "aruaru",
+        "info"
+      ],
+      "22": [
+        "flash"
       ]
     },
     "show_names": false,

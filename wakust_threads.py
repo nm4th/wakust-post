@@ -223,7 +223,8 @@ def tpl_pool(cfg, articles, area=None, kind="aruaru"):
     if entry["cta"] and cta and cta not in text:
         text = f"{text}\n\n{cta}"
     return {"text": text, "reply": "", "url": "",
-            "pool_key": _pool_key(kind, entry["text"])}
+            "pool_key": _pool_key(kind, entry["text"]),
+            "variant": _pool_key(kind, entry["text"]).split(":", 1)[1]}
 
 
 def tpl_today(cfg, articles, area=None):
@@ -591,7 +592,7 @@ def pickup_targets(articles, min_items=4):
     return targets
 
 
-def tpl_pickup(cfg, articles, area=None, station=None):
+def tpl_pickup(cfg, articles, area=None, station=None, rotate=0):
     """エリア厳選型（【駅名】+ 特徴 のリスト＋出し惜しみで締める）
 
     参考アカウントで最も反応が取れている型。店名の代わりに記事を並べる。
@@ -613,7 +614,10 @@ def tpl_pickup(cfg, articles, area=None, station=None):
         targets = pickup_targets(articles, min_items)
         if not targets:
             return None
-        kind, label = targets[datetime.now(JST).timetuple().tm_yday % len(targets)]
+        # rotate は「同じ日に2回出すときに別の駅を選ぶ」ためのずらし幅。
+        # 1日1回だけなら0のままで従来どおり日替わりで回る
+        idx = (datetime.now(JST).timetuple().tm_yday + int(rotate)) % len(targets)
+        kind, label = targets[idx]
         if kind == "station":
             items = [a for a in articles if (a.get("station") or "") == label]
             station = label
@@ -713,7 +717,10 @@ def tpl_pickup(cfg, articles, area=None, station=None):
     body = [head, ""] + lines + ["", sep, "",
                                  "正直、初回はこの中から選ぶだけで失敗率がグッと下がります。",
                                  "", tail, cta]
-    return {"text": "\n".join(body).strip(), "reply": "", "url": ""}
+    # variant は「同じテンプレートでも中身が別」を表す印。
+    # これが違えば同じ日に2回投稿できる（_publish の重複判定で使う）
+    return {"text": "\n".join(body).strip(), "reply": "", "url": "",
+            "variant": label}
 
 
 def tpl_flash(cfg, articles, area=None):
@@ -750,6 +757,7 @@ def tpl_flash(cfg, articles, area=None):
     # 1行目のタイトル枠は使わないので、先頭の空行を落とす
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
+    post["variant"] = str(a["id"])
     return post
 
 
@@ -794,6 +802,7 @@ def tpl_story(cfg, articles, area=None):
                     _article_url(cfg, a))
     post["text"] = post["text"].lstrip("\n")
     post["story_id"] = str(a["id"])
+    post["variant"] = str(a["id"])
     return post
 
 
@@ -823,7 +832,9 @@ TEMPLATES = {
 }
 
 # 手書きストックが尽きたときに代わりに出すテンプレート
-POOL_FALLBACK = {"aruaru": "cheatsheet", "info": "price"}
+# 手書きストックが尽きたときの代役。
+# cheatsheet / price は料金を出すので使わない（投稿に料金は載せない方針）
+POOL_FALLBACK = {"aruaru": "lineup", "info": "lineup"}
 
 
 def _pick_priority(cfg, articles, area=None):
@@ -847,19 +858,29 @@ def _pick_priority(cfg, articles, area=None):
 def pick_for_slot(cfg, slot):
     """時間帯（"10"/"13"/"21"）に割り当てられたテンプレートを日替わりで選ぶ
 
-    post_schedule の値をリストにしておくと、日ごとに順番に回る。
-    文字列1つならその枠は常に同じテンプレートになる。
+    post_schedule の値の書き方は3通り。
+
+      "10": "today"                        … その枠は常に today
+      "21": ["info", "aruaru"]             … 日ごとに順番に回る
+      "15": {"template": "pickup",         … オプション付き
+             "rotate": 7}                     （同じ日の別枠と対象をずらす）
+
+    戻り値は (テンプレート名, オプション辞書)。割り当てが無ければ (None, {})。
     """
     sched = (cfg.get("threads") or {}).get("post_schedule") or {}
     entry = sched.get(str(slot))
-    if not entry:
-        return None
-    if isinstance(entry, str):
-        return entry
-    if not entry:
-        return None
-    doy = datetime.now(JST).timetuple().tm_yday
-    return entry[doy % len(entry)]
+    if isinstance(entry, list):
+        if not entry:
+            return None, {}
+        doy = datetime.now(JST).timetuple().tm_yday
+        entry = entry[doy % len(entry)]
+    if isinstance(entry, dict):
+        opts = dict(entry)
+        name = opts.pop("template", None)
+        return (name or None), opts
+    if isinstance(entry, str) and entry:
+        return entry, {}
+    return None, {}
 
 
 DATA_TEMPLATES = [k for k in ("today", "cheatsheet", "week", "price",
@@ -905,26 +926,38 @@ def main():
         return
 
     template = args.template
+    opts = {}
     if not template and args.slot:
         template = _pick_priority(cfg, articles, args.area)
         if template:
             print(f"⭐ 優先テンプレート「{template}」を採用（本日分の該当あり）")
         else:
-            template = pick_for_slot(cfg, args.slot)
+            template, opts = pick_for_slot(cfg, args.slot)
             if not template:
                 print(f"⏭️  スロット {args.slot} に割り当てがありません")
                 return
-            print(f"🎯 スロット {args.slot} → テンプレート「{template}」")
+            detail = f"（{opts}）" if opts else ""
+            print(f"🎯 スロット {args.slot} → テンプレート「{template}」{detail}")
 
     if template:
         if template == "pickup":
-            p = tpl_pickup(cfg, articles, args.area, args.station)
+            p = tpl_pickup(cfg, articles,
+                           args.area or opts.get("area"),
+                           args.station or opts.get("station"),
+                           rotate=opts.get("rotate", 0))
         else:
             p = TEMPLATES[template][1](cfg, articles, args.area)
         if not p and template in POOL_FALLBACK:
             # 手書きストックが空なら、データ由来のテンプレートで埋める
             alt = POOL_FALLBACK[template]
             print(f"📭 「{template}」のストックが空 → 「{alt}」に切り替え")
+            template = alt
+            p = TEMPLATES[template][1](cfg, articles, args.area)
+        # スロット側で代役を指定できる。spec のように「該当がある日だけ出す」
+        # テンプレートで、枠を空振りさせないために使う
+        alt = opts.get("fallback")
+        if not p and alt and alt in TEMPLATES:
+            print(f"📭 「{template}」は該当なし → 「{alt}」に切り替え")
             template = alt
             p = TEMPLATES[template][1](cfg, articles, args.area)
         if not p:
@@ -998,7 +1031,10 @@ def _publish(posts):
     failed = 0
 
     for p in posts:
-        key = f'{today}:{p["template"]}'
+        # 同じテンプレートでも中身（駅・記事・ネタ）が違えば別物として投稿する。
+        # variant が無いものは従来どおり1日1回まで
+        variant = str(p.get("variant") or "")
+        key = f'{today}:{p["template"]}' + (f":{variant}" if variant else "")
         if key in posted:
             print(f'⏭️  投稿済みなのでスキップ: {p["template"]}')
             continue
