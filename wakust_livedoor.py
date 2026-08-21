@@ -1045,8 +1045,26 @@ def pick_targets(articles, limit, state):
     return todo[:max(1, limit)]
 
 
-def run_publish(client, articles, cfg, state, limit, draft=False):
-    """未転載の記事を limit 件だけ新規投稿する"""
+def posted_today(state):
+    """今日すでに転載した本数（まとめ記事は数えない）"""
+    day = today_iso()
+    return sum(1 for r in (state.get("_livedoor") or {}).values()
+               if (r.get("at") or "").startswith(day))
+
+
+def run_publish(client, articles, cfg, state, limit, draft=False, upto=None):
+    """未転載の記事を新規投稿する
+
+    upto を渡すと「今日の合計がその本数になるまで」出す。
+    枠ごとに1本ずつ出しつつ、前の枠が失敗した日でも遅れを取り戻せる。
+    upto が無ければ limit 件をそのまま出す。
+    """
+    if upto is not None:
+        done = posted_today(state)
+        limit = max(0, upto - done)
+        print(f"本日の転載 {done}件 / この枠の目標 {upto}件 → 今回 {limit}件")
+        if limit <= 0:
+            return 0, 0
     targets = pick_targets(articles, limit, state)
     if not targets:
         return 0, 0
@@ -1205,6 +1223,8 @@ def run_matome(client, articles, cfg, state, draft=False):
 def main():
     ap = argparse.ArgumentParser(description="livedoor Blog へ記事を転載する")
     ap.add_argument("--limit", type=int, default=1, help="新規投稿する記事数")
+    ap.add_argument("--upto", type=int, metavar="N",
+                    help="今日の転載が合計N件になるまで出す（枠ごとの遅れを取り戻す）")
     ap.add_argument("--id", help="記事IDを指定して1件だけ表示・投稿する")
     ap.add_argument("--post", action="store_true",
                     help="実際に投稿する（認証情報が無ければdry-run）")
@@ -1365,7 +1385,15 @@ def main():
         if args.id:
             targets = [a for a in articles if str(a.get("id")) == str(args.id)]
         else:
-            targets = pick_targets(articles, args.limit, state)
+            # --upto は「今日の合計がN件になるまで」なので残り本数を出す
+            n = args.limit
+            if args.upto is not None:
+                n = max(0, args.upto - posted_today(state))
+                print(f"本日の転載 {posted_today(state)}件 / 目標 {args.upto}件 "
+                      f"→ 今回 {n}件")
+                if n <= 0:
+                    return 0
+            targets = pick_targets(articles, n, state)
         if not targets:
             empty = sum(1 for a in articles if not (a.get("free_html") or "").strip())
             print("転載できる記事がありません。")
@@ -1405,8 +1433,9 @@ def main():
     if args.matome:
         _, n = run_matome(client, articles, cfg, state, args.draft)
         ng += n
-    if args.limit and not args.id:
-        _, n = run_publish(client, articles, cfg, state, args.limit, args.draft)
+    if (args.limit or args.upto) and not args.id:
+        _, n = run_publish(client, articles, cfg, state, args.limit, args.draft,
+                           upto=args.upto)
         ng += n
     elif args.id:
         a = next((x for x in articles if str(x.get("id")) == str(args.id)), None)

@@ -6,8 +6,11 @@ name: Wakust Livedoor Post
 # 「カテゴリ内ランキング」から来る。そのため一度に大量投稿せず、
 # 1日数本ずつ出して新着枠に長く居座らせる。
 #
-# 1日3本。1回1本を3回に分けて出す。まとめて出すと自分で新着枠を
+# 転載は1日3本。1回1本を3回に分けて出す。まとめて出すと自分で新着枠を
 # 埋めてしまうので、時間を空けて更新実績を毎日積み上げる。
+#
+# 各枠は「今日の合計が N 本になるまで」出す（朝1・昼2・夜3）。
+# ある枠が失敗しても次の枠が取り戻すので、1日3本が常に揃う。
 #
 # 1回の実行でやること:
 #   1. 出勤予定が変わった記事の本文だけ差し替える（タイトルは変えない）
@@ -94,8 +97,12 @@ jobs:
         id: plan
         run: |
           case "${{ github.event.schedule }}" in
-            "30 0 * * *") echo "matome=1" >> "$GITHUB_OUTPUT" ;;
-            *)            echo "matome="  >> "$GITHUB_OUTPUT" ;;
+            "30 0 * * *") echo "matome=1" >> "$GITHUB_OUTPUT"
+                          echo "upto=1"   >> "$GITHUB_OUTPUT" ;;
+            "0 6 * * *")  echo "matome="  >> "$GITHUB_OUTPUT"
+                          echo "upto=2"   >> "$GITHUB_OUTPUT" ;;
+            *)            echo "matome="  >> "$GITHUB_OUTPUT"
+                          echo "upto=3"   >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Post to livedoor
@@ -175,7 +182,12 @@ jobs:
             DRAFT="false"
           fi
 
-          ARGS="--limit $LIMIT --refresh 20 --post"
+          # 定期実行は「今日の合計が N 本になるまで」。手動は指定本数
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            ARGS="--limit $LIMIT --refresh 20 --post"
+          else
+            ARGS="--upto ${{ steps.plan.outputs.upto }} --refresh 20 --post"
+          fi
           if [ -n "${{ steps.plan.outputs.matome }}" ] || [ "$MANUAL_MATOME" = "true" ]; then
             # エリア別まとめとランキングは常に、本日出勤まとめは
             # 転載30件を超えてから（スクリプト側で件数を見て自動的に見送る）
