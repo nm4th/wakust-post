@@ -30,7 +30,7 @@ import logging
 
 import requests
 from html.parser import HTMLParser
-from html import unescape
+from urllib.parse import urljoin
 
 log = logging.getLogger("wakust.livedoor.cover")
 if not log.handlers:
@@ -171,9 +171,9 @@ def login():
     data = dict(form["data"])
     data["livedoor_id"] = user
     data["password"] = pw
-    action = form["action"] or LOGIN_URL
-    if action.startswith("/"):
-        action = "https://member.livedoor.com" + action
+    # action は "./edit" のような相対URLのこともあるので、
+    # 取得したページのURLを基準に解決する
+    action = urljoin(r.url, form["action"] or "")
 
     r = s.post(action, data=data, timeout=30, headers={"Referer": LOGIN_URL})
     log.info(f"    🔑 ログイン POST → HTTP {r.status_code}")
@@ -199,9 +199,8 @@ def read_form(session, blog, article_id):
     if not form:
         raise CoverError("記事編集フォームが見つかりません。"
                          "管理画面のHTMLが変わった可能性があります")
-    action = form["action"] or url
-    if action.startswith("/"):
-        action = BLOGCMS + action
+    # action は "./edit" のような相対URLのこともある
+    action = urljoin(r.url, form["action"] or "")
     return action, form["data"]
 
 
