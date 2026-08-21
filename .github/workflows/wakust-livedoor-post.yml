@@ -6,10 +6,13 @@ name: Wakust Livedoor Post
 # 「カテゴリ内ランキング」から来る。そのため一度に大量投稿せず、
 # 1日数本ずつ出して新着枠に長く居座らせる。
 #
+# 1日3本。1回1本を3回に分けて出す。まとめて出すと自分で新着枠を
+# 埋めてしまうので、時間を空けて更新実績を毎日積み上げる。
+#
 # 1回の実行でやること:
 #   1. 出勤予定が変わった記事の本文だけ差し替える（タイトルは変えない）
-#   2. 本日出勤まとめを1本、新規投稿する（新着枠に載せるのが目的）
-#   3. 未転載の記事を数本、新規投稿する
+#   2. 未転載の記事を1本、新規投稿する
+#   3. 朝の枠だけ、エリア別まとめの作成・更新と本日出勤まとめ
 #
 # ⚠️ 投稿するのは無料部分だけ。有料部分は扱わない。
 
@@ -24,9 +27,9 @@ on:
       limit:
         description: '新規投稿する記事数'
         type: string
-        default: '2'
+        default: '1'
       matome:
-        description: '本日出勤まとめも投稿する'
+        description: 'まとめ記事（エリア別・本日出勤）も処理する'
         type: boolean
         default: false
       draft:
@@ -58,13 +61,13 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      # まとめは1日1本で十分なので、朝の枠だけで出す
+      # まとめ系は1日1回で十分なので、朝の枠だけで動かす
       - name: Decide this run
         id: plan
         run: |
           case "${{ github.event.schedule }}" in
-            "30 0 * * *") echo "matome=--matome" >> "$GITHUB_OUTPUT" ;;
-            *)            echo "matome=" >> "$GITHUB_OUTPUT" ;;
+            "30 0 * * *") echo "matome=1" >> "$GITHUB_OUTPUT" ;;
+            *)            echo "matome="  >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Post to livedoor
@@ -75,7 +78,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           DRAFT_INPUT: ${{ inputs.draft }}
           LIVE_OK: ${{ vars.LIVEDOOR_LIVE }}
-          LIMIT: ${{ inputs.limit || '2' }}
+          LIMIT: ${{ inputs.limit || '1' }}
           MANUAL_MATOME: ${{ inputs.matome }}
         run: |
           # 認証情報が無いと dry-run に落ちて「成功したのに投稿ゼロ」になる。
@@ -103,7 +106,9 @@ jobs:
 
           ARGS="--limit $LIMIT --refresh 20 --post"
           if [ -n "${{ steps.plan.outputs.matome }}" ] || [ "$MANUAL_MATOME" = "true" ]; then
-            ARGS="$ARGS --matome"
+            # エリア別まとめは常に、本日出勤まとめは転載30件を超えてから
+            # （スクリプト側で件数を見て自動的に見送る）
+            ARGS="$ARGS --area-matome --matome"
           fi
           if [ "$DRAFT" = "true" ]; then
             echo "📝 下書きとして投稿します"

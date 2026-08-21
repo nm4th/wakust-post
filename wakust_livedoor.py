@@ -377,6 +377,104 @@ def f_link(label, url):
 
 
 # ============================================================
+# エリア別まとめ（東京都内・神奈川…の常設ハブ記事）
+# ============================================================
+AREA_ORDER = ["東京都内", "神奈川", "埼玉", "多摩", "千葉"]
+# 記事が少ないうちにハブを作っても中身がスカスカなので、この本数から作る
+AREA_MIN_ITEMS = 5
+
+
+def build_area_matome(area, articles, cfg, state):
+    """エリア1つぶんのまとめ記事を組み立てる
+
+    本日出勤まとめが「その日限りの新着枠狙い」なのに対して、
+    こちらは貼りっぱなしのハブ。記事が増えるたびに PUT で追記していく。
+    駅ごとにまとめて、そのエリアで探している人が選べる形にする。
+    """
+    posted = state.get("_livedoor") or {}
+    items = [a for a in articles if (a.get("area") or "") == area
+             and str(a.get("id")) in posted]
+    if len(items) < AREA_MIN_ITEMS:
+        return None
+
+    by_station = {}
+    for a in items:
+        by_station.setdefault(a.get("station") or area, []).append(a)
+
+    rows = []
+    for st in sorted(by_station, key=lambda k: (-len(by_station[k]), k)):
+        group = sorted(by_station[st],
+                       key=lambda a: -int(a.get("sales_count") or 0))
+        rows.append(f'<h3 style="margin:24px 0 8px;">{escape(st)}'
+                    f'（{len(group)}件）</h3><ul>')
+        for a in group:
+            cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+            plays = [t for t in (a.get("tags") or [])
+                     if not t.endswith("カップ") and t != a.get("station")]
+            detail = " / ".join(x for x in [cup] + plays[:2] if x) or st
+            url = (posted.get(str(a["id"])) or {}).get("url") or a.get("source_url")
+            rows.append(f'<li>{f_link(detail, url)}</li>' if url
+                        else f'<li>{escape(detail)}</li>')
+        rows.append("</ul>")
+
+    title = f"【{area}】メンズエステ体験レポートまとめ｜{len(items)}件"
+    body = (
+        f'<p>{escape(area)}で実際に行ってレポートを書いたセラピストを、'
+        f'駅ごとにまとめました。現在{len(items)}件です。</p>'
+        '<p style="font-size:13px;color:#666;">'
+        '新しいレポートを書くたびに追記しています。</p>'
+        + "".join(rows)
+        + f'<p style="color:#888;font-size:12px;margin-top:24px;">{DISCLAIMER}</p>'
+    )
+    return {"title": title, "body": body,
+            "categories": [area, "まとめ"], "area": area,
+            "ids": sorted(str(a["id"]) for a in items), "count": len(items)}
+
+
+def run_area_matome(client, articles, cfg, state, draft=False):
+    """エリア別まとめを作る／更新する
+
+    まだ無ければ新規投稿、あって中身が変わっていれば PUT で差し替える。
+    """
+    hubs = state.setdefault("_livedoor_area", {})
+    ok = ng = 0
+    areas = ([a for a in AREA_ORDER]
+             + sorted({(x.get("area") or "") for x in articles} - set(AREA_ORDER)))
+    for area in areas:
+        if not area:
+            continue
+        m = build_area_matome(area, articles, cfg, state)
+        if not m:
+            continue
+        rec = hubs.get(area) or {}
+        if rec.get("ids") == m["ids"]:
+            continue          # 中身が変わっていないので触らない
+        try:
+            if rec.get("edit_url"):
+                url = client.update(rec["edit_url"], m["title"], m["body"],
+                                    m["categories"], draft)
+                edit_url = rec["edit_url"]
+                verb = "更新"
+            else:
+                url, edit_url = client.post(m["title"], m["body"],
+                                            m["categories"], draft)
+                verb = "新規"
+        except LivedoorError as e:
+            print(f"❌ エリアまとめ{verb}失敗 [{area}]: {e}")
+            print(f"::error::エリアまとめの投稿に失敗しました [{area}]: {e}")
+            ng += 1
+            continue
+        hubs[area] = {"url": url or rec.get("url", ""),
+                      "edit_url": edit_url, "ids": m["ids"],
+                      "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")}
+        save_state(state)
+        ok += 1
+        print(f"✅ エリアまとめ{verb} [{area}] {m['count']}件 "
+              f"{hubs[area]['url'] or '(dry-run)'}")
+    return ok, ng
+
+
+# ============================================================
 # 出す順番
 # ============================================================
 def pick_targets(articles, limit, state):
@@ -456,9 +554,20 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
     return ok, ng
 
 
+# 本日出勤まとめを始める記事数。
+# 転載記事が少ないうちに出しても、リンク先の大半がブログ外になって
+# まとめとして成立しない。まず個別記事で更新実績を積む
+MATOME_MIN_POSTED = 30
+
+
 def run_matome(client, articles, cfg, state, draft=False):
     """本日出勤まとめを1本、新規投稿する（1日1回まで）"""
     day = today_iso()
+    posted_n = len(state.get("_livedoor") or {})
+    if posted_n < MATOME_MIN_POSTED:
+        print(f"⏭️  転載記事が{posted_n}件のため、本日出勤まとめはまだ出しません"
+              f"（{MATOME_MIN_POSTED}件から）")
+        return 0, 0
     done = state.setdefault("_livedoor_matome", {})
     if day in done:
         print(f"⏭️  本日({day})のまとめは投稿済み")
@@ -491,6 +600,8 @@ def main():
                     help="本日出勤まとめを投稿する")
     ap.add_argument("--refresh", type=int, metavar="N", default=0,
                     help="投稿済み記事の出勤日ブロックを最大N件更新する")
+    ap.add_argument("--area-matome", action="store_true",
+                    help="エリア別まとめを作る／更新する")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -502,6 +613,26 @@ def main():
 
     # --- 表示のみ（--post なし）---
     if not args.post:
+        if args.area_matome:
+            shown = 0
+            for area in AREA_ORDER + sorted(
+                    {(a.get("area") or "") for a in articles} - set(AREA_ORDER)):
+                m = build_area_matome(area, articles, cfg, state)
+                if not m:
+                    continue
+                print("=" * 60)
+                print(f"タイトル : {m['title']}")
+                print(f"カテゴリ : {' / '.join(m['categories'])}")
+                print("-" * 60)
+                print(m["body"][:900])
+                print()
+                shown += 1
+            if not shown:
+                posted_n = len(state.get("_livedoor") or {})
+                print(f"エリアまとめの対象がありません"
+                      f"（転載済み {posted_n}件 / 1エリアあたり "
+                      f"{AREA_MIN_ITEMS}件から作成）")
+            return 0
         if args.matome:
             m = build_matome(articles, cfg, state)
             if not m:
@@ -541,6 +672,9 @@ def main():
     ng = 0
     if args.refresh:
         _, n = run_refresh(client, articles, cfg, state, args.refresh, args.draft)
+        ng += n
+    if args.area_matome:
+        _, n = run_area_matome(client, articles, cfg, state, args.draft)
         ng += n
     if args.matome:
         _, n = run_matome(client, articles, cfg, state, args.draft)
