@@ -1106,6 +1106,45 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
 MATOME_MIN_POSTED = 30
 
 
+def run_fix_images(client, articles, cfg, state, limit=20):
+    """投稿済みなのに画像IDを持っていない記事を埋める
+
+    画像アップロード機能より前に投稿した記事や、アップロードに
+    失敗した記事は image_id が無く、見出し画像を設定できない。
+    後から画像だけ上げてIDを控える。本文の画像URLも差し替えたいので
+    記事本体も更新する。
+    """
+    posted = state.get("_livedoor") or {}
+    by_id = {str(a.get("id")): a for a in articles}
+    todo = [(aid, rec) for aid, rec in posted.items()
+            if not (rec.get("image_id") or "").strip()
+            and by_id.get(aid) and rec.get("edit_url")]
+    if not todo:
+        print("画像IDが未設定の記事はありません")
+        return 0, 0
+    print(f"画像IDが未設定: {len(todo)}件")
+    ok = ng = 0
+    for aid, rec in todo[:max(1, limit)]:
+        a = by_id[aid]
+        image = ensure_hosted_image(client, a, state)
+        if not image:
+            print(f"  ⏭️  [{aid}] 画像が取得できませんでした")
+            ng += 1
+            continue
+        rec["image_id"] = image.get("id", "")
+        # 本文の画像もlivedoor側のURLに差し替える
+        try:
+            client.update(rec["edit_url"], build_title(a),
+                          build_body(a, cfg, image), build_categories(a), False)
+        except LivedoorError as e:
+            print(f"  ⚠️ [{aid}] 本文の更新に失敗: {e}")
+        rec["title"] = build_title(a)
+        save_state(state)
+        ok += 1
+        print(f"  ✅ [{aid}] image_id={rec['image_id']}")
+    return ok, ng
+
+
 def run_matome(client, articles, cfg, state, draft=False):
     """本日出勤まとめを1本、新規投稿する（1日1回まで）"""
     day = today_iso()
@@ -1150,6 +1189,8 @@ def main():
                     help="エリア別まとめを作る／更新する")
     ap.add_argument("--ranking", action="store_true",
                     help="人気ランキング記事を作る／更新する")
+    ap.add_argument("--fix-images", action="store_true",
+                    help="投稿済みで画像IDが無い記事に画像を上げ直す")
     ap.add_argument("--check", action="store_true",
                     help="投稿せずに認証だけ確認する")
     ap.add_argument("--upload-test", action="store_true",
@@ -1298,6 +1339,11 @@ def main():
     # --- 実投稿 ---
     client = LivedoorClient()
     ng = 0
+    if args.fix_images:
+        # 画像の貼り直しだけを行う。ついでに新規投稿してしまわないよう
+        # ここで終える（新規投稿は --fix-images を付けずに実行する）
+        _, n = run_fix_images(client, articles, cfg, state)
+        return 1 if n else 0
     if args.refresh:
         _, n = run_refresh(client, articles, cfg, state, args.refresh, args.draft)
         ng += n
