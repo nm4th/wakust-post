@@ -720,6 +720,175 @@ def build_affiliate(cfg, article=None):
 
 
 # ============================================================
+# 駅別まとめ（グローバルナビの行き先になる常設ハブ）
+# ============================================================
+# エリア別（東京都内・神奈川）より1段細かい、駅ごとのハブ記事。
+# 「恵比寿でメンエスを探している人」が最初に開きたいのはこれで、
+# ブログ上部のナビに並べるのもこの単位になる。
+STATION_MIN_ITEMS = 5
+# ナビに並べる駅の数。増やすほど1つあたりが押されにくくなるので絞る
+STATION_NAV_MAX = 8
+
+
+def station_counts(articles, state):
+    """転載済みの記事数を駅ごとに数える（多い順）"""
+    posted = state.get("_livedoor") or {}
+    counts = {}
+    for a in articles:
+        if str(a.get("id")) not in posted:
+            continue
+        st = (a.get("station") or "").strip()
+        if st:
+            counts[st] = counts.get(st, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def nav_stations(articles, state):
+    """ナビに出す駅。まとめ記事が実在するものだけを、記事の多い順に"""
+    hubs = state.get("_livedoor_station") or {}
+    out = []
+    for st, n in station_counts(articles, state):
+        rec = hubs.get(st) or {}
+        if rec.get("url"):
+            out.append((st, n, rec["url"]))
+    return out[:STATION_NAV_MAX]
+
+
+def build_station_nav(articles, state, current=""):
+    """記事の上に置く駅別ナビ
+
+    ブログのデザイン設定に入れるグローバルナビはPCテーマにしか出ない。
+    このジャンルの読者はほとんどスマホなので、本文の中にも同じものを置く。
+    今開いている駅は、押しても同じ場所なのでリンクにしない。
+    """
+    items = nav_stations(articles, state)
+    if len(items) < 2:
+        return ""
+    chips = []
+    for st, n, url in items:
+        label = f"{st}({n})"
+        if st == current:
+            chips.append(
+                f'<span style="display:inline-block;margin:3px;padding:5px 11px;'
+                f'border-radius:14px;background:#c71585;color:#fff;'
+                f'font-size:13px;">{escape(label)}</span>')
+        else:
+            chips.append(
+                f'<a href="{escape(url)}" style="display:inline-block;margin:3px;'
+                f'padding:5px 11px;border-radius:14px;border:1px solid #e6a8cf;'
+                f'color:#c71585 !important;font-size:13px;'
+                f'text-decoration:none !important;">{escape(label)}</a>')
+    return ('<div style="margin:0 0 20px;line-height:2.2;">'
+            '<span style="font-size:12px;color:#888;margin-right:4px;">駅で探す</span>'
+            + "".join(chips) + '</div>')
+
+
+def build_header_nav(articles, state):
+    """ブログのデザイン設定に貼る、ヘッダー用のグローバルナビHTML
+
+    AtomPub では触れない場所なので、ここでは貼り付ける文字列を作るだけ。
+    livedoor の管理画面 → ブログ設定 → デザイン/カスタマイズ に入れる。
+    """
+    items = nav_stations(articles, state)
+    if not items:
+        return ""
+    lis = "".join(
+        f'<li style="display:inline-block;margin:0 14px 0 0;">'
+        f'<a href="{escape(url)}" style="text-decoration:none;font-size:15px;">'
+        f'{escape(st)}</a></li>' for st, _, url in items)
+    return ('<nav class="station-nav"><ul style="list-style:none;margin:0;'
+            'padding:10px 14px;">' + lis + '</ul></nav>')
+
+
+def build_station_matome(station, articles, cfg, state):
+    """駅1つぶんのまとめ記事
+
+    エリア別まとめと同じく貼りっぱなしのハブ。記事が増えるたびに
+    PUT で追記していく。並びは購入数の多い順。
+    """
+    posted = state.get("_livedoor") or {}
+    items = [a for a in articles
+             if (a.get("station") or "").strip() == station
+             and str(a.get("id")) in posted]
+    if len(items) < STATION_MIN_ITEMS:
+        return None
+    items.sort(key=lambda a: (-int(a.get("sales_count") or 0), str(a.get("id"))))
+
+    rows = []
+    for a in items:
+        cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+        plays = " / ".join(play_tags(a)[:2])
+        detail = " / ".join(x for x in [cup, plays] if x) or station
+        url = (posted.get(str(a["id"])) or {}).get("url") or a.get("source_url")
+        rows.append(f'<li style="margin-bottom:8px;">{f_link(detail, url)}</li>'
+                    if url else f'<li>{escape(detail)}</li>')
+
+    area = next((a.get("area") for a in items if a.get("area")), "")
+    title = f"【{station}】メンズエステ体験レポートまとめ｜{len(items)}件"
+    body = (
+        build_station_nav(articles, state, current=station)
+        + f'<p>{escape(station)}で実際に行ってレポートを書いたセラピストを'
+          f'まとめました。現在{len(items)}件、購入数の多い順です。</p>'
+        '<p style="font-size:13px;color:#666;">'
+        '新しいレポートを書くたびに追記しています。</p>'
+        '<ul style="padding-left:1.2em;">' + "".join(rows) + '</ul>'
+        + f'<p style="color:#888;font-size:12px;margin-top:24px;">{DISCLAIMER}</p>'
+    )
+    cats = [station, "まとめ"]
+    return {"title": title, "body": body, "categories": cats[:CATEGORY_SLOTS],
+            "station": station, "area": area,
+            "ids": sorted(str(a["id"]) for a in items), "count": len(items),
+            "nav": [x for x, _, _ in nav_stations(articles, state)]}
+
+
+def run_station_matome(client, articles, cfg, state, draft=False):
+    """駅別まとめを作る／中身を更新する"""
+    hubs = state.setdefault("_livedoor_station", {})
+    ok = ng = 0
+    for station, n in station_counts(articles, state):
+        if n < STATION_MIN_ITEMS:
+            continue
+        m = build_station_matome(station, articles, cfg, state)
+        if not m:
+            continue
+        rec = hubs.get(station) or {}
+        # 中身が変わっていなければ触らない（毎日同じ内容でPUTしない）。
+        # ハブは1周目でお互いのURLがまだ無く、駅ナビが欠けた状態で作られる。
+        # 記事だけでなくナビも見て、揃った次の回で貼り直す
+        if (rec.get("edit_url") and rec.get("ids") == m["ids"]
+                and rec.get("nav") == m["nav"]):
+            continue
+        verb = "更新" if rec.get("edit_url") else "作成"
+        try:
+            if rec.get("edit_url"):
+                client.update(rec["edit_url"], m["title"], m["body"],
+                              m["categories"], draft)
+                url, edit_url = rec.get("url", ""), rec["edit_url"]
+            else:
+                url, edit_url = client.post(m["title"], m["body"],
+                                            m["categories"], draft)
+        except LivedoorError as e:
+            if _is_gone(e):
+                print(f"🗑️  駅まとめ [{station}] が見つからないので作り直します")
+                hubs.pop(station, None)
+                save_state(state)
+                ng += 1
+                continue
+            print(f"❌ 駅まとめ{verb}失敗 [{station}]: {e}")
+            print(f"::error::駅別まとめの投稿に失敗しました [{station}]: {e}")
+            ng += 1
+            continue
+        hubs[station] = {"url": url or rec.get("url", ""), "edit_url": edit_url,
+                         "ids": m["ids"], "nav": m["nav"],
+                         "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")}
+        save_state(state)
+        ok += 1
+        print(f"✅ 駅まとめ{verb} [{station}] {m['count']}件 "
+              f"{hubs[station]['url'] or '(dry-run)'}")
+    return ok, ng
+
+
+# ============================================================
 # 記事末の関連記事（ブログ内の回遊）
 # ============================================================
 # カテゴリ新着から来た読者に2記事目を読んでもらうための枠。
@@ -867,8 +1036,10 @@ def related_signature(article, articles, state):
 
     転載が増えると各記事の関連記事も入れ替わる。更新すべきかの判定に使う。
     """
-    return ",".join(str(a.get("id"))
-                    for a, _ in related_articles(article, articles, state))
+    ids = [str(a.get("id")) for a, _ in related_articles(article, articles, state)]
+    # 駅ナビも記事が増えるたびに駅が増える。こちらも貼り替えの対象にする
+    nav = [st for st, _, _ in nav_stations(articles, state)]
+    return ",".join(ids) + "|" + ",".join(nav)
 
 
 def ensure_hosted_image(client, article, state):
@@ -906,11 +1077,12 @@ def ensure_hosted_image(client, article, state):
     return info
 
 
-def build_body(article, cfg, image=None, related=""):
-    """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋関連記事＋免責）
+def build_body(article, cfg, image=None, related="", nav=""):
+    """投稿本文を組み立てる（駅ナビ＋出勤日＋無料部分＋購入導線＋関連記事＋免責）
 
-    related は build_related() の出力。購入導線より後ろに置く。
-    先に置くとブログ内を回るだけで購入ページに辿り着かなくなる。
+    related は build_related()、nav は build_station_nav() の出力。
+    related を購入導線より前に置くとブログ内を回るだけで購入ページに
+    辿り着かなくなるので、後ろに置く。
     """
     free = clean_for_livedoor(article.get("free_html"))
     if not free:
@@ -918,7 +1090,7 @@ def build_body(article, cfg, image=None, related=""):
     thumb = (image or {}).get("url") or extract_thumbnail(article.get("free_html"))
     img = (f'<p><img src="{escape(thumb)}" alt="{escape(clean_title(article.get("title"))[:60])}" '
            f'style="max-width:100%;height:auto;" /></p>' if thumb else "")
-    parts = [img, build_lead(article), build_shift_block(article), free,
+    parts = [img, build_lead(article), build_shift_block(article), nav, free,
              build_cta(article, cfg), related, build_ranking_banners(cfg),
              f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>',
              build_affiliate(cfg, article)]
@@ -1240,7 +1412,8 @@ def run_publish(client, articles, cfg, state, limit, draft=False, upto=None):
         title = build_title(a)
         image = ensure_hosted_image(client, a, state)
         rel_sig = related_signature(a, articles, state)
-        body = build_body(a, cfg, image, build_related(a, articles, state))
+        body = build_body(a, cfg, image, build_related(a, articles, state),
+                          build_station_nav(articles, state, a.get("station") or ""))
         if not body:
             continue
         try:
@@ -1299,7 +1472,8 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
     for _, _, aid, rec, a, sig in todo[:max(1, limit)]:
         body = build_body(a, cfg, (state.get("_livedoor_images") or {}).get(
             extract_thumbnail(a.get("free_html")) or ""),
-            build_related(a, articles, state))
+            build_related(a, articles, state),
+            build_station_nav(articles, state, a.get("station") or ""))
         if not body:
             continue
         try:
@@ -1362,7 +1536,9 @@ def run_fix_images(client, articles, cfg, state, limit=20):
         try:
             client.update(rec["edit_url"], build_title(a),
                           build_body(a, cfg, image,
-                                     build_related(a, articles, state)),
+                                     build_related(a, articles, state),
+                                     build_station_nav(articles, state,
+                                                       a.get("station") or "")),
                           build_categories(a), False)
         except LivedoorError as e:
             print(f"  ⚠️ [{aid}] 本文の更新に失敗: {e}")
@@ -1415,6 +1591,10 @@ def main():
                     help="本日出勤まとめを投稿する")
     ap.add_argument("--refresh", type=int, metavar="N", default=0,
                     help="投稿済み記事の出勤日ブロックを最大N件更新する")
+    ap.add_argument("--station-matome", action="store_true",
+                    help="駅別まとめを作る／中身を更新する")
+    ap.add_argument("--nav", action="store_true",
+                    help="ヘッダーに貼る駅別ナビのHTMLを表示する")
     ap.add_argument("--area-matome", action="store_true",
                     help="エリア別まとめを作る／更新する")
     ap.add_argument("--ranking", action="store_true",
@@ -1533,6 +1713,37 @@ def main():
                       f"（転載済み {len(state.get('_livedoor') or {})}件 / "
                       f"{RANKING_MIN_ITEMS}件から作成）")
             return 0
+        if args.nav:
+            nav = build_header_nav(articles, state)
+            if not nav:
+                print(f"ナビに出せる駅がまだありません"
+                      f"（駅ごとに転載{STATION_MIN_ITEMS}件で"
+                      f"まとめ記事ができ、そこへのリンクになります）")
+                return 0
+            print("livedoor管理画面 → ブログ設定 → デザイン/カスタマイズ の")
+            print("ヘッダー部分に、以下をそのまま貼ってください。")
+            print("-" * 60)
+            print(nav)
+            return 0
+        if args.station_matome:
+            shown = 0
+            for station, n in station_counts(articles, state):
+                m = build_station_matome(station, articles, cfg, state)
+                if not m:
+                    continue
+                print("=" * 60)
+                print(f"タイトル : {m['title']}")
+                print(f"カテゴリ : {' / '.join(m['categories'])}")
+                print("-" * 60)
+                print(m["body"][:900])
+                print()
+                shown += 1
+            if not shown:
+                posted_n = len(state.get("_livedoor") or {})
+                print(f"駅まとめの対象がありません"
+                      f"（転載済み {posted_n}件 / 1駅あたり "
+                      f"{STATION_MIN_ITEMS}件から作成）")
+            return 0
         if args.area_matome:
             shown = 0
             for area in AREA_ORDER + sorted(
@@ -1585,7 +1796,9 @@ def main():
                       "で取り込んでください。")
             return 0
         for a in targets:
-            body = build_body(a, cfg, related=build_related(a, articles, state))
+            body = build_body(
+                a, cfg, related=build_related(a, articles, state),
+                nav=build_station_nav(articles, state, a.get("station") or ""))
             print("=" * 60)
             print(f"タイトル : {build_title(a)}")
             print(f"カテゴリ : {' / '.join(build_categories(a, play_frequency(articles)))}")
@@ -1605,6 +1818,9 @@ def main():
         return 1 if n else 0
     if args.refresh:
         _, n = run_refresh(client, articles, cfg, state, args.refresh, args.draft)
+        ng += n
+    if args.station_matome:
+        _, n = run_station_matome(client, articles, cfg, state, args.draft)
         ng += n
     if args.area_matome:
         _, n = run_area_matome(client, articles, cfg, state, args.draft)

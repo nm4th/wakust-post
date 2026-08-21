@@ -14,6 +14,7 @@ name: Wakust Livedoor Post
 #
 # 1回の実行でやること:
 #   1. 出勤予定が変わった記事の本文だけ差し替える（タイトルは変えない）
+#      （記事末の関連記事と上部の駅ナビも、ここで一緒に貼り替わる）
 #   2. 未転載の記事を1本、新規投稿する
 #   3. 朝の枠だけ、エリア別まとめ・人気ランキング・本日出勤まとめ
 #
@@ -189,9 +190,9 @@ jobs:
             ARGS="--upto ${{ steps.plan.outputs.upto }} --refresh 20 --post"
           fi
           if [ -n "${{ steps.plan.outputs.matome }}" ] || [ "$MANUAL_MATOME" = "true" ]; then
-            # エリア別まとめとランキングは常に、本日出勤まとめは
+            # 駅別・エリア別まとめとランキングは常に、本日出勤まとめは
             # 転載30件を超えてから（スクリプト側で件数を見て自動的に見送る）
-            ARGS="$ARGS --area-matome --ranking --matome"
+            ARGS="$ARGS --station-matome --area-matome --ranking --matome"
           fi
           if [ "$DRAFT" = "true" ]; then
             echo "📝 下書きとして投稿します"
