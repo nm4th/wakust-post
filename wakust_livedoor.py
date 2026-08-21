@@ -100,14 +100,16 @@ class LivedoorClient:
         return h
 
     def _send(self, method, url, entry, what):
-        """WSSEで送り、401ならBasicで再試行する
+        """Basicで送り、401ならWSSEで再試行する
 
-        livedoor は WSSE と Basic の両方を受け付ける。環境によって
-        片方だけ通ることがあるので、落ちたらもう一方も試す。
+        livedoor は WSSE と Basic の両方を受け付けることになっているが、
+        実際に試すと WSSE は401で Basic だけ通った。毎回401を踏むのは
+        無駄なので Basic を先に出す。将来 Basic が塞がれても動くよう、
+        WSSE も残してある。
         """
         data = entry.encode("utf-8") if entry is not None else None
         last = None
-        for basic in (False, True):
+        for basic in (True, False):
             try:
                 r = requests.request(method, url, data=data, timeout=60,
                                      headers=self._headers(basic))
@@ -119,11 +121,11 @@ class LivedoorClient:
                 continue
             if r.status_code not in (200, 201):
                 raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}")
-            if basic:
-                log.info("    🔑 Basic認証で通りました")
+            if not basic:
+                log.info("    🔑 WSSE認証で通りました（Basicは不可）")
             return r.text
         raise LivedoorError(
-            "認証に失敗しました（WSSE・Basicとも401）。次を確認してください:\n"
+            "認証に失敗しました（Basic・WSSEとも401）。次を確認してください:\n"
             "  1. LIVEDOOR_API_KEY は AtomPub用パスワード（英数10文字）。"
             "ログインパスワードではありません。\n"
             "     ※「発行する」を押し直した場合、Secretsの値も入れ直しが必要です\n"
@@ -146,7 +148,7 @@ class LivedoorClient:
         if self.dry_run:
             print("❌ 認証情報が足りません")
             return 1
-        for basic in (False, True):
+        for basic in (True, False):
             name = "Basic" if basic else "WSSE"
             try:
                 r = requests.get(url, timeout=30, headers=self._headers(basic))
