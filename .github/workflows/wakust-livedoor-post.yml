@@ -36,6 +36,10 @@ on:
         description: '下書きとして投稿する'
         type: boolean
         default: true
+      check_only:
+        description: '投稿せず認証だけ確認する'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -80,7 +84,13 @@ jobs:
           LIVE_OK: ${{ vars.LIVEDOOR_LIVE }}
           LIMIT: ${{ inputs.limit || '1' }}
           MANUAL_MATOME: ${{ inputs.matome }}
+          CHECK_ONLY: ${{ inputs.check_only }}
         run: |
+          # 認証だけ確認して終わる（401の切り分け用）
+          if [ "$CHECK_ONLY" = "true" ]; then
+            python wakust_livedoor.py --check
+            exit $?
+          fi
           # 認証情報が無いと dry-run に落ちて「成功したのに投稿ゼロ」になる。
           # 黙って止まるのが一番まずいので、失敗させて通知に乗せる
           if [ -z "$LIVEDOOR_API_KEY" ]; then

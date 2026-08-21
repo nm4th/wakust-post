@@ -89,24 +89,85 @@ class LivedoorClient:
         if self.dry_run:
             log.info("🧪 livedoor: dry-run モード（実際には投稿しません）")
 
-    def _headers(self):
-        return {"X-WSSE": _wsse_header(self.user_id, self.api_key),
-                "Content-Type": "application/atom+xml; charset=utf-8"}
+    def _headers(self, basic=False):
+        h = {"Content-Type": "application/atom+xml; charset=utf-8"}
+        if basic:
+            token = base64.b64encode(
+                f"{self.user_id}:{self.api_key}".encode("utf-8")).decode("ascii")
+            h["Authorization"] = f"Basic {token}"
+        else:
+            h["X-WSSE"] = _wsse_header(self.user_id, self.api_key)
+        return h
 
     def _send(self, method, url, entry, what):
-        try:
-            r = requests.request(method, url, data=entry.encode("utf-8"),
-                                 timeout=60, headers=self._headers())
-        except requests.RequestException as e:
-            raise LivedoorError(f"{what}のリクエストに失敗: {e}") from e
-        if r.status_code == 401:
-            raise LivedoorError(
-                "認証に失敗しました。LIVEDOOR_USER_ID（livedoor ID）と "
-                "LIVEDOOR_API_KEY（AtomPub用パスワード。ログインパスワードとは別）"
-                "を確認してください")
-        if r.status_code not in (200, 201):
-            raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}")
-        return r.text
+        """WSSEで送り、401ならBasicで再試行する
+
+        livedoor は WSSE と Basic の両方を受け付ける。環境によって
+        片方だけ通ることがあるので、落ちたらもう一方も試す。
+        """
+        data = entry.encode("utf-8") if entry is not None else None
+        last = None
+        for basic in (False, True):
+            try:
+                r = requests.request(method, url, data=data, timeout=60,
+                                     headers=self._headers(basic))
+            except requests.RequestException as e:
+                raise LivedoorError(f"{what}のリクエストに失敗: {e}") from e
+            if r.status_code == 401:
+                last = r
+                log.info(f"    🔑 {'Basic' if basic else 'WSSE'} 認証は401")
+                continue
+            if r.status_code not in (200, 201):
+                raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}")
+            if basic:
+                log.info("    🔑 Basic認証で通りました")
+            return r.text
+        raise LivedoorError(
+            "認証に失敗しました（WSSE・Basicとも401）。次を確認してください:\n"
+            "  1. LIVEDOOR_API_KEY は AtomPub用パスワード（英数10文字）。"
+            "ログインパスワードではありません。\n"
+            "     ※「発行する」を押し直した場合、Secretsの値も入れ直しが必要です\n"
+            "  2. LIVEDOOR_USER_ID は livedoor ID。ブログ識別子とは別のことがあります\n"
+            "  3. LIVEDOOR_BLOG_NAME はルートエンドポイント末尾の識別子\n"
+            f"     （いまの設定: {ATOM_BASE}/{self.blog_name}）\n"
+            f"  参考: {last.text[:200] if last is not None else ''}")
+
+    def check(self):
+        """投稿せずに認証だけ確認する"""
+        url = f"{ATOM_BASE}/{self.blog_name}"
+        print(f"エンドポイント : {url}")
+        print(f"LIVEDOOR_USER_ID   : {_mask(self.user_id)}")
+        print(f"LIVEDOOR_BLOG_NAME : {self.blog_name or '(未設定)'}")
+        print(f"LIVEDOOR_API_KEY   : {_mask(self.api_key)}"
+              f"  ← AtomPub用パスワードは英数10文字")
+        if self.user_id and self.blog_name and self.user_id == self.blog_name:
+            print("⚠️  USER_ID と BLOG_NAME が同じ値です。"
+                  "livedoor ID とブログ識別子が違う場合は401になります")
+        if self.dry_run:
+            print("❌ 認証情報が足りません")
+            return 1
+        for basic in (False, True):
+            name = "Basic" if basic else "WSSE"
+            try:
+                r = requests.get(url, timeout=30, headers=self._headers(basic))
+            except requests.RequestException as e:
+                print(f"❌ {name}: 通信エラー {e}")
+                continue
+            print(f"{'✅' if r.status_code == 200 else '❌'} {name}: "
+                  f"HTTP {r.status_code}")
+            if r.status_code == 200:
+                for t in re.findall(r"<title[^>]*>([^<]+)</title>", r.text)[:3]:
+                    print(f"     ブログ: {t}")
+                return 0
+            if r.status_code != 401:
+                print(f"     {r.text[:200]}")
+        return 1
+
+
+def _mask(v):
+    if not v:
+        return "(未設定)"
+    return f"{v[0]}{'*' * (len(v) - 2)}{v[-1]}（{len(v)}文字）" if len(v) > 2 else "***"
 
     def post(self, title, body_html, categories=None, draft=False):
         """記事を1件投稿して (公開URL, 編集URL) を返す
@@ -686,7 +747,12 @@ def main():
                     help="投稿済み記事の出勤日ブロックを最大N件更新する")
     ap.add_argument("--area-matome", action="store_true",
                     help="エリア別まとめを作る／更新する")
+    ap.add_argument("--check", action="store_true",
+                    help="投稿せずに認証だけ確認する")
     args = ap.parse_args()
+
+    if args.check:
+        return LivedoorClient().check()
 
     cfg = load_config()
     articles = load_articles()
