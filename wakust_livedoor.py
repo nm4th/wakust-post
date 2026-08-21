@@ -54,7 +54,14 @@ DISCLAIMER = ("※メンズエステはセラピストとの相性が重要な�
 
 
 class LivedoorError(RuntimeError):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+def _is_gone(e):
+    """記事が消えている（ブログ側で削除された）か"""
+    return getattr(e, "status", None) in (404, 410)
 
 
 # ============================================================
@@ -120,7 +127,8 @@ class LivedoorClient:
                 log.info(f"    🔑 {'Basic' if basic else 'WSSE'} 認証は401")
                 continue
             if r.status_code not in (200, 201):
-                raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}")
+                raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}",
+                                    status=r.status_code)
             if not basic:
                 log.info("    🔑 WSSE認証で通りました（Basicは不可）")
             return r.text
@@ -899,6 +907,13 @@ def run_area_matome(client, articles, cfg, state, draft=False):
                                             m["categories"], draft)
                 verb = "新規"
         except LivedoorError as e:
+            if _is_gone(e):
+                # 記事が消えているので作り直す
+                hubs.pop(area, None)
+                save_state(state)
+                print(f"🗑️  エリアまとめが見つからないので作り直します")
+                ng += 1
+                continue
             print(f"❌ エリアまとめ{verb}失敗 [{area}]: {e}")
             print(f"::error::エリアまとめの投稿に失敗しました [{area}]: {e}")
             ng += 1
@@ -997,6 +1012,13 @@ def run_ranking(client, articles, cfg, state, draft=False):
                                             m["categories"], draft)
                 verb = "新規"
         except LivedoorError as e:
+            if _is_gone(e):
+                # 記事が消えているので作り直す
+                store.pop(kind, None)
+                save_state(state)
+                print(f"🗑️  ランキングが見つからないので作り直します")
+                ng += 1
+                continue
             print(f"❌ ランキング{verb}失敗 [{kind}]: {e}")
             print(f"::error::ランキング記事の投稿に失敗しました [{kind}]: {e}")
             ng += 1
@@ -1023,8 +1045,26 @@ def pick_targets(articles, limit, state):
     return todo[:max(1, limit)]
 
 
-def run_publish(client, articles, cfg, state, limit, draft=False):
-    """未転載の記事を limit 件だけ新規投稿する"""
+def posted_today(state):
+    """今日すでに転載した本数（まとめ記事は数えない）"""
+    day = today_iso()
+    return sum(1 for r in (state.get("_livedoor") or {}).values()
+               if (r.get("at") or "").startswith(day))
+
+
+def run_publish(client, articles, cfg, state, limit, draft=False, upto=None):
+    """未転載の記事を新規投稿する
+
+    upto を渡すと「今日の合計がその本数になるまで」出す。
+    枠ごとに1本ずつ出しつつ、前の枠が失敗した日でも遅れを取り戻せる。
+    upto が無ければ limit 件をそのまま出す。
+    """
+    if upto is not None:
+        done = posted_today(state)
+        limit = max(0, upto - done)
+        print(f"本日の転載 {done}件 / この枠の目標 {upto}件 → 今回 {limit}件")
+        if limit <= 0:
+            return 0, 0
     targets = pick_targets(articles, limit, state)
     if not targets:
         return 0, 0
@@ -1087,6 +1127,12 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
             client.update(rec["edit_url"], build_title(a), body,
                           build_categories(a, freq), draft)
         except LivedoorError as e:
+            if _is_gone(e):
+                # ブログ側で削除された記事。記録を消して、次回また転載する
+                print(f"🗑️  [{aid}] 記事が見つからないので記録を削除します")
+                posted.pop(aid, None)
+                save_state(state)
+                continue
             print(f"❌ 更新失敗 [{aid}]: {e}")
             print(f"::error::livedoorの記事更新に失敗しました [{aid}]: {e}")
             ng += 1
@@ -1177,6 +1223,8 @@ def run_matome(client, articles, cfg, state, draft=False):
 def main():
     ap = argparse.ArgumentParser(description="livedoor Blog へ記事を転載する")
     ap.add_argument("--limit", type=int, default=1, help="新規投稿する記事数")
+    ap.add_argument("--upto", type=int, metavar="N",
+                    help="今日の転載が合計N件になるまで出す（枠ごとの遅れを取り戻す）")
     ap.add_argument("--id", help="記事IDを指定して1件だけ表示・投稿する")
     ap.add_argument("--post", action="store_true",
                     help="実際に投稿する（認証情報が無ければdry-run）")
@@ -1191,6 +1239,8 @@ def main():
                     help="人気ランキング記事を作る／更新する")
     ap.add_argument("--fix-images", action="store_true",
                     help="投稿済みで画像IDが無い記事に画像を上げ直す")
+    ap.add_argument("--reset", action="store_true",
+                    help="転載履歴を消す（ブログ側で記事を削除したとき）")
     ap.add_argument("--check", action="store_true",
                     help="投稿せずに認証だけ確認する")
     ap.add_argument("--upload-test", action="store_true",
@@ -1198,6 +1248,25 @@ def main():
     ap.add_argument("--inspect", metavar="記事ID",
                     help="投稿済み記事のXMLを表示する（見出し画像の項目を探す用）")
     args = ap.parse_args()
+
+    if args.reset:
+        # ブログ側で記事を消したときに使う。アップロード済み画像の記録は
+        # 残す（画像はブログに残っているので、上げ直す必要がない）
+        st = load_state()
+        removed = {k: len(st.get(k) or {}) for k in
+                   ("_livedoor", "_livedoor_area", "_livedoor_ranking",
+                    "_livedoor_matome") if st.get(k)}
+        if not removed:
+            print("消す記録がありません")
+            return 0
+        for k in list(removed):
+            st.pop(k, None)
+        save_state(st)
+        print("転載履歴を消しました:")
+        for k, n in removed.items():
+            print(f"  {k}: {n}件")
+        print(f"  （画像の記録 {len(st.get('_livedoor_images') or {})}件 は残しています）")
+        return 0
 
     if args.check:
         return LivedoorClient().check()
@@ -1316,7 +1385,15 @@ def main():
         if args.id:
             targets = [a for a in articles if str(a.get("id")) == str(args.id)]
         else:
-            targets = pick_targets(articles, args.limit, state)
+            # --upto は「今日の合計がN件になるまで」なので残り本数を出す
+            n = args.limit
+            if args.upto is not None:
+                n = max(0, args.upto - posted_today(state))
+                print(f"本日の転載 {posted_today(state)}件 / 目標 {args.upto}件 "
+                      f"→ 今回 {n}件")
+                if n <= 0:
+                    return 0
+            targets = pick_targets(articles, n, state)
         if not targets:
             empty = sum(1 for a in articles if not (a.get("free_html") or "").strip())
             print("転載できる記事がありません。")
@@ -1356,8 +1433,9 @@ def main():
     if args.matome:
         _, n = run_matome(client, articles, cfg, state, args.draft)
         ng += n
-    if args.limit and not args.id:
-        _, n = run_publish(client, articles, cfg, state, args.limit, args.draft)
+    if (args.limit or args.upto) and not args.id:
+        _, n = run_publish(client, articles, cfg, state, args.limit, args.draft,
+                           upto=args.upto)
         ng += n
     elif args.id:
         a = next((x for x in articles if str(x.get("id")) == str(args.id)), None)

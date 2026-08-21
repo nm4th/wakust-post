@@ -6,8 +6,11 @@ name: Wakust Livedoor Post
 # 「カテゴリ内ランキング」から来る。そのため一度に大量投稿せず、
 # 1日数本ずつ出して新着枠に長く居座らせる。
 #
-# 1日3本。1回1本を3回に分けて出す。まとめて出すと自分で新着枠を
+# 転載は1日3本。1回1本を3回に分けて出す。まとめて出すと自分で新着枠を
 # 埋めてしまうので、時間を空けて更新実績を毎日積み上げる。
+#
+# 各枠は「今日の合計が N 本になるまで」出す（朝1・昼2・夜3）。
+# ある枠が失敗しても次の枠が取り戻すので、1日3本が常に揃う。
 #
 # 1回の実行でやること:
 #   1. 出勤予定が変わった記事の本文だけ差し替える（タイトルは変えない）
@@ -15,6 +18,9 @@ name: Wakust Livedoor Post
 #   3. 朝の枠だけ、エリア別まとめ・人気ランキング・本日出勤まとめ
 #
 # ⚠️ 投稿するのは無料部分だけ。有料部分は扱わない。
+#
+# 定期実行はそのまま公開する。一時的に止めたいときは、リポジトリ変数
+# LIVEDOOR_DRAFT を true にすると下書き投稿に戻る。
 
 on:
   schedule:
@@ -33,9 +39,9 @@ on:
         type: boolean
         default: false
       draft:
-        description: '下書きとして投稿する'
+        description: '下書きとして投稿する（既定は公開）'
         type: boolean
-        default: true
+        default: false
       check_only:
         description: '投稿せず認証だけ確認する'
         type: boolean
@@ -55,6 +61,10 @@ on:
         default: ''
       fix_images:
         description: '投稿済みで画像IDが無い記事に画像を上げ直す'
+        type: boolean
+        default: false
+      reset:
+        description: '転載履歴を消す（ブログ側で記事を削除したとき）'
         type: boolean
         default: false
 
@@ -87,8 +97,12 @@ jobs:
         id: plan
         run: |
           case "${{ github.event.schedule }}" in
-            "30 0 * * *") echo "matome=1" >> "$GITHUB_OUTPUT" ;;
-            *)            echo "matome="  >> "$GITHUB_OUTPUT" ;;
+            "30 0 * * *") echo "matome=1" >> "$GITHUB_OUTPUT"
+                          echo "upto=1"   >> "$GITHUB_OUTPUT" ;;
+            "0 6 * * *")  echo "matome="  >> "$GITHUB_OUTPUT"
+                          echo "upto=2"   >> "$GITHUB_OUTPUT" ;;
+            *)            echo "matome="  >> "$GITHUB_OUTPUT"
+                          echo "upto=3"   >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Post to livedoor
@@ -98,7 +112,7 @@ jobs:
           LIVEDOOR_API_KEY: ${{ secrets.LIVEDOOR_API_KEY }}
           EVENT: ${{ github.event_name }}
           DRAFT_INPUT: ${{ inputs.draft }}
-          LIVE_OK: ${{ vars.LIVEDOOR_LIVE }}
+          PAUSE: ${{ vars.LIVEDOOR_DRAFT }}
           LIMIT: ${{ inputs.limit || '1' }}
           MANUAL_MATOME: ${{ inputs.matome }}
           CHECK_ONLY: ${{ inputs.check_only }}
@@ -107,7 +121,13 @@ jobs:
           LIVEDOOR_PASSWORD: ${{ secrets.LIVEDOOR_PASSWORD }}
           COVER: ${{ inputs.cover }}
           FIX_IMAGES: ${{ inputs.fix_images }}
+          RESET: ${{ inputs.reset }}
         run: |
+          # ブログ側で記事を消したときに転載履歴をクリアする
+          if [ "$RESET" = "true" ]; then
+            python wakust_livedoor.py --reset
+            exit $?
+          fi
           # 画像IDが無い記事に画像を上げ直す
           if [ "$FIX_IMAGES" = "true" ]; then
             python wakust_livedoor.py --fix-images --post
@@ -150,19 +170,24 @@ jobs:
           # GitHub Actions の `A || B` は A が false でも B が採用されるため、
           # 式で書くと手動実行の draft:false が効かない。シェル側で分ける。
           #   手動実行 : 画面で選んだ値をそのまま使う
-          #   定期実行 : 既定で下書き。本投稿するにはリポジトリ変数
-          #              LIVEDOOR_LIVE を true にする（事故防止の安全弁）
+          #   定期実行 : そのまま公開する。止めたいときだけリポジトリ変数
+          #              LIVEDOOR_DRAFT を true にすると下書きに戻る
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            # 明示的に false を選んだときだけ本投稿。空や想定外の値は下書き扱い
-            if [ "$DRAFT_INPUT" = "false" ]; then DRAFT="false"; else DRAFT="true"; fi
-          elif [ "$LIVE_OK" = "true" ]; then
-            DRAFT="false"
-          else
+            # 画面で明示的に選んだときだけ下書き。既定は公開
+            if [ "$DRAFT_INPUT" = "true" ]; then DRAFT="true"; else DRAFT="false"; fi
+          elif [ "$PAUSE" = "true" ]; then
             DRAFT="true"
-            echo "::notice::リポジトリ変数 LIVEDOOR_LIVE が true でないため下書きで投稿します"
+            echo "::notice::リポジトリ変数 LIVEDOOR_DRAFT=true のため下書きで投稿します"
+          else
+            DRAFT="false"
           fi
 
-          ARGS="--limit $LIMIT --refresh 20 --post"
+          # 定期実行は「今日の合計が N 本になるまで」。手動は指定本数
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            ARGS="--limit $LIMIT --refresh 20 --post"
+          else
+            ARGS="--upto ${{ steps.plan.outputs.upto }} --refresh 20 --post"
+          fi
           if [ -n "${{ steps.plan.outputs.matome }}" ] || [ "$MANUAL_MATOME" = "true" ]; then
             # エリア別まとめとランキングは常に、本日出勤まとめは
             # 転載30件を超えてから（スクリプト側で件数を見て自動的に見送る）
