@@ -3872,6 +3872,7 @@ def run_free_backfill(session, limit=20):
     有料部分（edit_text_2）は取得も保存もしない。
 
     1回の実行で limit 件だけ処理する（編集ページを1記事1リクエスト叩くため）。
+    既定は全件。1件あたり約2秒なので、135件でも5分程度で終わる。
     """
     log.info(f"\n{'='*55}")
     log.info(f"📄 無料部分の取り込み ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
@@ -3935,7 +3936,7 @@ def _run_free_backfill_only():
         log.error("❌ wakustログイン失敗のため処理を中断します")
         sys.exit(1)
     try:
-        run_free_backfill(session, limit=int(os.environ.get("FREE_BACKFILL_LIMIT", "20")))
+        run_free_backfill(session, limit=int(os.environ.get("FREE_BACKFILL_LIMIT", "500")))
     finally:
         session.close()
 

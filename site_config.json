@@ -135,5 +135,53 @@
     "pinned_link": "https://lit.link/masa0_MenEs",
     "pinned_per_area": 3
   },
-  "site_enabled": false
+  "site_enabled": false,
+  "livedoor": {
+    "ranking_banners": [
+      "<a href=\"http://www.adultblogranking.com/link/?id=2142015\" title=\"アダルトブログランキング\" target=\"_blank\" rel=\"noopener\"><img alt=\"アダルトブログランキング\" width=\"88\" height=\"31\" src=\"https://www.adultblogranking.com/img/banner/adultblogranking_banner_b.gif\"></a><br><a href=\"http://www.adultblogranking.com/link/?id=2142015\" title=\"アダルトブログランキング\" target=\"_blank\" rel=\"noopener\" style=\"font-size:0.9em;\">アダルトブログランキング</a>"
+    ],
+    "affiliate_links": [
+      {
+        "url": "https://mfco.link/r/PbmF3bQainovdQCxMd56pNjv",
+        "name": "",
+        "image": ""
+      },
+      {
+        "url": "https://mfco.link/r/Se2Spd7s6QB7XUUNMquYzcVv",
+        "name": "",
+        "image": ""
+      },
+      {
+        "url": "https://mfco.link/r/ikT1CsyApHsuBcsoJy7nKuu9",
+        "name": "",
+        "image": ""
+      },
+      {
+        "url": "https://mfco.link/r/YYTG1krZGJtLjbG46fCFC3j6",
+        "name": "",
+        "image": ""
+      },
+      {
+        "url": "https://mfco.link/r/9zMt1ZFbKBx5T9oC2MDTqtKx",
+        "name": "",
+        "image": ""
+      },
+      {
+        "url": "https://mfco.link/r/1xMMrFNgG49P4S7BpYh3mCF5",
+        "name": "",
+        "image": ""
+      },
+      {
+        "url": "https://mfco.link/r/8uupFRR9ezjtQobtVSBfd4ez",
+        "name": "",
+        "image": ""
+      },
+      {
+        "url": "https://mfco.link/r/N7nc2Q4sphas2tYYSGxpm4UJ",
+        "name": "",
+        "image": ""
+      }
+    ],
+    "affiliate_lead": "メンエス以外も探している人へ。"
+  }
 }

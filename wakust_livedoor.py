@@ -337,6 +337,31 @@ def clean_for_livedoor(raw):
     return _TRAIL_EMPTY_RE.sub("", text).strip()
 
 
+_IMG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.I)
+
+
+def extract_thumbnail(raw):
+    """記事の見出し画像を取り出す
+
+    ワクストの無料本文に入っている画像は2種類ある。
+      - related_posts ブロック … 他の記事のサムネイル（不要）
+      - paid_preview ブロック  … その記事自身の見出し画像（これが欲しい）
+    どちらも整形時に落としてしまうので、落とす前に後者だけ拾っておく。
+    """
+    if not raw:
+        return ""
+    text = html.unescape(raw)
+    i = text.find("<!-- paid_preview_start -->")
+    if i < 0:
+        return ""
+    block = text[i:]
+    for url in _IMG_RE.findall(block):
+        if "s.w.org" in url:      # 絵文字のSVG
+            continue
+        return url
+    return ""
+
+
 def clean_title(title):
     """ワクストのタイトルから、転載先で意味を持たない部分を落とす
 
@@ -348,27 +373,93 @@ def clean_title(title):
     return t.strip()
 
 
-def build_categories(article):
-    """livedoor 側の記事カテゴリを決める（エリア軸 × プレイ内容軸）"""
+def build_title(article):
+    """転載先のタイトル
+
+    検索されるのは「恵比寿 メンエス」のような 駅＋ジャンル の組み合わせ。
+    元のタイトルには駅名しか入っていないので、先頭に付け直す。
+    煽り部分はカテゴリ一覧での見出しになるので、そのまま残す。
+    """
+    t = clean_title(article.get("title"))
+    station = (article.get("station") or article.get("area") or "").strip()
+    if not station:
+        return t
+    # 元タイトルの【恵比寿】は重複するので外す
+    t = t.replace(f"【{station}】", "", 1).strip()
+    return f"【{station}メンエス】{t}"
+
+
+def build_lead(article):
+    """本文の最初に置く1文
+
+    livedoor は記事の書き出しから meta description を作る。
+    先頭が出勤日ブロックだと日付の羅列が説明文になってしまうので、
+    何の記事かが分かる1文を先に置く。
+    """
+    station = (article.get("station") or article.get("area") or "都内").strip()
+    cup = next((t for t in (article.get("tags") or [])
+                if t.endswith("カップ")), "")
+    who = f"{cup}の" if cup else ""
+    return (f'<p>{escape(station)}のメンズエステ体験レポートです。'
+            f'{escape(who)}セラピストに実際に行ってきた記録を、'
+            f'施術の流れに沿って書いています。</p>')
+
+
+# livedoor の記事カテゴリは2枠まで。何を入れるかで回遊の効きが変わる
+CATEGORY_SLOTS = 2
+
+
+def play_tags(article):
+    """その記事のプレイ系タグ（カップ数と駅名を除いたもの）"""
+    station = (article.get("station") or "").strip()
+    return [t for t in (article.get("tags") or [])
+            if not t.endswith("カップ") and t != station]
+
+
+def play_frequency(articles):
+    """プレイ系タグが全体で何件あるかを数える"""
+    freq = {}
+    for a in articles:
+        for t in play_tags(a):
+            freq[t] = freq.get(t, 0) + 1
+    return freq
+
+
+def build_categories(article, freq=None):
+    """livedoor 側の記事カテゴリを決める
+
+    livedoor は1記事あたり2つまでなので「駅」と「プレイ内容」を入れる。
+    エリア（東京都内など）はエリア別まとめ記事が受け持つので枠を使わない。
+
+    プレイ系タグが複数ある記事（135件中11件）は、全体での件数が多い方を選ぶ。
+    OPI や CKB のように1〜2件しかないタグでカテゴリを作っても、
+    そのカテゴリを開いた人が他に読むものが無く、回遊に繋がらないため。
+    """
     cats = []
-    for key in ("station", "area"):
-        v = (article.get(key) or "").strip()
-        if v and v not in cats:
-            cats.append(v)
-    for t in (article.get("tags") or []):
-        # カップ数と駅名はカテゴリにしない（駅は上で入れている）
-        if t.endswith("カップ") or t == article.get("station"):
-            continue
-        if t not in cats:
-            cats.append(t)
-    return cats[:5]
+    station = (article.get("station") or "").strip()
+    if station:
+        cats.append(station)
+    plays = play_tags(article)
+    if plays:
+        if freq:
+            plays = sorted(plays, key=lambda t: (-freq.get(t, 0), t))
+        cats.append(plays[0])
+    area = (article.get("area") or "").strip()
+    if area and area not in cats:
+        cats.append(area)              # 駅もタグも無いときの受け皿
+    return cats[:CATEGORY_SLOTS]
 
 
 def _buy_button(label, url, color):
+    """購入ボタン
+
+    ブログテーマの a{color} に負けて文字色が変わるので !important を付ける。
+    """
     return (f'<a href="{escape(url)}" target="_blank" rel="noopener" '
             f'style="display:inline-block;margin:6px 8px;padding:12px 26px;'
-            f'background:{color};color:#111;font-weight:bold;'
-            f'border-radius:6px;text-decoration:none;">{escape(label)}</a>')
+            f'background:{color};color:#111 !important;font-weight:bold;'
+            f'border-radius:6px;text-decoration:none !important;">'
+            f'{escape(label)}</a>')
 
 
 def build_cta(article, cfg):
@@ -450,13 +541,107 @@ def build_shift_block(article):
             f'{fmt_date(today_iso())}時点</span></div>')
 
 
+def build_ranking_banners(cfg):
+    """ブログランキングのバナー
+
+    にほんブログ村などは、自分のブログからバナーを踏まれた回数
+    （INポイント）でランキングが決まる。全記事の末尾に置いておかないと
+    点が入らないので、CTAの後ろに並べる。
+
+    site_config.json に登録する:
+      "livedoor": { "ranking_banners": ["<a href=...><img ...></a>", ...] }
+    登録サイトから配布されるHTMLをそのまま貼ればよい。
+    """
+    banners = ((cfg.get("livedoor") or {}).get("ranking_banners") or [])
+    banners = [b for b in banners if (b or "").strip()]
+    if not banners:
+        return ""
+    return ('<div style="margin:24px 0;text-align:center;">'
+            + "".join(banners) + '</div>')
+
+
+def build_affiliate(cfg, article=None):
+    """アフィリエイト枠
+
+    2023年10月からのステマ規制（景品表示法）で、広告であることを
+    明示しない表示は違反になる。アフィリエイトリンクは広告なので、
+    必ず「広告」と分かる見出しを付けて、本文と切り離して出す。
+
+    候補が複数あるときは記事ごとに1つだけ出す。全部並べても読まれないし、
+    どの記事でも同じ広告が出続けるより、記事ごとに変わるほうが目に留まる。
+    選び方は記事IDから決めるので、同じ記事なら毎回同じものが出る。
+
+    ⚠️ 計測リンク（mfco.link など）をプログラムから取得してはいけない。
+       クリックとして記録され、不正クリック扱いになる。画像や名前は
+       設定に持たせて、リンクは貼るだけにする。
+
+    site_config.json の書き方（どちらでも可）:
+      "affiliate_links": [
+        {"url": "https://...", "name": "表示名", "image": "https://..."},
+        "<a href=...>生のHTML</a>"
+      ]
+    """
+    lcfg = cfg.get("livedoor") or {}
+    entries = []
+    for e in (lcfg.get("affiliate_links") or []):
+        if isinstance(e, str) and e.strip():
+            entries.append({"html": e.strip()})
+        elif isinstance(e, dict) and (e.get("url") or "").strip():
+            entries.append(dict(e))
+    if not entries:
+        return ""
+
+    # 記事ごとに1つ選ぶ
+    if article is not None and len(entries) > 1:
+        try:
+            idx = int(str(article.get("id"))[-4:] or 0) % len(entries)
+        except ValueError:
+            idx = 0
+        entries = [entries[idx]]
+
+    lead = (lcfg.get("affiliate_lead") or "").strip()
+    parts = []
+    for e in entries:
+        if e.get("html"):
+            parts.append(e["html"])
+            continue
+        url = escape(e["url"])
+        name = escape((e.get("name") or "MyFans").strip())
+        img = (e.get("image") or "").strip()
+        if img:
+            parts.append(
+                f'<a href="{url}" target="_blank" rel="noopener sponsored" '
+                f'style="display:inline-block;text-decoration:none;">'
+                f'<img src="{escape(img)}" alt="{name}" '
+                f'style="max-width:220px;height:auto;border-radius:8px;" /><br>'
+                f'<span style="font-size:14px;">{name}</span></a>')
+        else:
+            parts.append(
+                f'<a href="{url}" target="_blank" rel="noopener sponsored" '
+                f'style="display:inline-block;margin:4px 8px;padding:10px 22px;'
+                f'border:1px solid #ccc;border-radius:6px;'
+                f'text-decoration:none;font-size:14px;">{name}</a>')
+
+    return ('<div style="margin:32px 0 8px;padding:16px;'
+            'border-top:1px solid #ddd;text-align:center;">'
+            '<p style="margin:0 0 10px;font-size:12px;color:#888;">広告</p>'
+            + (f'<p style="margin:0 0 12px;font-size:14px;">{escape(lead)}</p>'
+               if lead else "")
+            + "".join(parts) + '</div>')
+
+
 def build_body(article, cfg):
     """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋免責）"""
     free = clean_for_livedoor(article.get("free_html"))
     if not free:
         return ""
-    parts = [build_shift_block(article), free, build_cta(article, cfg),
-             f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>']
+    thumb = extract_thumbnail(article.get("free_html"))
+    img = (f'<p><img src="{escape(thumb)}" alt="{escape(clean_title(article.get("title"))[:60])}" '
+           f'style="max-width:100%;height:auto;" /></p>' if thumb else "")
+    parts = [img, build_lead(article), build_shift_block(article), free,
+             build_cta(article, cfg), build_ranking_banners(cfg),
+             f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>',
+             build_affiliate(cfg, article)]
     return "\n".join(p for p in parts if p)
 
 
@@ -622,6 +807,104 @@ def run_area_matome(client, articles, cfg, state, draft=False):
 
 
 # ============================================================
+# 人気ランキング記事
+# ============================================================
+# ランキングを作るのに最低限必要な転載済み記事数
+RANKING_MIN_ITEMS = 5
+RANKING_TOP_N = 20
+# プレイ別ランキングを作るタグ（全体で5件以上あるもの）
+RANKING_MIN_TAG_ITEMS = 5
+
+
+def build_ranking(kind, articles, cfg, state):
+    """人気ランキング記事を組み立てる
+
+    順位はワクストでの購入数。実数は出さず順番だけ載せる
+    （こちらの売上規模をそのまま公開する必要はないため）。
+    対象は転載済みの記事だけ。未転載を混ぜるとブログ外へ出てしまう。
+    """
+    posted = state.get("_livedoor") or {}
+    items = [a for a in articles if str(a.get("id")) in posted]
+    if kind != "総合":
+        items = [a for a in items if kind in play_tags(a)]
+    items = [a for a in items if int(a.get("sales_count") or 0) > 0]
+    if len(items) < RANKING_MIN_ITEMS:
+        return None
+    items.sort(key=lambda a: (-int(a.get("sales_count") or 0), str(a.get("id"))))
+    items = items[:RANKING_TOP_N]
+
+    rows = []
+    for i, a in enumerate(items, 1):
+        cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+        plays = " / ".join(play_tags(a)[:2])
+        label = " / ".join(x for x in [a.get("station") or "", cup, plays] if x)
+        url = (posted.get(str(a["id"])) or {}).get("url") or a.get("source_url")
+        medal = "🥇🥈🥉"[i - 1] if i <= 3 else f"{i}."
+        rows.append(f'<li style="margin-bottom:8px;">{medal} '
+                    + (f_link(label, url) if url else escape(label)) + '</li>')
+
+    label = "" if kind == "総合" else f"【{kind}】"
+    title = (f"{label}メンズエステ体験レポート 人気ランキング TOP{len(items)}"
+             if kind != "総合" else
+             f"【保存版】メンズエステ体験レポート 人気ランキング TOP{len(items)}")
+    body = (
+        f'<p>これまでに書いた体験レポートを、購入数の多い順に並べました。'
+        f'{"" if kind == "総合" else escape(kind) + "のレポートに絞っています。"}'
+        f'どれを読むか迷ったら、上から順にどうぞ。</p>'
+        '<ol style="padding-left:1.2em;">' + "".join(rows) + '</ol>'
+        '<p style="margin-top:24px;font-size:13px;color:#666;">'
+        '新しいレポートを書くたびに順位を入れ替えています。</p>'
+        f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>'
+    )
+    cats = ["ランキング"] + ([] if kind == "総合" else [kind])
+    return {"title": title, "body": body, "categories": cats[:CATEGORY_SLOTS],
+            "kind": kind, "ids": [str(a["id"]) for a in items]}
+
+
+def ranking_kinds(articles):
+    """作るランキングの種類。総合＋件数の多いプレイ別"""
+    freq = play_frequency(articles)
+    tags = [t for t, n in sorted(freq.items(), key=lambda kv: -kv[1])
+            if n >= RANKING_MIN_TAG_ITEMS]
+    return ["総合"] + tags
+
+
+def run_ranking(client, articles, cfg, state, draft=False):
+    """ランキング記事を作る／更新する（順位が変わったときだけ）"""
+    store = state.setdefault("_livedoor_ranking", {})
+    ok = ng = 0
+    for kind in ranking_kinds(articles):
+        m = build_ranking(kind, articles, cfg, state)
+        if not m:
+            continue
+        rec = store.get(kind) or {}
+        if rec.get("ids") == m["ids"]:
+            continue                   # 順位が変わっていないので触らない
+        try:
+            if rec.get("edit_url"):
+                url = client.update(rec["edit_url"], m["title"], m["body"],
+                                    m["categories"], draft)
+                edit_url, verb = rec["edit_url"], "更新"
+            else:
+                url, edit_url = client.post(m["title"], m["body"],
+                                            m["categories"], draft)
+                verb = "新規"
+        except LivedoorError as e:
+            print(f"❌ ランキング{verb}失敗 [{kind}]: {e}")
+            print(f"::error::ランキング記事の投稿に失敗しました [{kind}]: {e}")
+            ng += 1
+            continue
+        store[kind] = {"url": url or rec.get("url", ""), "edit_url": edit_url,
+                       "ids": m["ids"],
+                       "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")}
+        save_state(state)
+        ok += 1
+        print(f"✅ ランキング{verb} [{kind}] {len(m['ids'])}件 "
+              f"{store[kind]['url'] or '(dry-run)'}")
+    return ok, ng
+
+
+# ============================================================
 # 出す順番
 # ============================================================
 def pick_targets(articles, limit, state):
@@ -638,15 +921,16 @@ def run_publish(client, articles, cfg, state, limit, draft=False):
     targets = pick_targets(articles, limit, state)
     if not targets:
         return 0, 0
+    freq = play_frequency(articles)
     posted = state.setdefault("_livedoor", {})
     ok = ng = 0
     for a in targets:
-        title = clean_title(a.get("title"))
+        title = build_title(a)
         body = build_body(a, cfg)
         if not body:
             continue
         try:
-            url, edit_url = client.post(title, body, build_categories(a), draft)
+            url, edit_url = client.post(title, body, build_categories(a, freq), draft)
         except LivedoorError as e:
             print(f"❌ 投稿失敗 [{a['id']}]: {e}")
             print(f"::error::livedoorへの投稿に失敗しました [{a['id']}]: {e}")
@@ -670,6 +954,7 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
     タイトルは変えない。出勤予定が変わった記事だけを対象にする。
     """
     posted = state.get("_livedoor") or {}
+    freq = play_frequency(articles)
     by_id = {str(a.get("id")): a for a in articles}
     todo = []
     for aid, rec in posted.items():
@@ -686,8 +971,8 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
         if not body:
             continue
         try:
-            client.update(rec["edit_url"], clean_title(a.get("title")), body,
-                          build_categories(a), draft)
+            client.update(rec["edit_url"], build_title(a), body,
+                          build_categories(a, freq), draft)
         except LivedoorError as e:
             print(f"❌ 更新失敗 [{aid}]: {e}")
             print(f"::error::livedoorの記事更新に失敗しました [{aid}]: {e}")
@@ -749,6 +1034,8 @@ def main():
                     help="投稿済み記事の出勤日ブロックを最大N件更新する")
     ap.add_argument("--area-matome", action="store_true",
                     help="エリア別まとめを作る／更新する")
+    ap.add_argument("--ranking", action="store_true",
+                    help="人気ランキング記事を作る／更新する")
     ap.add_argument("--check", action="store_true",
                     help="投稿せずに認証だけ確認する")
     args = ap.parse_args()
@@ -765,6 +1052,24 @@ def main():
 
     # --- 表示のみ（--post なし）---
     if not args.post:
+        if args.ranking:
+            shown = 0
+            for kind in ranking_kinds(articles):
+                m = build_ranking(kind, articles, cfg, state)
+                if not m:
+                    continue
+                print("=" * 60)
+                print(f"タイトル : {m['title']}")
+                print(f"カテゴリ : {' / '.join(m['categories'])}")
+                print("-" * 60)
+                print(re.sub(r"<[^>]+>", "", m["body"])[:600])
+                print()
+                shown += 1
+            if not shown:
+                print(f"ランキングの対象がありません"
+                      f"（転載済み {len(state.get('_livedoor') or {})}件 / "
+                      f"{RANKING_MIN_ITEMS}件から作成）")
+            return 0
         if args.area_matome:
             shown = 0
             for area in AREA_ORDER + sorted(
@@ -811,8 +1116,8 @@ def main():
         for a in targets:
             body = build_body(a, cfg)
             print("=" * 60)
-            print(f"タイトル : {clean_title(a.get('title'))}")
-            print(f"カテゴリ : {' / '.join(build_categories(a))}")
+            print(f"タイトル : {build_title(a)}")
+            print(f"カテゴリ : {' / '.join(build_categories(a, play_frequency(articles)))}")
             print(f"本文     : {len(body)}文字")
             print("-" * 60)
             print(body[:1500])
@@ -827,6 +1132,9 @@ def main():
         ng += n
     if args.area_matome:
         _, n = run_area_matome(client, articles, cfg, state, args.draft)
+        ng += n
+    if args.ranking:
+        _, n = run_ranking(client, articles, cfg, state, args.draft)
         ng += n
     if args.matome:
         _, n = run_matome(client, articles, cfg, state, args.draft)
