@@ -582,6 +582,9 @@ def build_affiliate(cfg, article=None):
       ]
     """
     lcfg = cfg.get("livedoor") or {}
+    # 候補は残したまま、フラグひとつで出し入れできるようにしておく
+    if not lcfg.get("affiliate_enabled"):
+        return ""
     entries = []
     for e in (lcfg.get("affiliate_links") or []):
         if isinstance(e, str) and e.strip():
