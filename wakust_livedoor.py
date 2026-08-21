@@ -560,23 +560,74 @@ def build_ranking_banners(cfg):
             + "".join(banners) + '</div>')
 
 
-def build_affiliate(cfg):
+def build_affiliate(cfg, article=None):
     """アフィリエイト枠
 
     2023年10月からのステマ規制（景品表示法）で、広告であることを
     明示しない表示は違反になる。アフィリエイトリンクは広告なので、
     必ず「広告」と分かる見出しを付けて、本文と切り離して出す。
 
-    site_config.json に登録する:
-      "livedoor": { "affiliate_links": ["<a href=...>...</a>", ...] }
+    候補が複数あるときは記事ごとに1つだけ出す。全部並べても読まれないし、
+    どの記事でも同じ広告が出続けるより、記事ごとに変わるほうが目に留まる。
+    選び方は記事IDから決めるので、同じ記事なら毎回同じものが出る。
+
+    ⚠️ 計測リンク（mfco.link など）をプログラムから取得してはいけない。
+       クリックとして記録され、不正クリック扱いになる。画像や名前は
+       設定に持たせて、リンクは貼るだけにする。
+
+    site_config.json の書き方（どちらでも可）:
+      "affiliate_links": [
+        {"url": "https://...", "name": "表示名", "image": "https://..."},
+        "<a href=...>生のHTML</a>"
+      ]
     """
-    links = [x for x in ((cfg.get("livedoor") or {}).get("affiliate_links") or [])
-             if (x or "").strip()]
-    if not links:
+    lcfg = cfg.get("livedoor") or {}
+    entries = []
+    for e in (lcfg.get("affiliate_links") or []):
+        if isinstance(e, str) and e.strip():
+            entries.append({"html": e.strip()})
+        elif isinstance(e, dict) and (e.get("url") or "").strip():
+            entries.append(dict(e))
+    if not entries:
         return ""
-    return ('<div style="margin:32px 0 8px;padding:16px;border-top:1px solid #ddd;">'
+
+    # 記事ごとに1つ選ぶ
+    if article is not None and len(entries) > 1:
+        try:
+            idx = int(str(article.get("id"))[-4:] or 0) % len(entries)
+        except ValueError:
+            idx = 0
+        entries = [entries[idx]]
+
+    lead = (lcfg.get("affiliate_lead") or "").strip()
+    parts = []
+    for e in entries:
+        if e.get("html"):
+            parts.append(e["html"])
+            continue
+        url = escape(e["url"])
+        name = escape((e.get("name") or "MyFans").strip())
+        img = (e.get("image") or "").strip()
+        if img:
+            parts.append(
+                f'<a href="{url}" target="_blank" rel="noopener sponsored" '
+                f'style="display:inline-block;text-decoration:none;">'
+                f'<img src="{escape(img)}" alt="{name}" '
+                f'style="max-width:220px;height:auto;border-radius:8px;" /><br>'
+                f'<span style="font-size:14px;">{name}</span></a>')
+        else:
+            parts.append(
+                f'<a href="{url}" target="_blank" rel="noopener sponsored" '
+                f'style="display:inline-block;margin:4px 8px;padding:10px 22px;'
+                f'border:1px solid #ccc;border-radius:6px;'
+                f'text-decoration:none;font-size:14px;">{name}</a>')
+
+    return ('<div style="margin:32px 0 8px;padding:16px;'
+            'border-top:1px solid #ddd;text-align:center;">'
             '<p style="margin:0 0 10px;font-size:12px;color:#888;">広告</p>'
-            + "".join(links) + '</div>')
+            + (f'<p style="margin:0 0 12px;font-size:14px;">{escape(lead)}</p>'
+               if lead else "")
+            + "".join(parts) + '</div>')
 
 
 def build_body(article, cfg):
@@ -590,7 +641,7 @@ def build_body(article, cfg):
     parts = [img, build_lead(article), build_shift_block(article), free,
              build_cta(article, cfg), build_ranking_banners(cfg),
              f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>',
-             build_affiliate(cfg)]
+             build_affiliate(cfg, article)]
     return "\n".join(p for p in parts if p)
 
 
