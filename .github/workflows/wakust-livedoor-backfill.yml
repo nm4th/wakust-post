@@ -1,0 +1,75 @@
+name: Wakust Livedoor Backfill
+
+# ワクストの記事から「無料部分の本文」だけを取り込んで site_content に入れる。
+# livedoor へ転載するには本文が要るが、meta_export はメタデータしか持たない。
+#
+# 1記事につき編集ページを1リクエスト叩くので、1回20件ずつに分けて回す。
+# 全件埋まったら「未取得の記事はありません」で即終了するので、
+# 取り込みが終わったあとは schedule を止めてよい。
+#
+# ⚠️ 有料部分（edit_text_2）は取得も保存もしない。
+
+on:
+  schedule:
+    # 毎日 3:00 JST（他のワークフローと重ならない時間）
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: '1回で取り込む記事数'
+        type: string
+        default: '20'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wakust-livedoor-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Fetch free portions
+        env:
+          WAKUST_EMAIL: ${{ secrets.WAKUST_EMAIL }}
+          WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
+          WAKUST_COOKIE: ${{ secrets.WAKUST_COOKIE }}
+          CODOC_MODE: free_backfill
+          FREE_BACKFILL_LIMIT: ${{ inputs.limit || '20' }}
+        run: python wakust_auto_update.py
+
+      - name: Commit articles
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add site_content/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "📄 無料部分を取り込み $(date -u +%Y-%m-%d_%H:%M)"
+            pushed=0
+            for i in 1 2 3 4; do
+              if git pull --rebase origin main && git push origin HEAD:main; then
+                pushed=1; break
+              fi
+              sleep $((2 ** i))
+            done
+            if [ "$pushed" != "1" ]; then
+              echo "::error::git push に失敗しました"
+              exit 1
+            fi
+          fi

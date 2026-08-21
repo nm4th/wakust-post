@@ -3822,8 +3822,9 @@ def run_meta_export(session):
             "sales_count": p.get("sales_count") or 0,
             "pv_total": p.get("pv_total") or 0,
             "price": prev.get("price") or calculate_sales_point(p.get("sales_count") or 0),
-            # 本文は保存しない（無料部分・有料部分ともに書き出さない）
-            "free_html": "",
+            # 有料部分（edit_text_2）は絶対に保存しない。
+            # 無料部分は free_backfill モードが入れるので、既にあれば保持する
+            "free_html": prev.get("free_html", ""),
             "image_url": prev.get("image_url") or "",
             "codoc_entry_id": prev.get("codoc_entry_id", ""),
             "codoc_entry_code": prev.get("codoc_entry_code", ""),
@@ -3861,6 +3862,82 @@ def _run_meta_export_only():
     finally:
         session.close()
     log.info(f"\n✅ 書き出し完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+
+
+def run_free_backfill(session, limit=20):
+    """記事JSONに無料部分の本文を後から入れる
+
+    meta_export は本文を持たないので、外部ブログへ転載するときに中身が無い。
+    ここで編集ページから無料部分（edit_text_1）だけを取ってきて埋める。
+    有料部分（edit_text_2）は取得も保存もしない。
+
+    1回の実行で limit 件だけ処理する（編集ページを1記事1リクエスト叩くため）。
+    """
+    log.info(f"\n{'='*55}")
+    log.info(f"📄 無料部分の取り込み ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
+    log.info(f"{'='*55}")
+
+    if not os.path.isdir(SITE_CONTENT_DIR):
+        log.error(f"❌ {SITE_CONTENT_DIR} がありません")
+        return
+
+    # 本文が空のものだけを対象にする。販売実績が多い順に埋めていく
+    todo = []
+    for name in os.listdir(SITE_CONTENT_DIR):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(SITE_CONTENT_DIR, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                art = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if (art.get("free_html") or "").strip():
+            continue
+        todo.append((int(art.get("sales_count") or 0), art, path))
+
+    if not todo:
+        log.info("✅ 未取得の記事はありません")
+        return
+
+    todo.sort(key=lambda t: -t[0])
+    targets = todo[:max(1, limit)]
+    log.info(f"📝 対象 {len(targets)}件 / 未取得 {len(todo)}件")
+
+    filled = 0
+    for _, art, path in targets:
+        post = {"id": art["id"],
+                "edit_url": f"{BASE_URL}/mypage/?post_edit={art['id']}"}
+        try:
+            details = fetch_post_details(session, post)
+        except Exception as e:
+            log.warning(f"  ⚠️ [{art['id']}] 取得失敗: {e}")
+            continue
+        free = ((details.get("payload") or {}).get("edit_text_1") or "").strip()
+        if not free:
+            log.warning(f"  ⚠️ [{art['id']}] 無料部分が空でした")
+            continue
+        art["free_html"] = free
+        art["content_updated_at"] = jst_strftime("%Y-%m-%d %H:%M:%S")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(art, f, ensure_ascii=False, indent=2)
+        filled += 1
+        log.info(f"  ✅ [{art['id']}] {len(free)}文字  {art.get('title','')[:34]}")
+        time.sleep(1.5)   # 連続アクセスを避ける
+
+    log.info(f"\n📄 {filled}件に無料部分を入れました（残り {len(todo) - filled}件）")
+
+
+def _run_free_backfill_only():
+    """無料部分の取り込みモード。codocには触れない"""
+    session = login_wakust()
+    if not session:
+        log.error("❌ wakustログイン失敗のため処理を中断します")
+        sys.exit(1)
+    try:
+        run_free_backfill(session, limit=int(os.environ.get("FREE_BACKFILL_LIMIT", "20")))
+    finally:
+        session.close()
 
 
 def run_site_publish(session, limit=1):
@@ -4960,6 +5037,9 @@ if __name__ == "__main__":
     elif CODOC_MODE == "site_publish":
         log.info(f"🚀 ワクスト自動更新スクリプト起動 [自社サイト掲載モード]")
         _run_site_publish_only()
+    elif CODOC_MODE == "free_backfill":
+        log.info(f"🚀 ワクスト自動更新スクリプト起動 [無料部分の取り込みモード]")
+        _run_free_backfill_only()
     elif CODOC_MODE == "site_build":
         log.info(f"🚀 サイト生成のみ")
         from wakust_site import build
