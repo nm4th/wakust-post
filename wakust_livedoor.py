@@ -352,24 +352,41 @@ def clean_title(title):
 CATEGORY_SLOTS = 2
 
 
-def build_categories(article):
+def play_tags(article):
+    """その記事のプレイ系タグ（カップ数と駅名を除いたもの）"""
+    station = (article.get("station") or "").strip()
+    return [t for t in (article.get("tags") or [])
+            if not t.endswith("カップ") and t != station]
+
+
+def play_frequency(articles):
+    """プレイ系タグが全体で何件あるかを数える"""
+    freq = {}
+    for a in articles:
+        for t in play_tags(a):
+            freq[t] = freq.get(t, 0) + 1
+    return freq
+
+
+def build_categories(article, freq=None):
     """livedoor 側の記事カテゴリを決める
 
-    枠が2つしかないので「駅」と「プレイ内容」を入れる。
-    エリア（東京都内など）はエリア別まとめ記事が受け持つので、
-    駅が取れているときは枠を使わない。
+    livedoor は1記事あたり2つまでなので「駅」と「プレイ内容」を入れる。
+    エリア（東京都内など）はエリア別まとめ記事が受け持つので枠を使わない。
+
+    プレイ系タグが複数ある記事（135件中11件）は、全体での件数が多い方を選ぶ。
+    OPI や CKB のように1〜2件しかないタグでカテゴリを作っても、
+    そのカテゴリを開いた人が他に読むものが無く、回遊に繋がらないため。
     """
     cats = []
     station = (article.get("station") or "").strip()
     if station:
         cats.append(station)
-    for t in (article.get("tags") or []):
-        # カップ数と駅名はカテゴリにしない
-        if t.endswith("カップ") or t == station:
-            continue
-        if t not in cats:
-            cats.append(t)
-            break                      # プレイ内容は1つだけ
+    plays = play_tags(article)
+    if plays:
+        if freq:
+            plays = sorted(plays, key=lambda t: (-freq.get(t, 0), t))
+        cats.append(plays[0])
     area = (article.get("area") or "").strip()
     if area and area not in cats:
         cats.append(area)              # 駅もタグも無いときの受け皿
@@ -655,6 +672,7 @@ def run_publish(client, articles, cfg, state, limit, draft=False):
     targets = pick_targets(articles, limit, state)
     if not targets:
         return 0, 0
+    freq = play_frequency(articles)
     posted = state.setdefault("_livedoor", {})
     ok = ng = 0
     for a in targets:
@@ -663,7 +681,7 @@ def run_publish(client, articles, cfg, state, limit, draft=False):
         if not body:
             continue
         try:
-            url, edit_url = client.post(title, body, build_categories(a), draft)
+            url, edit_url = client.post(title, body, build_categories(a, freq), draft)
         except LivedoorError as e:
             print(f"❌ 投稿失敗 [{a['id']}]: {e}")
             print(f"::error::livedoorへの投稿に失敗しました [{a['id']}]: {e}")
@@ -687,6 +705,7 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
     タイトルは変えない。出勤予定が変わった記事だけを対象にする。
     """
     posted = state.get("_livedoor") or {}
+    freq = play_frequency(articles)
     by_id = {str(a.get("id")): a for a in articles}
     todo = []
     for aid, rec in posted.items():
@@ -704,7 +723,7 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
             continue
         try:
             client.update(rec["edit_url"], clean_title(a.get("title")), body,
-                          build_categories(a), draft)
+                          build_categories(a, freq), draft)
         except LivedoorError as e:
             print(f"❌ 更新失敗 [{aid}]: {e}")
             print(f"::error::livedoorの記事更新に失敗しました [{aid}]: {e}")
@@ -829,7 +848,7 @@ def main():
             body = build_body(a, cfg)
             print("=" * 60)
             print(f"タイトル : {clean_title(a.get('title'))}")
-            print(f"カテゴリ : {' / '.join(build_categories(a))}")
+            print(f"カテゴリ : {' / '.join(build_categories(a, play_frequency(articles)))}")
             print(f"本文     : {len(body)}文字")
             print("-" * 60)
             print(body[:1500])

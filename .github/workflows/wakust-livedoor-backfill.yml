@@ -3,9 +3,10 @@ name: Wakust Livedoor Backfill
 # ワクストの記事から「無料部分の本文」だけを取り込んで site_content に入れる。
 # livedoor へ転載するには本文が要るが、meta_export はメタデータしか持たない。
 #
-# 1記事につき編集ページを1リクエスト叩くので、1回20件ずつに分けて回す。
+# 1記事につき編集ページを1リクエスト叩く。1件あたり約2秒なので、
+# 135件でも5分程度で終わる。既定は全件処理。
 # 全件埋まったら「未取得の記事はありません」で即終了するので、
-# 取り込みが終わったあとは schedule を止めてよい。
+# 毎日回しておけば新しい記事の分だけ自動で追いつく。
 #
 # ⚠️ 有料部分（edit_text_2）は取得も保存もしない。
 
@@ -16,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: '1回で取り込む記事数'
+        description: '1回で取り込む記事数（既定は全件）'
         type: string
-        default: '20'
+        default: '500'
 
 permissions:
   contents: write
@@ -50,7 +51,7 @@ jobs:
           WAKUST_PASSWORD: ${{ secrets.WAKUST_PASSWORD }}
           WAKUST_COOKIE: ${{ secrets.WAKUST_COOKIE }}
           CODOC_MODE: free_backfill
-          FREE_BACKFILL_LIMIT: ${{ inputs.limit || '20' }}
+          FREE_BACKFILL_LIMIT: ${{ inputs.limit || '500' }}
         run: python wakust_auto_update.py
 
       - name: Commit articles
