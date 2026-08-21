@@ -134,6 +134,29 @@ class LivedoorClient:
             f"     （いまの設定: {ATOM_BASE}/{self.blog_name}）\n"
             f"  参考: {last.text[:200] if last is not None else ''}")
 
+    def post(self, title, body_html, categories=None, draft=False):
+        """記事を1件投稿して (公開URL, 編集URL) を返す
+
+        編集URL は後からタイトル・本文を差し替えるのに使うので、
+        呼び出し側で必ず保存しておくこと。
+        """
+        entry = _build_atom_entry(title, body_html, categories or [], draft)
+        if self.dry_run:
+            log.info(f"🧪 [dry-run] 投稿: {title}")
+            return "", ""
+        text = self._send("POST", f"{ATOM_BASE}/{self.blog_name}/article",
+                          entry, "投稿")
+        return _link(text, "alternate"), _link(text, "edit")
+
+    def update(self, edit_url, title, body_html, categories=None, draft=False):
+        """投稿済みの記事を差し替える（POSTだと新規になるので必ずPUT）"""
+        entry = _build_atom_entry(title, body_html, categories or [], draft)
+        if self.dry_run:
+            log.info(f"🧪 [dry-run] 更新: {title}")
+            return ""
+        text = self._send("PUT", edit_url, entry, "更新")
+        return _link(text, "alternate")
+
     def check(self):
         """投稿せずに認証だけ確認する"""
         url = f"{ATOM_BASE}/{self.blog_name}"
@@ -170,29 +193,6 @@ def _mask(v):
     if not v:
         return "(未設定)"
     return f"{v[0]}{'*' * (len(v) - 2)}{v[-1]}（{len(v)}文字）" if len(v) > 2 else "***"
-
-    def post(self, title, body_html, categories=None, draft=False):
-        """記事を1件投稿して (公開URL, 編集URL) を返す
-
-        編集URL は後からタイトル・本文を差し替えるのに使うので、
-        呼び出し側で必ず保存しておくこと。
-        """
-        entry = _build_atom_entry(title, body_html, categories or [], draft)
-        if self.dry_run:
-            log.info(f"🧪 [dry-run] 投稿: {title}")
-            return "", ""
-        text = self._send("POST", f"{ATOM_BASE}/{self.blog_name}/article",
-                          entry, "投稿")
-        return _link(text, "alternate"), _link(text, "edit")
-
-    def update(self, edit_url, title, body_html, categories=None, draft=False):
-        """投稿済みの記事を差し替える（POSTだと新規になるので必ずPUT）"""
-        entry = _build_atom_entry(title, body_html, categories or [], draft)
-        if self.dry_run:
-            log.info(f"🧪 [dry-run] 更新: {title}")
-            return ""
-        text = self._send("PUT", edit_url, entry, "更新")
-        return _link(text, "alternate")
 
 
 def _link(xml_text, rel):
