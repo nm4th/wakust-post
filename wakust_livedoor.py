@@ -88,29 +88,55 @@ class LivedoorClient:
         if self.dry_run:
             log.info("🧪 livedoor: dry-run モード（実際には投稿しません）")
 
-    def post(self, title, body_html, categories=None, draft=False):
-        """記事を1件投稿して、公開URLを返す"""
-        entry = _build_atom_entry(title, body_html, categories or [], draft)
-        if self.dry_run:
-            log.info(f"🧪 [dry-run] 投稿: {title}")
-            return None
-        url = f"{ATOM_BASE}/{self.blog_name}/article"
+    def _headers(self):
+        return {"X-WSSE": _wsse_header(self.user_id, self.api_key),
+                "Content-Type": "application/atom+xml; charset=utf-8"}
+
+    def _send(self, method, url, entry, what):
         try:
-            r = requests.post(
-                url, data=entry.encode("utf-8"), timeout=60,
-                headers={"X-WSSE": _wsse_header(self.user_id, self.api_key),
-                         "Content-Type": "application/atom+xml; charset=utf-8"})
+            r = requests.request(method, url, data=entry.encode("utf-8"),
+                                 timeout=60, headers=self._headers())
         except requests.RequestException as e:
-            raise LivedoorError(f"リクエスト失敗: {e}") from e
+            raise LivedoorError(f"{what}のリクエストに失敗: {e}") from e
         if r.status_code == 401:
             raise LivedoorError(
                 "認証に失敗しました。LIVEDOOR_USER_ID（livedoor ID）と "
                 "LIVEDOOR_API_KEY（AtomPub用パスワード。ログインパスワードとは別）"
                 "を確認してください")
         if r.status_code not in (200, 201):
-            raise LivedoorError(f"HTTP {r.status_code}: {r.text[:300]}")
-        m = re.search(r'<link[^>]+rel="alternate"[^>]+href="([^"]+)"', r.text)
-        return m.group(1) if m else ""
+            raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}")
+        return r.text
+
+    def post(self, title, body_html, categories=None, draft=False):
+        """記事を1件投稿して (公開URL, 編集URL) を返す
+
+        編集URL は後からタイトル・本文を差し替えるのに使うので、
+        呼び出し側で必ず保存しておくこと。
+        """
+        entry = _build_atom_entry(title, body_html, categories or [], draft)
+        if self.dry_run:
+            log.info(f"🧪 [dry-run] 投稿: {title}")
+            return "", ""
+        text = self._send("POST", f"{ATOM_BASE}/{self.blog_name}/article",
+                          entry, "投稿")
+        return _link(text, "alternate"), _link(text, "edit")
+
+    def update(self, edit_url, title, body_html, categories=None, draft=False):
+        """投稿済みの記事を差し替える（POSTだと新規になるので必ずPUT）"""
+        entry = _build_atom_entry(title, body_html, categories or [], draft)
+        if self.dry_run:
+            log.info(f"🧪 [dry-run] 更新: {title}")
+            return ""
+        text = self._send("PUT", edit_url, entry, "更新")
+        return _link(text, "alternate")
+
+
+def _link(xml_text, rel):
+    m = re.search(r'<link[^>]+rel="%s"[^>]*/?>' % re.escape(rel), xml_text)
+    if not m:
+        return ""
+    h = re.search(r'href="([^"]+)"', m.group(0))
+    return h.group(1) if h else ""
 
 
 def _build_atom_entry(title, body_html, categories, draft):
@@ -234,32 +260,120 @@ def build_cta(article, cfg):
     )
 
 
+WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
+
+
+def today_iso():
+    return datetime.now(JST).strftime("%Y-%m-%d")
+
+
+def fmt_date(iso):
+    try:
+        d = datetime.strptime(iso, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+    return f"{d.month}/{d.day}({WEEKDAY_JP[d.weekday()]})"
+
+
+def upcoming_shifts(article):
+    """今日以降の出勤日だけを返す（過去日を載せても意味がないため）"""
+    today = today_iso()
+    return [d for d in (article.get("shift_dates") or []) if d >= today]
+
+
+def build_shift_block(article):
+    """本文の先頭に置く出勤日ブロック
+
+    タイトルには出勤日を入れない。検索結果に古い日付が残り続けるうえ、
+    タイトルを頻繁に変えると評価が安定しないため。日付は本文のここだけを
+    毎日 PUT で差し替える。
+    """
+    upcoming = upcoming_shifts(article)
+    if not upcoming:
+        return ('<div style="margin:0 0 20px;padding:12px 16px;background:#f6f6f6;'
+                'border-left:4px solid #ccc;font-size:14px;">'
+                '📅 <b>直近の出勤</b>：現在の予定は未定です'
+                '<br><span style="font-size:12px;color:#888;">'
+                '最新の出勤日はワクストの記事ページでご確認ください</span></div>')
+    labels = " ・ ".join(fmt_date(d) for d in upcoming[:5] if fmt_date(d))
+    return ('<div style="margin:0 0 20px;padding:12px 16px;background:#fff7e6;'
+            'border-left:4px solid #f59e0b;font-size:14px;">'
+            f'📅 <b>直近の出勤</b>：{labels}'
+            f'<br><span style="font-size:12px;color:#888;">'
+            f'{fmt_date(today_iso())}時点</span></div>')
+
+
 def build_body(article, cfg):
-    """投稿本文を組み立てる（無料部分＋出勤日＋購入導線＋免責）"""
+    """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋免責）"""
     free = (article.get("free_html") or "").strip()
     if not free:
         return ""
-
-    parts = [free]
-
-    dates = article.get("shift_dates") or []
-    if dates:
-        # 出勤日は「記事を書いた時点の予定」でしかないので、そう明示する
-        labels = []
-        for d in dates:
-            try:
-                dt = datetime.strptime(d, "%Y-%m-%d")
-                labels.append(f"{dt.month}/{dt.day}")
-            except ValueError:
-                continue
-        if labels:
-            parts.append(
-                f'<p style="margin-top:24px;color:#666;font-size:13px;">'
-                f'記事作成時点の出勤日: {" ・ ".join(labels)}</p>')
-
-    parts.append(build_cta(article, cfg))
-    parts.append(f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>')
+    parts = [build_shift_block(article), free, build_cta(article, cfg),
+             f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>']
     return "\n".join(p for p in parts if p)
+
+
+# ============================================================
+# 本日出勤まとめ（毎日1本、新規投稿する）
+# ============================================================
+def build_matome(articles, cfg, state, day=None):
+    """その日出勤するセラピストを1本にまとめた記事を作る
+
+    個別記事のタイトルは固定にしているので、出勤日という「消え物」は
+    こちらで受け持つ。編集ではなく毎日「新規投稿」なので、livedoor の
+    新着エントリーに確実に載る。各記事への内部リンクにもなる。
+    """
+    day = day or today_iso()
+    posted = state.get("_livedoor") or {}
+    items = [a for a in articles if day in (a.get("shift_dates") or [])]
+    if not items:
+        return None
+
+    # 転載済みならブログ内の記事へ、未転載ならワクストへ飛ばす
+    def link_for(a):
+        rec = posted.get(str(a.get("id"))) or {}
+        return rec.get("url") or a.get("source_url") or ""
+
+    by_area = {}
+    for a in items:
+        by_area.setdefault(a.get("area") or "その他", []).append(a)
+
+    order = ["東京都内", "神奈川", "埼玉", "多摩", "千葉"]
+    areas = ([k for k in order if k in by_area]
+             + sorted(k for k in by_area if k not in order))
+
+    rows = []
+    for area in areas:
+        group = sorted(by_area[area], key=lambda a: (a.get("station") or ""))
+        rows.append(f'<h3 style="margin:24px 0 8px;">{escape(area)}</h3><ul>')
+        for a in group:
+            cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+            plays = [t for t in (a.get("tags") or [])
+                     if not t.endswith("カップ") and t != a.get("station")]
+            detail = " / ".join(x for x in [cup] + plays[:2] if x)
+            label = f'【{a.get("station") or area}】{detail}'.strip()
+            url = link_for(a)
+            rows.append(f'<li>{f_link(label, url)}</li>' if url
+                        else f'<li>{escape(label)}</li>')
+        rows.append("</ul>")
+
+    title = f"【{fmt_date(day)} 本日出勤】体験済みセラピスト{len(items)}名"
+    body = (
+        f'<p>{fmt_date(day)}に出勤予定の、実際に行ってレポートを書いた'
+        f'セラピストをまとめました。</p>'
+        + "".join(rows)
+        + '<p style="margin-top:24px;font-size:13px;color:#666;">'
+        '出勤予定は変更されることがあります。'
+        '最新の状況は各記事のリンク先でご確認ください。</p>'
+        f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>'
+    )
+    return {"title": title, "body": body, "categories": ["本日出勤"],
+            "day": day, "count": len(items)}
+
+
+def f_link(label, url):
+    return (f'<a href="{escape(url)}" target="_blank" rel="noopener">'
+            f'{escape(label)}</a>')
 
 
 # ============================================================
@@ -274,13 +388,109 @@ def pick_targets(articles, limit, state):
     return todo[:max(1, limit)]
 
 
+def run_publish(client, articles, cfg, state, limit, draft=False):
+    """未転載の記事を limit 件だけ新規投稿する"""
+    targets = pick_targets(articles, limit, state)
+    if not targets:
+        return 0, 0
+    posted = state.setdefault("_livedoor", {})
+    ok = ng = 0
+    for a in targets:
+        title = clean_title(a.get("title"))
+        body = build_body(a, cfg)
+        if not body:
+            continue
+        try:
+            url, edit_url = client.post(title, body, build_categories(a), draft)
+        except LivedoorError as e:
+            print(f"❌ 投稿失敗 [{a['id']}]: {e}")
+            print(f"::error::livedoorへの投稿に失敗しました [{a['id']}]: {e}")
+            ng += 1
+            continue
+        posted[str(a["id"])] = {
+            "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
+            "url": url, "edit_url": edit_url,
+            # 出勤日を控えておき、変わったときだけ本文を差し替える
+            "shifts": list(a.get("shift_dates") or []),
+        }
+        save_state(state)
+        ok += 1
+        print(f"✅ 投稿 [{a['id']}] {url or '(dry-run)'}  {title[:38]}")
+    return ok, ng
+
+
+def run_refresh(client, articles, cfg, state, limit, draft=False):
+    """投稿済み記事の出勤日ブロックを差し替える
+
+    タイトルは変えない。出勤予定が変わった記事だけを対象にする。
+    """
+    posted = state.get("_livedoor") or {}
+    by_id = {str(a.get("id")): a for a in articles}
+    todo = []
+    for aid, rec in posted.items():
+        a = by_id.get(aid)
+        if not a or not rec.get("edit_url"):
+            continue
+        if list(a.get("shift_dates") or []) != list(rec.get("shifts") or []):
+            todo.append((aid, rec, a))
+    if not todo:
+        return 0, 0
+    ok = ng = 0
+    for aid, rec, a in todo[:max(1, limit)]:
+        body = build_body(a, cfg)
+        if not body:
+            continue
+        try:
+            client.update(rec["edit_url"], clean_title(a.get("title")), body,
+                          build_categories(a), draft)
+        except LivedoorError as e:
+            print(f"❌ 更新失敗 [{aid}]: {e}")
+            print(f"::error::livedoorの記事更新に失敗しました [{aid}]: {e}")
+            ng += 1
+            continue
+        rec["shifts"] = list(a.get("shift_dates") or [])
+        rec["refreshed_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        save_state(state)
+        ok += 1
+        print(f"🔄 出勤日を更新 [{aid}] {' '.join(fmt_date(d) for d in upcoming_shifts(a)[:3])}")
+    return ok, ng
+
+
+def run_matome(client, articles, cfg, state, draft=False):
+    """本日出勤まとめを1本、新規投稿する（1日1回まで）"""
+    day = today_iso()
+    done = state.setdefault("_livedoor_matome", {})
+    if day in done:
+        print(f"⏭️  本日({day})のまとめは投稿済み")
+        return 0, 0
+    m = build_matome(articles, cfg, state, day)
+    if not m:
+        print(f"⏭️  本日({day})出勤の記事がないため、まとめは出しません")
+        return 0, 0
+    try:
+        url, edit_url = client.post(m["title"], m["body"], m["categories"], draft)
+    except LivedoorError as e:
+        print(f"❌ まとめ投稿失敗: {e}")
+        print(f"::error::livedoorへのまとめ投稿に失敗しました: {e}")
+        return 0, 1
+    done[day] = {"url": url, "edit_url": edit_url, "count": m["count"],
+                 "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")}
+    save_state(state)
+    print(f"✅ まとめ投稿 {url or '(dry-run)'}  {m['title']}")
+    return 1, 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="livedoor Blog へ記事を転載する")
-    ap.add_argument("--limit", type=int, default=1, help="処理する記事数")
-    ap.add_argument("--id", help="記事IDを指定して1件だけ処理する")
+    ap.add_argument("--limit", type=int, default=1, help="新規投稿する記事数")
+    ap.add_argument("--id", help="記事IDを指定して1件だけ表示・投稿する")
     ap.add_argument("--post", action="store_true",
                     help="実際に投稿する（認証情報が無ければdry-run）")
     ap.add_argument("--draft", action="store_true", help="下書きとして投稿する")
+    ap.add_argument("--matome", action="store_true",
+                    help="本日出勤まとめを投稿する")
+    ap.add_argument("--refresh", type=int, metavar="N", default=0,
+                    help="投稿済み記事の出勤日ブロックを最大N件更新する")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -288,60 +498,64 @@ def main():
     if not articles:
         print(f"記事データがありません（{ARTICLES_DIR}/ が空）")
         return 0
-
     state = load_state()
-    if args.id:
-        targets = [a for a in articles if str(a.get("id")) == str(args.id)]
-        if not targets:
-            print(f"記事 {args.id} が見つかりません")
-            return 1
-    else:
-        targets = pick_targets(articles, args.limit, state)
 
-    if not targets:
-        empty = sum(1 for a in articles if not (a.get("free_html") or "").strip())
-        print("転載できる記事がありません。")
-        if empty:
-            print(f"  無料部分が未取得の記事が {empty}件あります。")
-            print("  CODOC_MODE=free_backfill python wakust_auto_update.py "
-                  "で取り込んでください。")
-        return 0
-
-    client = LivedoorClient()
-    posted = state.setdefault("_livedoor", {})
-    failed = 0
-
-    for a in targets:
-        title = clean_title(a.get("title"))
-        body = build_body(a, cfg)
-        cats = build_categories(a)
-        if not body:
-            print(f"⏭️  [{a['id']}] 無料部分が空のためスキップ")
-            continue
-
-        if not args.post:
+    # --- 表示のみ（--post なし）---
+    if not args.post:
+        if args.matome:
+            m = build_matome(articles, cfg, state)
+            if not m:
+                print("本日出勤の記事がありません")
+                return 0
             print("=" * 60)
-            print(f"タイトル : {title}")
-            print(f"カテゴリ : {' / '.join(cats)}")
+            print(f"タイトル : {m['title']}")
+            print(f"対象     : {m['count']}名")
+            print("-" * 60)
+            print(m["body"][:1500])
+            return 0
+        if args.id:
+            targets = [a for a in articles if str(a.get("id")) == str(args.id)]
+        else:
+            targets = pick_targets(articles, args.limit, state)
+        if not targets:
+            empty = sum(1 for a in articles if not (a.get("free_html") or "").strip())
+            print("転載できる記事がありません。")
+            if empty:
+                print(f"  無料部分が未取得の記事が {empty}件あります。")
+                print("  CODOC_MODE=free_backfill python wakust_auto_update.py "
+                      "で取り込んでください。")
+            return 0
+        for a in targets:
+            body = build_body(a, cfg)
+            print("=" * 60)
+            print(f"タイトル : {clean_title(a.get('title'))}")
+            print(f"カテゴリ : {' / '.join(build_categories(a))}")
             print(f"本文     : {len(body)}文字")
             print("-" * 60)
-            print(body[:1200])
+            print(body[:1500])
             print()
-            continue
+        return 0
 
-        try:
-            url = client.post(title, body, cats, draft=args.draft)
-        except LivedoorError as e:
-            print(f"❌ 投稿失敗 [{a['id']}]: {e}")
-            print(f"::error::livedoorへの投稿に失敗しました [{a['id']}]: {e}")
-            failed += 1
-            continue
-        now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-        posted[str(a["id"])] = {"at": now, "url": url or ""}
-        save_state(state)
-        print(f"✅ 投稿しました [{a['id']}] {url or '(dry-run)'}")
-
-    return 1 if failed else 0
+    # --- 実投稿 ---
+    client = LivedoorClient()
+    ng = 0
+    if args.refresh:
+        _, n = run_refresh(client, articles, cfg, state, args.refresh, args.draft)
+        ng += n
+    if args.matome:
+        _, n = run_matome(client, articles, cfg, state, args.draft)
+        ng += n
+    if args.limit and not args.id:
+        _, n = run_publish(client, articles, cfg, state, args.limit, args.draft)
+        ng += n
+    elif args.id:
+        a = next((x for x in articles if str(x.get("id")) == str(args.id)), None)
+        if not a:
+            print(f"記事 {args.id} が見つかりません")
+            return 1
+        _, n = run_publish(client, [a], cfg, state, 1, args.draft)
+        ng += n
+    return 1 if ng else 0
 
 
 if __name__ == "__main__":

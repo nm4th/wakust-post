@@ -1,0 +1,133 @@
+name: Wakust Livedoor Post
+
+# livedoor Blog（アダルト(一般) > メンズエステ(R-18)）へ転載する。
+#
+# 流入は検索ではなく、livedoor のカテゴリページの「新着エントリー」と
+# 「カテゴリ内ランキング」から来る。そのため一度に大量投稿せず、
+# 1日数本ずつ出して新着枠に長く居座らせる。
+#
+# 1回の実行でやること:
+#   1. 出勤予定が変わった記事の本文だけ差し替える（タイトルは変えない）
+#   2. 本日出勤まとめを1本、新規投稿する（新着枠に載せるのが目的）
+#   3. 未転載の記事を数本、新規投稿する
+#
+# ⚠️ 投稿するのは無料部分だけ。有料部分は扱わない。
+
+on:
+  schedule:
+    # 9:30 / 15:00 / 20:00 JST（JST = UTC+9）
+    - cron: '30 0 * * *'
+    - cron: '0 6 * * *'
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: '新規投稿する記事数'
+        type: string
+        default: '2'
+      matome:
+        description: '本日出勤まとめも投稿する'
+        type: boolean
+        default: false
+      draft:
+        description: '下書きとして投稿する'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wakust-livedoor-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      # まとめは1日1本で十分なので、朝の枠だけで出す
+      - name: Decide this run
+        id: plan
+        run: |
+          case "${{ github.event.schedule }}" in
+            "30 0 * * *") echo "matome=--matome" >> "$GITHUB_OUTPUT" ;;
+            *)            echo "matome=" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Post to livedoor
+        env:
+          LIVEDOOR_USER_ID: ${{ secrets.LIVEDOOR_USER_ID }}
+          LIVEDOOR_BLOG_NAME: ${{ secrets.LIVEDOOR_BLOG_NAME }}
+          LIVEDOOR_API_KEY: ${{ secrets.LIVEDOOR_API_KEY }}
+          EVENT: ${{ github.event_name }}
+          DRAFT_INPUT: ${{ inputs.draft }}
+          LIVE_OK: ${{ vars.LIVEDOOR_LIVE }}
+          LIMIT: ${{ inputs.limit || '2' }}
+          MANUAL_MATOME: ${{ inputs.matome }}
+        run: |
+          # 認証情報が無いと dry-run に落ちて「成功したのに投稿ゼロ」になる。
+          # 黙って止まるのが一番まずいので、失敗させて通知に乗せる
+          if [ -z "$LIVEDOOR_API_KEY" ]; then
+            echo "::error::LIVEDOOR_API_KEY が未設定です。Secrets を確認してください"
+            exit 1
+          fi
+
+          # 下書きにするかの判定。
+          # GitHub Actions の `A || B` は A が false でも B が採用されるため、
+          # 式で書くと手動実行の draft:false が効かない。シェル側で分ける。
+          #   手動実行 : 画面で選んだ値をそのまま使う
+          #   定期実行 : 既定で下書き。本投稿するにはリポジトリ変数
+          #              LIVEDOOR_LIVE を true にする（事故防止の安全弁）
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            # 明示的に false を選んだときだけ本投稿。空や想定外の値は下書き扱い
+            if [ "$DRAFT_INPUT" = "false" ]; then DRAFT="false"; else DRAFT="true"; fi
+          elif [ "$LIVE_OK" = "true" ]; then
+            DRAFT="false"
+          else
+            DRAFT="true"
+            echo "::notice::リポジトリ変数 LIVEDOOR_LIVE が true でないため下書きで投稿します"
+          fi
+
+          ARGS="--limit $LIMIT --refresh 20 --post"
+          if [ -n "${{ steps.plan.outputs.matome }}" ] || [ "$MANUAL_MATOME" = "true" ]; then
+            ARGS="$ARGS --matome"
+          fi
+          if [ "$DRAFT" = "true" ]; then
+            echo "📝 下書きとして投稿します"
+            ARGS="$ARGS --draft"
+          fi
+          python wakust_livedoor.py $ARGS
+
+      - name: Commit post history
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f wakust_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "📝 livedoor転載履歴 $(date -u +%Y-%m-%d_%H:%M)"
+            pushed=0
+            for i in 1 2 3 4; do
+              if git pull --rebase origin main && git push origin HEAD:main; then
+                pushed=1; break
+              fi
+              sleep $((2 ** i))
+            done
+            if [ "$pushed" != "1" ]; then
+              echo "::error::git push に失敗しました"
+              exit 1
+            fi
+          fi
