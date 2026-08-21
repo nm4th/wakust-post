@@ -445,16 +445,17 @@ def build_title(article):
     """転載先のタイトル
 
     検索されるのは「恵比寿 メンエス」のような 駅＋ジャンル の組み合わせ。
-    元のタイトルには駅名しか入っていないので、先頭に付け直す。
-    煽り部分はカテゴリ一覧での見出しになるので、そのまま残す。
+    元のタイトルには駅名しか入っていないので足す。ただし先頭に置くと
+    どの記事も同じ書き出しになって一覧で読みにくいので、末尾にまわす。
+    検索側は語がタイトルに含まれていればよく、位置は問わない。
     """
     t = clean_title(article.get("title"))
     station = (article.get("station") or article.get("area") or "").strip()
     if not station:
         return t
-    # 元タイトルの【恵比寿】は重複するので外す
-    t = t.replace(f"【{station}】", "", 1).strip()
-    return f"【{station}メンエス】{t}"
+    # 元タイトルの【恵比寿】は残す（本文の見出しとして機能するため）
+    tag = f"#{station}メンエス"
+    return t if tag in t else f"{t} {tag}"
 
 
 def build_lead(article):
