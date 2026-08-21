@@ -70,7 +70,8 @@ class FormParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
         if tag == "form":
-            self._cur = {"action": a.get("action", ""), "data": {}}
+            self._cur = {"action": a.get("action", ""), "data": {},
+                         "buttons": [], "method": (a.get("method") or "get").lower()}
             return
         if self._cur is None:
             return
@@ -86,6 +87,13 @@ class FormParser(HTMLParser):
                     self._cur["data"][name] = a.get("value", "on")
             else:
                 self._cur["data"][name] = a.get("value", "")
+        elif tag == "button":
+            # 保存ボタンが <button name="..."> のことがある。
+            # これを送らないとサーバー側でアクションを判別できない
+            name = a.get("name")
+            if name:
+                self._cur.setdefault("buttons", []).append(
+                    (name, a.get("value", ""), (a.get("type") or "submit").lower()))
         elif tag == "textarea":
             self._ta = a.get("name")
             if self._ta:
@@ -201,12 +209,17 @@ def read_form(session, blog, article_id):
                          "管理画面のHTMLが変わった可能性があります")
     # action は "./edit" のような相対URLのこともある
     action = urljoin(r.url, form["action"] or "")
-    return action, form["data"]
+    return action, form["data"], form.get("buttons") or []
 
 
 def set_cover(session, blog, article_id, image_id, apply=False):
     """1記事の見出し画像を設定する"""
-    action, data = read_form(session, blog, article_id)
+    action, data, buttons = read_form(session, blog, article_id)
+    # 保存ボタンが <button name="..."> の場合、それも送らないと
+    # サーバー側でどの操作か判別できない
+    for name, value, btype in buttons:
+        if btype == "submit":
+            data.setdefault(name, value)
     current = data.get("cover_image_attachment_id", "")
     body_len = len(data.get("body", "") or data.get("article_body", "") or "")
     log.info(f"  📄 [{article_id}] フォーム項目 {len(data)}個 / 本文 {body_len}文字")
@@ -225,19 +238,32 @@ def set_cover(session, blog, article_id, image_id, apply=False):
     data["cover_image_attachment_id"] = str(image_id)
     if not apply:
         log.info("     🧪 --apply が無いので送信しません")
+        log.info(f"     送信先: {action}")
+        log.info(f"     ボタン: {buttons or '（なし）'}")
+        log.info(f"     項目名: {sorted(data)}")
         return False
 
     r = session.post(action, data=data, timeout=60,
-                     headers={"Referer": edit_url(blog, article_id)})
+                     headers={"Referer": edit_url(blog, article_id),
+                              "Origin": BLOGCMS,
+                              "X-Requested-With": "XMLHttpRequest"})
+    log.info(f"     POST {action} → HTTP {r.status_code}  最終URL {r.url}")
     if r.status_code not in (200, 302):
-        raise CoverError(f"保存に失敗 HTTP {r.status_code}: {r.text[:200]}")
+        raise CoverError(f"保存に失敗 HTTP {r.status_code}: {r.text[:300]}")
 
     # 反映されたか読み直して確かめる
-    _, after = read_form(session, blog, article_id)
+    _, after, _ = read_form(session, blog, article_id)
     ok = after.get("cover_image_attachment_id", "") == str(image_id)
-    log.info("     ✅ 反映されました" if ok else
-             f"     ⚠️ 反映されていません（現在: '{after.get('cover_image_attachment_id')}'）")
-    return ok
+    if ok:
+        log.info("     ✅ 反映されました")
+        return True
+    log.info(f"     ⚠️ 反映されていません（現在: '{after.get('cover_image_attachment_id')}'）")
+    # 何が返ってきたのか手がかりを出す
+    body = re.sub(r"<(script|style)\b.*?</\1>", "", r.text, flags=re.S | re.I)
+    body = re.sub(r"<[^>]+>", " ", body)
+    body = re.sub(r"\s+", " ", body).strip()
+    log.info(f"     応答の先頭: {body[:300]}")
+    return False
 
 
 def main():
