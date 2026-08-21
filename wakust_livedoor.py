@@ -348,27 +348,44 @@ def clean_title(title):
     return t.strip()
 
 
+# livedoor の記事カテゴリは2枠まで。何を入れるかで回遊の効きが変わる
+CATEGORY_SLOTS = 2
+
+
 def build_categories(article):
-    """livedoor 側の記事カテゴリを決める（エリア軸 × プレイ内容軸）"""
+    """livedoor 側の記事カテゴリを決める
+
+    枠が2つしかないので「駅」と「プレイ内容」を入れる。
+    エリア（東京都内など）はエリア別まとめ記事が受け持つので、
+    駅が取れているときは枠を使わない。
+    """
     cats = []
-    for key in ("station", "area"):
-        v = (article.get(key) or "").strip()
-        if v and v not in cats:
-            cats.append(v)
+    station = (article.get("station") or "").strip()
+    if station:
+        cats.append(station)
     for t in (article.get("tags") or []):
-        # カップ数と駅名はカテゴリにしない（駅は上で入れている）
-        if t.endswith("カップ") or t == article.get("station"):
+        # カップ数と駅名はカテゴリにしない
+        if t.endswith("カップ") or t == station:
             continue
         if t not in cats:
             cats.append(t)
-    return cats[:5]
+            break                      # プレイ内容は1つだけ
+    area = (article.get("area") or "").strip()
+    if area and area not in cats:
+        cats.append(area)              # 駅もタグも無いときの受け皿
+    return cats[:CATEGORY_SLOTS]
 
 
 def _buy_button(label, url, color):
+    """購入ボタン
+
+    ブログテーマの a{color} に負けて文字色が変わるので !important を付ける。
+    """
     return (f'<a href="{escape(url)}" target="_blank" rel="noopener" '
             f'style="display:inline-block;margin:6px 8px;padding:12px 26px;'
-            f'background:{color};color:#111;font-weight:bold;'
-            f'border-radius:6px;text-decoration:none;">{escape(label)}</a>')
+            f'background:{color};color:#111 !important;font-weight:bold;'
+            f'border-radius:6px;text-decoration:none !important;">'
+            f'{escape(label)}</a>')
 
 
 def build_cta(article, cfg):
