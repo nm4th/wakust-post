@@ -40,6 +40,10 @@ on:
         description: '投稿せず認証だけ確認する'
         type: boolean
         default: false
+      upload_test:
+        description: '画像を1枚アップロードして、返るXMLを表示する'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -85,10 +89,16 @@ jobs:
           LIMIT: ${{ inputs.limit || '1' }}
           MANUAL_MATOME: ${{ inputs.matome }}
           CHECK_ONLY: ${{ inputs.check_only }}
+          UPLOAD_TEST: ${{ inputs.upload_test }}
         run: |
           # 認証だけ確認して終わる（401の切り分け用）
           if [ "$CHECK_ONLY" = "true" ]; then
             python wakust_livedoor.py --check
+            exit $?
+          fi
+          # 画像アップロードのレスポンスを見る（見出し画像の可否判断用）
+          if [ "$UPLOAD_TEST" = "true" ]; then
+            python wakust_livedoor.py --upload-test
             exit $?
           fi
           # 認証情報が無いと dry-run に落ちて「成功したのに投稿ゼロ」になる。

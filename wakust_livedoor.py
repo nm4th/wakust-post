@@ -157,6 +157,39 @@ class LivedoorClient:
         text = self._send("PUT", edit_url, entry, "更新")
         return _link(text, "alternate")
 
+    def upload_image(self, data, filename, content_type="image/jpeg"):
+        """画像を livedoor にアップロードして、レスポンスをそのまま返す
+
+        「記事の見出し画像」は cover_image_attachment_id という
+        アップロード済み画像のIDを持つ。AtomPub からこの項目を
+        設定できるかは公開情報が無いので、まずアップロードして
+        レスポンスに何が返るかを見る。
+
+        エンドポイントは新旧2つの記述があるため、両方試す。
+        """
+        if self.dry_run:
+            log.info(f"🧪 [dry-run] 画像アップロード: {filename}")
+            return ""
+        urls = [f"{ATOM_BASE}/{self.blog_name}/image",
+                f"https://livedoor.blogcms.jp/atom/blog/{self.blog_name}/image"]
+        last = None
+        for url in urls:
+            for basic in (True, False):
+                h = self._headers(basic)
+                h["Content-Type"] = content_type
+                h["Slug"] = filename
+                try:
+                    r = requests.post(url, data=data, timeout=60, headers=h)
+                except requests.RequestException as e:
+                    last = f"{url}: 通信エラー {e}"
+                    continue
+                log.info(f"    📤 {url} ({'Basic' if basic else 'WSSE'}) "
+                         f"→ HTTP {r.status_code}")
+                if r.status_code in (200, 201):
+                    return r.text
+                last = f"{url}: HTTP {r.status_code} {r.text[:200]}"
+        raise LivedoorError(f"画像アップロードに失敗: {last}")
+
     def check(self):
         """投稿せずに認証だけ確認する"""
         url = f"{ATOM_BASE}/{self.blog_name}"
@@ -1041,10 +1074,42 @@ def main():
                     help="人気ランキング記事を作る／更新する")
     ap.add_argument("--check", action="store_true",
                     help="投稿せずに認証だけ確認する")
+    ap.add_argument("--upload-test", action="store_true",
+                    help="画像を1枚アップロードして、返るXMLをそのまま表示する")
     args = ap.parse_args()
 
     if args.check:
         return LivedoorClient().check()
+
+    if args.upload_test:
+        # 見出し画像を自動設定できるかを判断するための診断。
+        # 記事1件ぶんの画像をアップロードして、返ってきたXMLをそのまま出す
+        arts = [a for a in load_articles() if extract_thumbnail(a.get("free_html"))]
+        if not arts:
+            print("画像を持つ記事がありません")
+            return 1
+        src = extract_thumbnail(arts[0]["free_html"])
+        print(f"元画像: {src}")
+        try:
+            r = requests.get(src, timeout=60)
+            r.raise_for_status()
+        except requests.RequestException as e:
+            print(f"❌ 元画像の取得に失敗: {e}")
+            return 1
+        print(f"取得 {len(r.content)}バイト  {r.headers.get('Content-Type')}")
+        client = LivedoorClient()
+        if client.dry_run:
+            print("❌ 認証情報が足りません")
+            return 1
+        try:
+            xml = client.upload_image(r.content, src.rsplit("/", 1)[-1],
+                                      r.headers.get("Content-Type", "image/jpeg"))
+        except LivedoorError as e:
+            print(f"❌ {e}")
+            return 1
+        print("\n--- レスポンス（この中に見出し画像に使えるIDがあるか見る）---")
+        print(xml[:2000])
+        return 0
 
     cfg = load_config()
     articles = load_articles()
