@@ -36,9 +36,9 @@ on:
         type: boolean
         default: false
       draft:
-        description: '下書きとして投稿する'
+        description: '下書きとして投稿する（既定は公開）'
         type: boolean
-        default: true
+        default: false
       check_only:
         description: '投稿せず認証だけ確認する'
         type: boolean
@@ -156,8 +156,8 @@ jobs:
           #   定期実行 : そのまま公開する。止めたいときだけリポジトリ変数
           #              LIVEDOOR_DRAFT を true にすると下書きに戻る
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            # 明示的に false を選んだときだけ本投稿。空や想定外の値は下書き扱い
-            if [ "$DRAFT_INPUT" = "false" ]; then DRAFT="false"; else DRAFT="true"; fi
+            # 画面で明示的に選んだときだけ下書き。既定は公開
+            if [ "$DRAFT_INPUT" = "true" ]; then DRAFT="true"; else DRAFT="false"; fi
           elif [ "$PAUSE" = "true" ]; then
             DRAFT="true"
             echo "::notice::リポジトリ変数 LIVEDOOR_DRAFT=true のため下書きで投稿します"
