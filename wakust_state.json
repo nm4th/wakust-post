@@ -1373,6 +1373,17 @@
       "shifts": [
         "2026-08-20"
       ]
+    },
+    "1667095": {
+      "at": "2026-08-21 23:12:38",
+      "url": "",
+      "edit_url": "https://livedoor.blogcms.jp/atompub/masao_menes/article/16797588",
+      "image_id": "14068936",
+      "shifts": [
+        "2026-08-21",
+        "2026-08-22",
+        "2026-08-23"
+      ]
     }
   },
   "_livedoor_images": {
@@ -1380,6 +1391,11 @@
       "id": "14068856",
       "url": "https://livedoor.blogimg.jp/masao_menes/imgs/5/1/51c83389.jpg",
       "thumbnail": "https://livedoor.blogimg.jp/masao_menes/imgs/5/1/51c83389-s.jpg"
+    },
+    "https://wakust.com/wp-content/uploads/2026/04/834754.jpg": {
+      "id": "14068936",
+      "url": "https://livedoor.blogimg.jp/masao_menes/imgs/1/6/1636b3f3.jpg",
+      "thumbnail": "https://livedoor.blogimg.jp/masao_menes/imgs/1/6/1636b3f3-s.jpg"
     }
   }
 }
