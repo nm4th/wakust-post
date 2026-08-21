@@ -27,6 +27,7 @@ import re
 import sys
 import json
 import glob
+import html
 import base64
 import hashlib
 import argparse
@@ -190,6 +191,89 @@ def load_articles():
     return out
 
 
+# ワクスト固有で、転載先では邪魔になるブロック
+_STRIP_BLOCKS = [
+    # 「8月21日更新 ※販売回数が2回増えるごとに100pt値上げします」
+    # ワクストの値上げ告知。転載先では意味がなく、日付も古くなる
+    ("<!-- updated_date_start -->", "<!-- updated_date_end -->"),
+    # ワクスト内の回遊リンク
+    ("<!-- related_posts_start -->", "<!-- related_posts_end -->"),
+    ("<!-- related_next_posts_start -->", "<!-- related_next_posts_end -->"),
+    # ワクストの有料パート誘導。こちらは独自のCTAを出すので二重になる
+    ("<!-- paid_preview_start -->", "<!-- paid_preview_end -->"),
+    ('<div id="calendar_block_start" style="display:none"></div>',
+     '<div id="calendar_block_end" style="display:none"></div>'),
+    ("<!-- calendar_block_start -->", "<!-- calendar_block_end -->"),
+]
+_SCRIPT_RE = re.compile(r"<\s*(script|iframe|object|embed)\b.*?<\s*/\s*\1\s*>",
+                        re.I | re.S)
+_SELF_CLOSING_RE = re.compile(r"<\s*(script|iframe|object|embed)\b[^>]*/?>", re.I)
+_ON_ATTR_RE = re.compile(r"\son[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.I)
+_JS_HREF_RE = re.compile(r"(href|src)\s*=\s*([\"'])\s*javascript:[^\"']*\2", re.I)
+_STYLE_RE = re.compile(r'style="([^"]*)"')
+_WHITE_RE = re.compile(r"color:\s*#(?:fff|ffffff)\s*;?", re.I)
+_LEAD_EMPTY_RE = re.compile(r"^(?:\s|<p>\s*(?:&nbsp;|\xa0)?\s*</p>|<br\s*/?>)+", re.I)
+_TRAIL_EMPTY_RE = re.compile(
+    r"(?:\s|<p>\s*(?:&nbsp;|\xa0)?\s*</p>|<br\s*/?>|<hr\s*/?>)+$", re.I)
+_BLOCK_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "section")
+
+
+def _cut_paid_teaser(text):
+    """ワクストの「有料パートでは…」の予告を落とす
+
+    マーカーで囲まれた paid_preview とは別に、手書きの予告が本文末尾に
+    残っている記事がある。転載先では独自のCTAを出すので不要。
+    実データで確認した限り、この予告より後ろに本文は無い。
+    """
+    i = text.find("有料パート")
+    if i < 0:
+        return text
+    start = max((text.rfind(f"<{t}", 0, i) for t in _BLOCK_TAGS), default=-1)
+    return text[:start] if start > 0 else text[:i]
+
+
+def _fix_white_text(m):
+    """白背景で消える白文字だけを直す
+
+    ワクストは暗い背景なので本文に白文字が多い。ただし大半は見出しなどで
+    自前の背景色を持っているため、そのままで読める。背景を持たない要素の
+    白文字だけが livedoor の白背景で見えなくなるので、そこだけ色指定を外す。
+    """
+    style = m.group(1)
+    if not _WHITE_RE.search(style):
+        return m.group(0)
+    if re.search(r"background", style, re.I):
+        return m.group(0)          # 自前の背景があるので触らない
+    return 'style="%s"' % _WHITE_RE.sub("", style).strip().strip(";")
+
+
+def clean_for_livedoor(raw):
+    """ワクストの無料部分を、転載先でそのまま読める形に整える"""
+    if not raw:
+        return ""
+    text = html.unescape(raw)
+    for start, end in _STRIP_BLOCKS:
+        while True:
+            i = text.find(start)
+            if i < 0:
+                break
+            j = text.find(end, i)
+            if j < 0:
+                text = text[:i]
+                break
+            text = text[:i] + text[j + len(end):]
+    text = _SCRIPT_RE.sub("", text)
+    text = _SELF_CLOSING_RE.sub("", text)
+    text = _ON_ATTR_RE.sub("", text)
+    text = _JS_HREF_RE.sub(r'\1="#"', text)
+    text = _STYLE_RE.sub(_fix_white_text, text)
+    # 対になっていない残りのマーカーコメントを落とす
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    text = _cut_paid_teaser(text)
+    text = _LEAD_EMPTY_RE.sub("", text)
+    return _TRAIL_EMPTY_RE.sub("", text).strip()
+
+
 def clean_title(title):
     """ワクストのタイトルから、転載先で意味を持たない部分を落とす
 
@@ -305,7 +389,7 @@ def build_shift_block(article):
 
 def build_body(article, cfg):
     """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋免責）"""
-    free = (article.get("free_html") or "").strip()
+    free = clean_for_livedoor(article.get("free_html"))
     if not free:
         return ""
     parts = [build_shift_block(article), free, build_cta(article, cfg),
