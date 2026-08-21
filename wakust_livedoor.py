@@ -190,6 +190,12 @@ class LivedoorClient:
                 last = f"{url}: HTTP {r.status_code} {r.text[:200]}"
         raise LivedoorError(f"画像アップロードに失敗: {last}")
 
+    def fetch(self, url):
+        """AtomPub のエントリーを取得して、生のXMLを返す"""
+        if self.dry_run:
+            return ""
+        return self._send("GET", url, None, "取得")
+
     def check(self):
         """投稿せずに認証だけ確認する"""
         url = f"{ATOM_BASE}/{self.blog_name}"
@@ -226,6 +232,28 @@ def _mask(v):
     if not v:
         return "(未設定)"
     return f"{v[0]}{'*' * (len(v) - 2)}{v[-1]}（{len(v)}文字）" if len(v) > 2 else "***"
+
+
+def parse_image_response(xml_text):
+    """画像アップロードのレスポンスから ID と URL を取り出す
+
+    返るXMLの形:
+      <link rel="edit" href=".../image/14068837" />
+      <content type="image/jpeg" src="https://livedoor.blogimg.jp/.../x.jpg"
+               thumbnail="https://livedoor.blogimg.jp/.../x-s.jpg"/>
+    """
+    out = {"id": "", "url": "", "thumbnail": ""}
+    edit = _link(xml_text, "edit")
+    m = re.search(r"/image/(\d+)", edit or "")
+    if m:
+        out["id"] = m.group(1)
+    m = re.search(r'<content[^>]+src="([^"]+)"', xml_text)
+    if m:
+        out["url"] = m.group(1)
+    m = re.search(r'<content[^>]+thumbnail="([^"]+)"', xml_text)
+    if m:
+        out["thumbnail"] = m.group(1)
+    return out
 
 
 def _link(xml_text, rel):
@@ -666,12 +694,47 @@ def build_affiliate(cfg, article=None):
             + "".join(parts) + '</div>')
 
 
-def build_body(article, cfg):
+def ensure_hosted_image(client, article, state):
+    """記事の見出し画像を livedoor 側に載せ替える
+
+    ワクストから直リンクすると、リファラで弾かれたり、向こうの記事を
+    消したときに画像も消える。一度アップロードして livedoor の URL を
+    控えておき、以降はそれを使う。
+
+    戻り値: {"id": 画像ID, "url": livedoorのURL} / 失敗時は None
+    """
+    src = extract_thumbnail(article.get("free_html"))
+    if not src:
+        return None
+    cache = state.setdefault("_livedoor_images", {})
+    if src in cache and (cache[src] or {}).get("url"):
+        return cache[src]
+    try:
+        r = requests.get(src, timeout=60)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        log.warning(f"    ⚠️ 元画像の取得に失敗: {e}")
+        return None
+    try:
+        xml = client.upload_image(r.content, src.rsplit("/", 1)[-1],
+                                  r.headers.get("Content-Type", "image/jpeg"))
+    except LivedoorError as e:
+        log.warning(f"    ⚠️ 画像アップロードに失敗: {e}")
+        return None
+    info = parse_image_response(xml)
+    if not info.get("url"):
+        return None
+    cache[src] = info
+    log.info(f"    🖼️  画像をアップロード id={info['id']} {info['url']}")
+    return info
+
+
+def build_body(article, cfg, image=None):
     """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋免責）"""
     free = clean_for_livedoor(article.get("free_html"))
     if not free:
         return ""
-    thumb = extract_thumbnail(article.get("free_html"))
+    thumb = (image or {}).get("url") or extract_thumbnail(article.get("free_html"))
     img = (f'<p><img src="{escape(thumb)}" alt="{escape(clean_title(article.get("title"))[:60])}" '
            f'style="max-width:100%;height:auto;" /></p>' if thumb else "")
     parts = [img, build_lead(article), build_shift_block(article), free,
@@ -962,7 +1025,8 @@ def run_publish(client, articles, cfg, state, limit, draft=False):
     ok = ng = 0
     for a in targets:
         title = build_title(a)
-        body = build_body(a, cfg)
+        image = ensure_hosted_image(client, a, state)
+        body = build_body(a, cfg, image)
         if not body:
             continue
         try:
@@ -975,6 +1039,7 @@ def run_publish(client, articles, cfg, state, limit, draft=False):
         posted[str(a["id"])] = {
             "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
             "url": url, "edit_url": edit_url,
+            "image_id": (image or {}).get("id", ""),
             # 出勤日を控えておき、変わったときだけ本文を差し替える
             "shifts": list(a.get("shift_dates") or []),
         }
@@ -1003,7 +1068,8 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
         return 0, 0
     ok = ng = 0
     for aid, rec, a in todo[:max(1, limit)]:
-        body = build_body(a, cfg)
+        body = build_body(a, cfg, (state.get("_livedoor_images") or {}).get(
+            extract_thumbnail(a.get("free_html")) or ""))
         if not body:
             continue
         try:
@@ -1076,10 +1142,35 @@ def main():
                     help="投稿せずに認証だけ確認する")
     ap.add_argument("--upload-test", action="store_true",
                     help="画像を1枚アップロードして、返るXMLをそのまま表示する")
+    ap.add_argument("--inspect", metavar="記事ID",
+                    help="投稿済み記事のXMLを表示する（見出し画像の項目を探す用）")
     args = ap.parse_args()
 
     if args.check:
         return LivedoorClient().check()
+
+    if args.inspect:
+        # 見出し画像を管理画面で設定した記事のXMLを見て、
+        # AtomPubにその項目が現れるかを確かめる。
+        # 現れればその要素名で送れる＝完全自動化できる
+        client = LivedoorClient()
+        if client.dry_run:
+            print("❌ 認証情報が足りません")
+            return 1
+        target = args.inspect
+        if target.isdigit():
+            target = f"{ATOM_BASE}/{client.blog_name}/article/{target}"
+        print(f"取得: {target}\n")
+        try:
+            xml = client.fetch(target)
+        except LivedoorError as e:
+            print(f"❌ {e}")
+            return 1
+        # 本文は長いので落として、構造だけ見る
+        xml = re.sub(r"(<content[^>]*>).*?(</content>)", r"\1…本文省略…\2",
+                     xml, flags=re.S)
+        print(xml[:3000])
+        return 0
 
     if args.upload_test:
         # 見出し画像を自動設定できるかを判断するための診断。
