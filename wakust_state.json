@@ -1364,6 +1364,22 @@
         "2026-08-24",
         "2026-08-25"
       ]
+    },
+    "1754531": {
+      "at": "2026-08-21 22:34:21",
+      "url": "",
+      "edit_url": "https://livedoor.blogcms.jp/atompub/masao_menes/article/16797193",
+      "image_id": "14068856",
+      "shifts": [
+        "2026-08-20"
+      ]
+    }
+  },
+  "_livedoor_images": {
+    "https://wakust.com/wp-content/uploads/2026/03/751459.jpg": {
+      "id": "14068856",
+      "url": "https://livedoor.blogimg.jp/masao_menes/imgs/5/1/51c83389.jpg",
+      "thumbnail": "https://livedoor.blogimg.jp/masao_menes/imgs/5/1/51c83389-s.jpg"
     }
   }
 }
