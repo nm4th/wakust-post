@@ -15,6 +15,9 @@ name: Wakust Livedoor Post
 #   3. 朝の枠だけ、エリア別まとめ・人気ランキング・本日出勤まとめ
 #
 # ⚠️ 投稿するのは無料部分だけ。有料部分は扱わない。
+#
+# 定期実行はそのまま公開する。一時的に止めたいときは、リポジトリ変数
+# LIVEDOOR_DRAFT を true にすると下書き投稿に戻る。
 
 on:
   schedule:
@@ -98,7 +101,7 @@ jobs:
           LIVEDOOR_API_KEY: ${{ secrets.LIVEDOOR_API_KEY }}
           EVENT: ${{ github.event_name }}
           DRAFT_INPUT: ${{ inputs.draft }}
-          LIVE_OK: ${{ vars.LIVEDOOR_LIVE }}
+          PAUSE: ${{ vars.LIVEDOOR_DRAFT }}
           LIMIT: ${{ inputs.limit || '1' }}
           MANUAL_MATOME: ${{ inputs.matome }}
           CHECK_ONLY: ${{ inputs.check_only }}
@@ -150,16 +153,16 @@ jobs:
           # GitHub Actions の `A || B` は A が false でも B が採用されるため、
           # 式で書くと手動実行の draft:false が効かない。シェル側で分ける。
           #   手動実行 : 画面で選んだ値をそのまま使う
-          #   定期実行 : 既定で下書き。本投稿するにはリポジトリ変数
-          #              LIVEDOOR_LIVE を true にする（事故防止の安全弁）
+          #   定期実行 : そのまま公開する。止めたいときだけリポジトリ変数
+          #              LIVEDOOR_DRAFT を true にすると下書きに戻る
           if [ "$EVENT" = "workflow_dispatch" ]; then
             # 明示的に false を選んだときだけ本投稿。空や想定外の値は下書き扱い
             if [ "$DRAFT_INPUT" = "false" ]; then DRAFT="false"; else DRAFT="true"; fi
-          elif [ "$LIVE_OK" = "true" ]; then
-            DRAFT="false"
-          else
+          elif [ "$PAUSE" = "true" ]; then
             DRAFT="true"
-            echo "::notice::リポジトリ変数 LIVEDOOR_LIVE が true でないため下書きで投稿します"
+            echo "::notice::リポジトリ変数 LIVEDOOR_DRAFT=true のため下書きで投稿します"
+          else
+            DRAFT="false"
           fi
 
           ARGS="--limit $LIMIT --refresh 20 --post"
