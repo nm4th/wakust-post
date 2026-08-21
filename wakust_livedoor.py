@@ -154,7 +154,16 @@ class LivedoorClient:
             return "", ""
         text = self._send("POST", f"{ATOM_BASE}/{self.blog_name}/article",
                           entry, "投稿")
-        return _link(text, "alternate"), _link(text, "edit")
+        alt, edit = _link(text, "alternate"), _link(text, "edit")
+        if edit and not alt:
+            # POST のレスポンスに rel="alternate"（公開URL）が入らないことが
+            # ある。記事末の関連記事リンクに使うので、作った記事を読み直して
+            # でも押さえておく。ここで取れなくても投稿自体は成功扱いにする。
+            try:
+                alt = _link(self.fetch(edit), "alternate")
+            except LivedoorError as e:
+                log.warning(f"公開URLの取得に失敗しました: {e}")
+        return alt, edit
 
     def update(self, edit_url, title, body_html, categories=None, draft=False):
         """投稿済みの記事を差し替える（POSTだと新規になるので必ずPUT）"""
@@ -710,6 +719,158 @@ def build_affiliate(cfg, article=None):
             + "".join(parts) + '</div>')
 
 
+# ============================================================
+# 記事末の関連記事（ブログ内の回遊）
+# ============================================================
+# カテゴリ新着から来た読者に2記事目を読んでもらうための枠。
+# 転載がこの本数に届くまでは出さない。候補が数本しか無いうちに出しても、
+# どの記事にも同じ数本が並ぶだけで回遊にならないため。
+RELATED_MIN_POSTED = 10
+RELATED_MAX = 6
+# 同じ駅だけで埋めない。残りは別の駅から近い順に混ぜる
+RELATED_SAME_STATION_MAX = 4
+
+
+def thumb_for(article, state):
+    """関連記事カードに出す見出し画像
+
+    livedoor に上げ直した画像のサムネイル（-s.jpg）があればそれを使う。
+    無ければワクストの元画像。どちらも https なので mixed content にならない。
+    """
+    src = (extract_thumbnail(article.get("free_html"))
+           or article.get("image_url") or "")
+    if not src:
+        return ""
+    rec = (state.get("_livedoor_images") or {}).get(src) or {}
+    return rec.get("thumbnail") or rec.get("url") or src
+
+
+def related_score(a, b):
+    """b が a の関連記事としてどれだけ近いか
+
+    同じ駅を最優先にする。「恵比寿の店を探している人」が次に読みたいのは
+    同じ恵比寿の別レポートで、これが一番強い。次にプレイ内容、
+    最後にカップ数。エリア（東京都内）だけの一致は弱いので点を絞る。
+    """
+    s = 0
+    station = (a.get("station") or "").strip()
+    if station and station == (b.get("station") or "").strip():
+        s += 6
+    elif (a.get("area") or "").strip() and a.get("area") == b.get("area"):
+        s += 2
+    s += 2 * len(set(play_tags(a)) & set(play_tags(b)))
+    cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+    if cup and cup in (b.get("tags") or []):
+        s += 1
+    return s
+
+
+def related_articles(article, articles, state):
+    """記事末に並べる転載済み記事を選ぶ
+
+    リンク先はブログ内の記事だけ。公開URLが取れていない記録は飛ばす
+    （ワクストへ飛ばしてしまうと回遊にならず、CTAと役割が重なる）。
+    """
+    posted = state.get("_livedoor") or {}
+    if len(posted) < RELATED_MIN_POSTED:
+        return []
+    me = str(article.get("id"))
+    cands = []
+    for a in articles:
+        aid = str(a.get("id"))
+        if aid == me:
+            continue
+        rec = posted.get(aid) or {}
+        if not (rec.get("url") or "").strip():
+            continue
+        score = related_score(article, a)
+        if score <= 0:
+            continue
+        cands.append((score, int(a.get("pv_total") or 0), aid, a, rec))
+    # 近い順。同点なら読まれている記事を先に、それも同じならID順で毎回同じ並びに
+    cands.sort(key=lambda x: (-x[0], -x[1], x[2]))
+    # 新宿のように記事の多い駅だと6枚すべて同じ駅で埋まってしまう。
+    # 何枚かは別の駅を混ぜて、読者が次に開く選択肢を残す
+    same, other, out = [], [], []
+    station = (article.get("station") or "").strip()
+    for c in cands:
+        (same if station and c[3].get("station") == station else other).append(c)
+    out = same[:RELATED_SAME_STATION_MAX] + other
+    out += [c for c in same[RELATED_SAME_STATION_MAX:] if len(out) < RELATED_MAX]
+    return [(a, rec) for _, _, _, a, rec in out[:RELATED_MAX]]
+
+
+def _related_card(a, rec, state):
+    url = rec["url"]
+    thumb = thumb_for(a, state)
+    label = clean_title(a.get("title"))
+    if len(label) > 44:
+        label = label[:43] + "…"
+    station = (a.get("station") or a.get("area") or "").strip()
+    img = (f'<img src="{escape(thumb)}" alt="" loading="lazy" '
+           f'style="width:100%;height:112px;object-fit:cover;display:block;'
+           f'border-radius:6px;" />' if thumb else
+           '<span style="display:block;height:112px;background:#eee;'
+           'border-radius:6px;"></span>')
+    head = (f'<span style="display:block;font-size:11px;color:#c71585;'
+            f'margin:6px 0 2px;">{escape(station)}</span>' if station else "")
+    # テーマ側の a{color} に負けるので !important で戻す
+    return (f'<a href="{escape(url)}" style="display:block;'
+            f'flex:1 1 calc(50% - 6px);min-width:130px;max-width:calc(50% - 6px);'
+            f'text-decoration:none !important;color:inherit !important;">'
+            + img + head
+            + f'<span style="display:block;font-size:13px;line-height:1.45;">'
+              f'{escape(label)}</span></a>')
+
+
+def _hub_links(article, state):
+    """エリア別まとめ・人気ランキングへの導線
+
+    関連記事6本で足りなかった読者の受け皿。一覧に落として、
+    そこからさらに読んでもらう。
+    """
+    links = []
+    area = (article.get("area") or "").strip()
+    hub = ((state.get("_livedoor_area") or {}).get(area) or {})
+    if hub.get("url"):
+        links.append((f"【{area}】の体験談まとめ", hub["url"]))
+    ranks = state.get("_livedoor_ranking") or {}
+    plays = play_tags(article)
+    for kind in (plays[:1] + ["総合"]):
+        rec = ranks.get(kind) or {}
+        if not rec.get("url"):
+            continue
+        label = "人気ランキング TOP20" if kind == "総合" else f"【{kind}】人気ランキング"
+        links.append((label, rec["url"]))
+    if not links:
+        return ""
+    body = " ／ ".join(f'<a href="{escape(u)}">{escape(t)}</a>' for t, u in links)
+    return f'<p style="margin:14px 0 0;font-size:14px;">▶ {body}</p>'
+
+
+def build_related(article, articles, state):
+    """記事末に置く関連記事ブロック（見出し画像つき）"""
+    items = related_articles(article, articles, state)
+    if not items:
+        return ""
+    cards = "".join(_related_card(a, rec, state) for a, rec in items)
+    return (
+        '<div style="margin:32px 0 12px;padding:0 0 6px;'
+        'border-bottom:2px solid #c71585;font-size:16px;font-weight:bold;">'
+        'こちらの体験談も読まれています</div>'
+        '<div style="display:flex;flex-wrap:wrap;gap:18px 12px;">'
+        + cards + '</div>' + _hub_links(article, state))
+
+
+def related_signature(article, articles, state):
+    """関連記事の並びが変わったかを見るための指紋
+
+    転載が増えると各記事の関連記事も入れ替わる。更新すべきかの判定に使う。
+    """
+    return ",".join(str(a.get("id"))
+                    for a, _ in related_articles(article, articles, state))
+
+
 def ensure_hosted_image(client, article, state):
     """記事の見出し画像を livedoor 側に載せ替える
 
@@ -745,8 +906,12 @@ def ensure_hosted_image(client, article, state):
     return info
 
 
-def build_body(article, cfg, image=None):
-    """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋免責）"""
+def build_body(article, cfg, image=None, related=""):
+    """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋関連記事＋免責）
+
+    related は build_related() の出力。購入導線より後ろに置く。
+    先に置くとブログ内を回るだけで購入ページに辿り着かなくなる。
+    """
     free = clean_for_livedoor(article.get("free_html"))
     if not free:
         return ""
@@ -754,7 +919,7 @@ def build_body(article, cfg, image=None):
     img = (f'<p><img src="{escape(thumb)}" alt="{escape(clean_title(article.get("title"))[:60])}" '
            f'style="max-width:100%;height:auto;" /></p>' if thumb else "")
     parts = [img, build_lead(article), build_shift_block(article), free,
-             build_cta(article, cfg), build_ranking_banners(cfg),
+             build_cta(article, cfg), related, build_ranking_banners(cfg),
              f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>',
              build_affiliate(cfg, article)]
     return "\n".join(p for p in parts if p)
@@ -1074,7 +1239,8 @@ def run_publish(client, articles, cfg, state, limit, draft=False, upto=None):
     for a in targets:
         title = build_title(a)
         image = ensure_hosted_image(client, a, state)
-        body = build_body(a, cfg, image)
+        rel_sig = related_signature(a, articles, state)
+        body = build_body(a, cfg, image, build_related(a, articles, state))
         if not body:
             continue
         try:
@@ -1089,6 +1255,8 @@ def run_publish(client, articles, cfg, state, limit, draft=False, upto=None):
             "url": url, "edit_url": edit_url,
             "image_id": (image or {}).get("id", ""),
             "title": title,
+            # 記事末に並べた関連記事。顔ぶれが変わったら refresh で貼り替える
+            "rel_sig": rel_sig,
             # 出勤日を控えておき、変わったときだけ本文を差し替える
             "shifts": list(a.get("shift_dates") or []),
         }
@@ -1112,15 +1280,26 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
         if not a or not rec.get("edit_url"):
             continue
         # 出勤日が変わったとき、またはタイトルの作り方を変えたときに更新する
-        if (list(a.get("shift_dates") or []) != list(rec.get("shifts") or [])
-                or build_title(a) != (rec.get("title") or "")):
-            todo.append((aid, rec, a))
+        urgent = (list(a.get("shift_dates") or []) != list(rec.get("shifts") or [])
+                  or build_title(a) != (rec.get("title") or ""))
+        # 転載が増えると関連記事の顔ぶれも変わる。古い記事の記事末が
+        # いつまでも初期の6本のままにならないよう、こちらも更新対象にする。
+        sig = related_signature(a, articles, state)
+        stale = sig != (rec.get("rel_sig") or "")
+        if not (urgent or stale):
+            continue
+        # 出勤日のずれを先に直す。関連記事の入れ替えは後回しでよく、
+        # その中では長く放置されているものから順に回す
+        todo.append((0 if urgent else 1, rec.get("refreshed_at") or "",
+                     aid, rec, a, sig))
     if not todo:
         return 0, 0
+    todo.sort(key=lambda x: (x[0], x[1]))
     ok = ng = 0
-    for aid, rec, a in todo[:max(1, limit)]:
+    for _, _, aid, rec, a, sig in todo[:max(1, limit)]:
         body = build_body(a, cfg, (state.get("_livedoor_images") or {}).get(
-            extract_thumbnail(a.get("free_html")) or ""))
+            extract_thumbnail(a.get("free_html")) or ""),
+            build_related(a, articles, state))
         if not body:
             continue
         try:
@@ -1139,10 +1318,11 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
             continue
         rec["shifts"] = list(a.get("shift_dates") or [])
         rec["title"] = build_title(a)
+        rec["rel_sig"] = sig
         rec["refreshed_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
         save_state(state)
         ok += 1
-        print(f"🔄 出勤日を更新 [{aid}] {' '.join(fmt_date(d) for d in upcoming_shifts(a)[:3])}")
+        print(f"🔄 更新 [{aid}] {' '.join(fmt_date(d) for d in upcoming_shifts(a)[:3])}")
     return ok, ng
 
 
@@ -1181,7 +1361,9 @@ def run_fix_images(client, articles, cfg, state, limit=20):
         # 本文の画像もlivedoor側のURLに差し替える
         try:
             client.update(rec["edit_url"], build_title(a),
-                          build_body(a, cfg, image), build_categories(a), False)
+                          build_body(a, cfg, image,
+                                     build_related(a, articles, state)),
+                          build_categories(a), False)
         except LivedoorError as e:
             print(f"  ⚠️ [{aid}] 本文の更新に失敗: {e}")
         rec["title"] = build_title(a)
@@ -1403,7 +1585,7 @@ def main():
                       "で取り込んでください。")
             return 0
         for a in targets:
-            body = build_body(a, cfg)
+            body = build_body(a, cfg, related=build_related(a, articles, state))
             print("=" * 60)
             print(f"タイトル : {build_title(a)}")
             print(f"カテゴリ : {' / '.join(build_categories(a, play_frequency(articles)))}")
