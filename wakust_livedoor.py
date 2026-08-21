@@ -54,7 +54,14 @@ DISCLAIMER = ("※メンズエステはセラピストとの相性が重要な�
 
 
 class LivedoorError(RuntimeError):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+def _is_gone(e):
+    """記事が消えている（ブログ側で削除された）か"""
+    return getattr(e, "status", None) in (404, 410)
 
 
 # ============================================================
@@ -120,7 +127,8 @@ class LivedoorClient:
                 log.info(f"    🔑 {'Basic' if basic else 'WSSE'} 認証は401")
                 continue
             if r.status_code not in (200, 201):
-                raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}")
+                raise LivedoorError(f"{what} HTTP {r.status_code}: {r.text[:300]}",
+                                    status=r.status_code)
             if not basic:
                 log.info("    🔑 WSSE認証で通りました（Basicは不可）")
             return r.text
@@ -899,6 +907,13 @@ def run_area_matome(client, articles, cfg, state, draft=False):
                                             m["categories"], draft)
                 verb = "新規"
         except LivedoorError as e:
+            if _is_gone(e):
+                # 記事が消えているので作り直す
+                hubs.pop(area, None)
+                save_state(state)
+                print(f"🗑️  エリアまとめが見つからないので作り直します")
+                ng += 1
+                continue
             print(f"❌ エリアまとめ{verb}失敗 [{area}]: {e}")
             print(f"::error::エリアまとめの投稿に失敗しました [{area}]: {e}")
             ng += 1
@@ -997,6 +1012,13 @@ def run_ranking(client, articles, cfg, state, draft=False):
                                             m["categories"], draft)
                 verb = "新規"
         except LivedoorError as e:
+            if _is_gone(e):
+                # 記事が消えているので作り直す
+                store.pop(kind, None)
+                save_state(state)
+                print(f"🗑️  ランキングが見つからないので作り直します")
+                ng += 1
+                continue
             print(f"❌ ランキング{verb}失敗 [{kind}]: {e}")
             print(f"::error::ランキング記事の投稿に失敗しました [{kind}]: {e}")
             ng += 1
@@ -1087,6 +1109,12 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
             client.update(rec["edit_url"], build_title(a), body,
                           build_categories(a, freq), draft)
         except LivedoorError as e:
+            if _is_gone(e):
+                # ブログ側で削除された記事。記録を消して、次回また転載する
+                print(f"🗑️  [{aid}] 記事が見つからないので記録を削除します")
+                posted.pop(aid, None)
+                save_state(state)
+                continue
             print(f"❌ 更新失敗 [{aid}]: {e}")
             print(f"::error::livedoorの記事更新に失敗しました [{aid}]: {e}")
             ng += 1
@@ -1191,6 +1219,8 @@ def main():
                     help="人気ランキング記事を作る／更新する")
     ap.add_argument("--fix-images", action="store_true",
                     help="投稿済みで画像IDが無い記事に画像を上げ直す")
+    ap.add_argument("--reset", action="store_true",
+                    help="転載履歴を消す（ブログ側で記事を削除したとき）")
     ap.add_argument("--check", action="store_true",
                     help="投稿せずに認証だけ確認する")
     ap.add_argument("--upload-test", action="store_true",
@@ -1198,6 +1228,25 @@ def main():
     ap.add_argument("--inspect", metavar="記事ID",
                     help="投稿済み記事のXMLを表示する（見出し画像の項目を探す用）")
     args = ap.parse_args()
+
+    if args.reset:
+        # ブログ側で記事を消したときに使う。アップロード済み画像の記録は
+        # 残す（画像はブログに残っているので、上げ直す必要がない）
+        st = load_state()
+        removed = {k: len(st.get(k) or {}) for k in
+                   ("_livedoor", "_livedoor_area", "_livedoor_ranking",
+                    "_livedoor_matome") if st.get(k)}
+        if not removed:
+            print("消す記録がありません")
+            return 0
+        for k in list(removed):
+            st.pop(k, None)
+        save_state(st)
+        print("転載履歴を消しました:")
+        for k, n in removed.items():
+            print(f"  {k}: {n}件")
+        print(f"  （画像の記録 {len(st.get('_livedoor_images') or {})}件 は残しています）")
+        return 0
 
     if args.check:
         return LivedoorClient().check()

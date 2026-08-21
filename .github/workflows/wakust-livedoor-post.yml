@@ -60,6 +60,10 @@ on:
         description: '投稿済みで画像IDが無い記事に画像を上げ直す'
         type: boolean
         default: false
+      reset:
+        description: '転載履歴を消す（ブログ側で記事を削除したとき）'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -110,7 +114,13 @@ jobs:
           LIVEDOOR_PASSWORD: ${{ secrets.LIVEDOOR_PASSWORD }}
           COVER: ${{ inputs.cover }}
           FIX_IMAGES: ${{ inputs.fix_images }}
+          RESET: ${{ inputs.reset }}
         run: |
+          # ブログ側で記事を消したときに転載履歴をクリアする
+          if [ "$RESET" = "true" ]; then
+            python wakust_livedoor.py --reset
+            exit $?
+          fi
           # 画像IDが無い記事に画像を上げ直す
           if [ "$FIX_IMAGES" = "true" ]; then
             python wakust_livedoor.py --fix-images --post
