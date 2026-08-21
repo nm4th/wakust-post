@@ -48,6 +48,11 @@ on:
         description: '記事IDのXMLを表示する（見出し画像の項目を探す用）'
         type: string
         default: ''
+      cover:
+        description: '見出し画像を設定する（confirm=確認のみ / apply=反映）'
+        type: choice
+        options: ['', 'confirm', 'apply']
+        default: ''
 
 permissions:
   contents: write
@@ -95,7 +100,20 @@ jobs:
           CHECK_ONLY: ${{ inputs.check_only }}
           UPLOAD_TEST: ${{ inputs.upload_test }}
           INSPECT_ID: ${{ inputs.inspect_id }}
+          LIVEDOOR_PASSWORD: ${{ secrets.LIVEDOOR_PASSWORD }}
+          COVER: ${{ inputs.cover }}
         run: |
+          # 見出し画像の設定（AtomPubに項目が無いので管理画面のフォームを使う）
+          if [ -n "$COVER" ]; then
+            if [ -z "$LIVEDOOR_PASSWORD" ]; then
+              echo "::error::LIVEDOOR_PASSWORD が未設定です（ログイン用。AtomPub用とは別）"
+              exit 1
+            fi
+            A=""
+            [ "$COVER" = "apply" ] && A="--apply"
+            python wakust_livedoor_cover.py --all --limit 30 $A
+            exit $?
+          fi
           # 投稿済み記事のXMLを見る（見出し画像の項目を探す用）
           if [ -n "$INSPECT_ID" ]; then
             python wakust_livedoor.py --inspect "$INSPECT_ID"

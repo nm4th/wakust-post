@@ -430,7 +430,14 @@ def clean_title(title):
     先頭の【8/19.20出勤】は、日が変われば嘘になるので消す。
     """
     t = re.sub(r"\s*#\S+", "", title or "").strip()
-    t = re.sub(r"^【[\d./]+出勤】\s*", "", t)
+    # 先頭の出勤ブロックを落とす。日が変わると嘘になるので転載先には出さない。
+    # 元データに【8/23.24.25出勤出勤】のような打ち間違いがあるため、
+    # 「数字・記号・出勤」だけで構成された括弧をまとめて対象にする
+    while True:
+        t2 = re.sub(r"^【(?:[\d./,、\s]|出勤)+】\s*", "", t)
+        if t2 == t:
+            break
+        t = t2
     return t.strip()
 
 
@@ -438,16 +445,17 @@ def build_title(article):
     """転載先のタイトル
 
     検索されるのは「恵比寿 メンエス」のような 駅＋ジャンル の組み合わせ。
-    元のタイトルには駅名しか入っていないので、先頭に付け直す。
-    煽り部分はカテゴリ一覧での見出しになるので、そのまま残す。
+    元のタイトルには駅名しか入っていないので足す。ただし先頭に置くと
+    どの記事も同じ書き出しになって一覧で読みにくいので、末尾にまわす。
+    検索側は語がタイトルに含まれていればよく、位置は問わない。
     """
     t = clean_title(article.get("title"))
     station = (article.get("station") or article.get("area") or "").strip()
     if not station:
         return t
-    # 元タイトルの【恵比寿】は重複するので外す
-    t = t.replace(f"【{station}】", "", 1).strip()
-    return f"【{station}メンエス】{t}"
+    # 元タイトルの【恵比寿】は残す（本文の見出しとして機能するため）
+    tag = f"#{station}メンエス"
+    return t if tag in t else f"{t} {tag}"
 
 
 def build_lead(article):
@@ -1040,6 +1048,7 @@ def run_publish(client, articles, cfg, state, limit, draft=False):
             "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
             "url": url, "edit_url": edit_url,
             "image_id": (image or {}).get("id", ""),
+            "title": title,
             # 出勤日を控えておき、変わったときだけ本文を差し替える
             "shifts": list(a.get("shift_dates") or []),
         }
@@ -1062,7 +1071,9 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
         a = by_id.get(aid)
         if not a or not rec.get("edit_url"):
             continue
-        if list(a.get("shift_dates") or []) != list(rec.get("shifts") or []):
+        # 出勤日が変わったとき、またはタイトルの作り方を変えたときに更新する
+        if (list(a.get("shift_dates") or []) != list(rec.get("shifts") or [])
+                or build_title(a) != (rec.get("title") or "")):
             todo.append((aid, rec, a))
     if not todo:
         return 0, 0
@@ -1081,6 +1092,7 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
             ng += 1
             continue
         rec["shifts"] = list(a.get("shift_dates") or [])
+        rec["title"] = build_title(a)
         rec["refreshed_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
         save_state(state)
         ok += 1
