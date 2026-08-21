@@ -53,6 +53,10 @@ on:
         type: choice
         options: ['', 'confirm', 'apply']
         default: ''
+      fix_images:
+        description: '投稿済みで画像IDが無い記事に画像を上げ直す'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -102,7 +106,13 @@ jobs:
           INSPECT_ID: ${{ inputs.inspect_id }}
           LIVEDOOR_PASSWORD: ${{ secrets.LIVEDOOR_PASSWORD }}
           COVER: ${{ inputs.cover }}
+          FIX_IMAGES: ${{ inputs.fix_images }}
         run: |
+          # 画像IDが無い記事に画像を上げ直す
+          if [ "$FIX_IMAGES" = "true" ]; then
+            python wakust_livedoor.py --fix-images --post
+            exit $?
+          fi
           # 見出し画像の設定（AtomPubに項目が無いので管理画面のフォームを使う）
           if [ -n "$COVER" ]; then
             if [ -z "$LIVEDOOR_PASSWORD" ]; then
@@ -163,6 +173,16 @@ jobs:
             ARGS="$ARGS --draft"
           fi
           python wakust_livedoor.py $ARGS
+
+          # 投稿できたら見出し画像も設定する。
+          # AtomPubに項目が無いので管理画面のフォームを使う。
+          # パスワード未設定なら黙って飛ばす（投稿自体は成功しているため）
+          if [ -n "$LIVEDOOR_PASSWORD" ]; then
+            python wakust_livedoor_cover.py --all --limit 10 --apply || \
+              echo "::warning::見出し画像の設定に失敗しました（投稿自体は成功しています）"
+          else
+            echo "::notice::LIVEDOOR_PASSWORD が未設定のため見出し画像は設定しません"
+          fi
 
       - name: Commit post history
         if: always()
