@@ -135,5 +135,8 @@
     "pinned_link": "https://lit.link/masa0_MenEs",
     "pinned_per_area": 3
   },
-  "site_enabled": false
+  "site_enabled": false,
+  "livedoor": {
+    "ranking_banners": []
+  }
 }

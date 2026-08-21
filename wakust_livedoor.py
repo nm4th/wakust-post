@@ -541,6 +541,25 @@ def build_shift_block(article):
             f'{fmt_date(today_iso())}時点</span></div>')
 
 
+def build_ranking_banners(cfg):
+    """ブログランキングのバナー
+
+    にほんブログ村などは、自分のブログからバナーを踏まれた回数
+    （INポイント）でランキングが決まる。全記事の末尾に置いておかないと
+    点が入らないので、CTAの後ろに並べる。
+
+    site_config.json に登録する:
+      "livedoor": { "ranking_banners": ["<a href=...><img ...></a>", ...] }
+    登録サイトから配布されるHTMLをそのまま貼ればよい。
+    """
+    banners = ((cfg.get("livedoor") or {}).get("ranking_banners") or [])
+    banners = [b for b in banners if (b or "").strip()]
+    if not banners:
+        return ""
+    return ('<div style="margin:24px 0;text-align:center;">'
+            + "".join(banners) + '</div>')
+
+
 def build_body(article, cfg):
     """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋免責）"""
     free = clean_for_livedoor(article.get("free_html"))
@@ -550,7 +569,7 @@ def build_body(article, cfg):
     img = (f'<p><img src="{escape(thumb)}" alt="{escape(clean_title(article.get("title"))[:60])}" '
            f'style="max-width:100%;height:auto;" /></p>' if thumb else "")
     parts = [img, build_lead(article), build_shift_block(article), free,
-             build_cta(article, cfg),
+             build_cta(article, cfg), build_ranking_banners(cfg),
              f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>']
     return "\n".join(p for p in parts if p)
 
@@ -717,6 +736,104 @@ def run_area_matome(client, articles, cfg, state, draft=False):
 
 
 # ============================================================
+# 人気ランキング記事
+# ============================================================
+# ランキングを作るのに最低限必要な転載済み記事数
+RANKING_MIN_ITEMS = 5
+RANKING_TOP_N = 20
+# プレイ別ランキングを作るタグ（全体で5件以上あるもの）
+RANKING_MIN_TAG_ITEMS = 5
+
+
+def build_ranking(kind, articles, cfg, state):
+    """人気ランキング記事を組み立てる
+
+    順位はワクストでの購入数。実数は出さず順番だけ載せる
+    （こちらの売上規模をそのまま公開する必要はないため）。
+    対象は転載済みの記事だけ。未転載を混ぜるとブログ外へ出てしまう。
+    """
+    posted = state.get("_livedoor") or {}
+    items = [a for a in articles if str(a.get("id")) in posted]
+    if kind != "総合":
+        items = [a for a in items if kind in play_tags(a)]
+    items = [a for a in items if int(a.get("sales_count") or 0) > 0]
+    if len(items) < RANKING_MIN_ITEMS:
+        return None
+    items.sort(key=lambda a: (-int(a.get("sales_count") or 0), str(a.get("id"))))
+    items = items[:RANKING_TOP_N]
+
+    rows = []
+    for i, a in enumerate(items, 1):
+        cup = next((t for t in (a.get("tags") or []) if t.endswith("カップ")), "")
+        plays = " / ".join(play_tags(a)[:2])
+        label = " / ".join(x for x in [a.get("station") or "", cup, plays] if x)
+        url = (posted.get(str(a["id"])) or {}).get("url") or a.get("source_url")
+        medal = "🥇🥈🥉"[i - 1] if i <= 3 else f"{i}."
+        rows.append(f'<li style="margin-bottom:8px;">{medal} '
+                    + (f_link(label, url) if url else escape(label)) + '</li>')
+
+    label = "" if kind == "総合" else f"【{kind}】"
+    title = (f"{label}メンズエステ体験レポート 人気ランキング TOP{len(items)}"
+             if kind != "総合" else
+             f"【保存版】メンズエステ体験レポート 人気ランキング TOP{len(items)}")
+    body = (
+        f'<p>これまでに書いた体験レポートを、購入数の多い順に並べました。'
+        f'{"" if kind == "総合" else escape(kind) + "のレポートに絞っています。"}'
+        f'どれを読むか迷ったら、上から順にどうぞ。</p>'
+        '<ol style="padding-left:1.2em;">' + "".join(rows) + '</ol>'
+        '<p style="margin-top:24px;font-size:13px;color:#666;">'
+        '新しいレポートを書くたびに順位を入れ替えています。</p>'
+        f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>'
+    )
+    cats = ["ランキング"] + ([] if kind == "総合" else [kind])
+    return {"title": title, "body": body, "categories": cats[:CATEGORY_SLOTS],
+            "kind": kind, "ids": [str(a["id"]) for a in items]}
+
+
+def ranking_kinds(articles):
+    """作るランキングの種類。総合＋件数の多いプレイ別"""
+    freq = play_frequency(articles)
+    tags = [t for t, n in sorted(freq.items(), key=lambda kv: -kv[1])
+            if n >= RANKING_MIN_TAG_ITEMS]
+    return ["総合"] + tags
+
+
+def run_ranking(client, articles, cfg, state, draft=False):
+    """ランキング記事を作る／更新する（順位が変わったときだけ）"""
+    store = state.setdefault("_livedoor_ranking", {})
+    ok = ng = 0
+    for kind in ranking_kinds(articles):
+        m = build_ranking(kind, articles, cfg, state)
+        if not m:
+            continue
+        rec = store.get(kind) or {}
+        if rec.get("ids") == m["ids"]:
+            continue                   # 順位が変わっていないので触らない
+        try:
+            if rec.get("edit_url"):
+                url = client.update(rec["edit_url"], m["title"], m["body"],
+                                    m["categories"], draft)
+                edit_url, verb = rec["edit_url"], "更新"
+            else:
+                url, edit_url = client.post(m["title"], m["body"],
+                                            m["categories"], draft)
+                verb = "新規"
+        except LivedoorError as e:
+            print(f"❌ ランキング{verb}失敗 [{kind}]: {e}")
+            print(f"::error::ランキング記事の投稿に失敗しました [{kind}]: {e}")
+            ng += 1
+            continue
+        store[kind] = {"url": url or rec.get("url", ""), "edit_url": edit_url,
+                       "ids": m["ids"],
+                       "at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")}
+        save_state(state)
+        ok += 1
+        print(f"✅ ランキング{verb} [{kind}] {len(m['ids'])}件 "
+              f"{store[kind]['url'] or '(dry-run)'}")
+    return ok, ng
+
+
+# ============================================================
 # 出す順番
 # ============================================================
 def pick_targets(articles, limit, state):
@@ -846,6 +963,8 @@ def main():
                     help="投稿済み記事の出勤日ブロックを最大N件更新する")
     ap.add_argument("--area-matome", action="store_true",
                     help="エリア別まとめを作る／更新する")
+    ap.add_argument("--ranking", action="store_true",
+                    help="人気ランキング記事を作る／更新する")
     ap.add_argument("--check", action="store_true",
                     help="投稿せずに認証だけ確認する")
     args = ap.parse_args()
@@ -862,6 +981,24 @@ def main():
 
     # --- 表示のみ（--post なし）---
     if not args.post:
+        if args.ranking:
+            shown = 0
+            for kind in ranking_kinds(articles):
+                m = build_ranking(kind, articles, cfg, state)
+                if not m:
+                    continue
+                print("=" * 60)
+                print(f"タイトル : {m['title']}")
+                print(f"カテゴリ : {' / '.join(m['categories'])}")
+                print("-" * 60)
+                print(re.sub(r"<[^>]+>", "", m["body"])[:600])
+                print()
+                shown += 1
+            if not shown:
+                print(f"ランキングの対象がありません"
+                      f"（転載済み {len(state.get('_livedoor') or {})}件 / "
+                      f"{RANKING_MIN_ITEMS}件から作成）")
+            return 0
         if args.area_matome:
             shown = 0
             for area in AREA_ORDER + sorted(
@@ -924,6 +1061,9 @@ def main():
         ng += n
     if args.area_matome:
         _, n = run_area_matome(client, articles, cfg, state, args.draft)
+        ng += n
+    if args.ranking:
+        _, n = run_ranking(client, articles, cfg, state, args.draft)
         ng += n
     if args.matome:
         _, n = run_matome(client, articles, cfg, state, args.draft)

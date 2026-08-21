@@ -12,7 +12,7 @@ name: Wakust Livedoor Post
 # 1回の実行でやること:
 #   1. 出勤予定が変わった記事の本文だけ差し替える（タイトルは変えない）
 #   2. 未転載の記事を1本、新規投稿する
-#   3. 朝の枠だけ、エリア別まとめの作成・更新と本日出勤まとめ
+#   3. 朝の枠だけ、エリア別まとめ・人気ランキング・本日出勤まとめ
 #
 # ⚠️ 投稿するのは無料部分だけ。有料部分は扱わない。
 
@@ -29,7 +29,7 @@ on:
         type: string
         default: '1'
       matome:
-        description: 'まとめ記事（エリア別・本日出勤）も処理する'
+        description: 'まとめ記事（エリア別・ランキング・本日出勤）も処理する'
         type: boolean
         default: false
       draft:
@@ -116,9 +116,9 @@ jobs:
 
           ARGS="--limit $LIMIT --refresh 20 --post"
           if [ -n "${{ steps.plan.outputs.matome }}" ] || [ "$MANUAL_MATOME" = "true" ]; then
-            # エリア別まとめは常に、本日出勤まとめは転載30件を超えてから
-            # （スクリプト側で件数を見て自動的に見送る）
-            ARGS="$ARGS --area-matome --matome"
+            # エリア別まとめとランキングは常に、本日出勤まとめは
+            # 転載30件を超えてから（スクリプト側で件数を見て自動的に見送る）
+            ARGS="$ARGS --area-matome --ranking --matome"
           fi
           if [ "$DRAFT" = "true" ]; then
             echo "📝 下書きとして投稿します"
