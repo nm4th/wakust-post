@@ -337,6 +337,31 @@ def clean_for_livedoor(raw):
     return _TRAIL_EMPTY_RE.sub("", text).strip()
 
 
+_IMG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.I)
+
+
+def extract_thumbnail(raw):
+    """記事の見出し画像を取り出す
+
+    ワクストの無料本文に入っている画像は2種類ある。
+      - related_posts ブロック … 他の記事のサムネイル（不要）
+      - paid_preview ブロック  … その記事自身の見出し画像（これが欲しい）
+    どちらも整形時に落としてしまうので、落とす前に後者だけ拾っておく。
+    """
+    if not raw:
+        return ""
+    text = html.unescape(raw)
+    i = text.find("<!-- paid_preview_start -->")
+    if i < 0:
+        return ""
+    block = text[i:]
+    for url in _IMG_RE.findall(block):
+        if "s.w.org" in url:      # 絵文字のSVG
+            continue
+        return url
+    return ""
+
+
 def clean_title(title):
     """ワクストのタイトルから、転載先で意味を持たない部分を落とす
 
@@ -346,6 +371,38 @@ def clean_title(title):
     t = re.sub(r"\s*#\S+", "", title or "").strip()
     t = re.sub(r"^【[\d./]+出勤】\s*", "", t)
     return t.strip()
+
+
+def build_title(article):
+    """転載先のタイトル
+
+    検索されるのは「恵比寿 メンエス」のような 駅＋ジャンル の組み合わせ。
+    元のタイトルには駅名しか入っていないので、先頭に付け直す。
+    煽り部分はカテゴリ一覧での見出しになるので、そのまま残す。
+    """
+    t = clean_title(article.get("title"))
+    station = (article.get("station") or article.get("area") or "").strip()
+    if not station:
+        return t
+    # 元タイトルの【恵比寿】は重複するので外す
+    t = t.replace(f"【{station}】", "", 1).strip()
+    return f"【{station}メンエス】{t}"
+
+
+def build_lead(article):
+    """本文の最初に置く1文
+
+    livedoor は記事の書き出しから meta description を作る。
+    先頭が出勤日ブロックだと日付の羅列が説明文になってしまうので、
+    何の記事かが分かる1文を先に置く。
+    """
+    station = (article.get("station") or article.get("area") or "都内").strip()
+    cup = next((t for t in (article.get("tags") or [])
+                if t.endswith("カップ")), "")
+    who = f"{cup}の" if cup else ""
+    return (f'<p>{escape(station)}のメンズエステ体験レポートです。'
+            f'{escape(who)}セラピストに実際に行ってきた記録を、'
+            f'施術の流れに沿って書いています。</p>')
 
 
 # livedoor の記事カテゴリは2枠まで。何を入れるかで回遊の効きが変わる
@@ -489,7 +546,11 @@ def build_body(article, cfg):
     free = clean_for_livedoor(article.get("free_html"))
     if not free:
         return ""
-    parts = [build_shift_block(article), free, build_cta(article, cfg),
+    thumb = extract_thumbnail(article.get("free_html"))
+    img = (f'<p><img src="{escape(thumb)}" alt="{escape(clean_title(article.get("title"))[:60])}" '
+           f'style="max-width:100%;height:auto;" /></p>' if thumb else "")
+    parts = [img, build_lead(article), build_shift_block(article), free,
+             build_cta(article, cfg),
              f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>']
     return "\n".join(p for p in parts if p)
 
@@ -676,7 +737,7 @@ def run_publish(client, articles, cfg, state, limit, draft=False):
     posted = state.setdefault("_livedoor", {})
     ok = ng = 0
     for a in targets:
-        title = clean_title(a.get("title"))
+        title = build_title(a)
         body = build_body(a, cfg)
         if not body:
             continue
@@ -722,7 +783,7 @@ def run_refresh(client, articles, cfg, state, limit, draft=False):
         if not body:
             continue
         try:
-            client.update(rec["edit_url"], clean_title(a.get("title")), body,
+            client.update(rec["edit_url"], build_title(a), body,
                           build_categories(a, freq), draft)
         except LivedoorError as e:
             print(f"❌ 更新失敗 [{aid}]: {e}")
@@ -847,7 +908,7 @@ def main():
         for a in targets:
             body = build_body(a, cfg)
             print("=" * 60)
-            print(f"タイトル : {clean_title(a.get('title'))}")
+            print(f"タイトル : {build_title(a)}")
             print(f"カテゴリ : {' / '.join(build_categories(a, play_frequency(articles)))}")
             print(f"本文     : {len(body)}文字")
             print("-" * 60)
