@@ -560,6 +560,25 @@ def build_ranking_banners(cfg):
             + "".join(banners) + '</div>')
 
 
+def build_affiliate(cfg):
+    """アフィリエイト枠
+
+    2023年10月からのステマ規制（景品表示法）で、広告であることを
+    明示しない表示は違反になる。アフィリエイトリンクは広告なので、
+    必ず「広告」と分かる見出しを付けて、本文と切り離して出す。
+
+    site_config.json に登録する:
+      "livedoor": { "affiliate_links": ["<a href=...>...</a>", ...] }
+    """
+    links = [x for x in ((cfg.get("livedoor") or {}).get("affiliate_links") or [])
+             if (x or "").strip()]
+    if not links:
+        return ""
+    return ('<div style="margin:32px 0 8px;padding:16px;border-top:1px solid #ddd;">'
+            '<p style="margin:0 0 10px;font-size:12px;color:#888;">広告</p>'
+            + "".join(links) + '</div>')
+
+
 def build_body(article, cfg):
     """投稿本文を組み立てる（出勤日＋無料部分＋購入導線＋免責）"""
     free = clean_for_livedoor(article.get("free_html"))
@@ -570,7 +589,8 @@ def build_body(article, cfg):
            f'style="max-width:100%;height:auto;" /></p>' if thumb else "")
     parts = [img, build_lead(article), build_shift_block(article), free,
              build_cta(article, cfg), build_ranking_banners(cfg),
-             f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>']
+             f'<p style="color:#888;font-size:12px;">{DISCLAIMER}</p>',
+             build_affiliate(cfg)]
     return "\n".join(p for p in parts if p)
 
 
