@@ -3,10 +3,14 @@ name: Wakust Threads Insights
 # 投稿の表示数・いいね数を記録して、テンプレートごとに集計する。
 # 過去14日分の投稿を毎日追い直すので、後から伸びた分も拾える。
 
+
+# ⏸ 一時停止中: Threadsアカウントが審査中のため、定期実行を止めています。
+# 再開するときは下の schedule のコメントを外してください。
+# 手動実行（workflow_dispatch）は今も可能です。
 on:
-  schedule:
-    # 毎日 23:30 JST（その日の投稿が出揃ってから）
-    - cron: '30 14 * * *'
+  # schedule:
+  # # 毎日 23:30 JST（その日の投稿が出揃ってから）
+  # - cron: '30 14 * * *'
   workflow_dispatch: {}
 
 permissions:

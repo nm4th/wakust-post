@@ -8,10 +8,14 @@ name: Wakust Threads Token Check
 #   https://github.com/settings/notifications
 #   → Actions →「Email」にチェック（Only notify for failed workflows でよい）
 
+
+# ⏸ 一時停止中: Threadsアカウントが審査中のため、定期実行を止めています。
+# 再開するときは下の schedule のコメントを外してください。
+# 手動実行（workflow_dispatch）は今も可能です。
 on:
-  schedule:
-    # 毎日 9:00 JST
-    - cron: '0 0 * * *'
+  # schedule:
+  # # 毎日 9:00 JST
+  # - cron: '0 0 * * *'
   workflow_dispatch: {}
 
 permissions:
