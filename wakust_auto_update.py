@@ -1471,7 +1471,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
     if not candidates:
         for m in re.finditer(
             r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)\s*\n\s*:?\s*(\d{2}:\d{2})",
-            soup.get_text()
+            soup.get_text("\n")
         ):
             month, day = int(m.group(1)), int(m.group(2))
             d = datetime(current_year, month, day)
@@ -1735,8 +1735,9 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 candidates.append((d, f"{month}/{day}"))
 
     # パターン5: 「3/5(木)20:00」同一行形式（tokyo-menes・galaxy等）
+    # get_text("\n")でDOM要素間に改行を入れることで、別要素の日付+時刻を誤結合しない
     if not candidates:
-        for m in re.finditer(r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)[^\n]{0,5}(\d{2}:\d{2})", soup.get_text()):
+        for m in re.finditer(r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)[^\n]{0,5}(\d{2}:\d{2})", soup.get_text("\n")):
             month, day = int(m.group(1)), int(m.group(2))
             d = datetime(current_year, month, day)
             if d >= start_date:
@@ -1744,7 +1745,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
 
     # パターン4: 「03/05\n(木)\n武蔵小杉出勤 13:00」形式（tennesu等・日付と時刻が別行）
     if not candidates:
-        text = soup.get_text()
+        text = soup.get_text("\n")
         for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\n\s*\([月火水木金土日]\)((?:\n[^\n]*){1,5}?)(\d{2}:\d{2})", text):
             month, day = int(m.group(1)), int(m.group(2))
             # 間の行が「未定」のみなら出勤なし
@@ -1757,7 +1758,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
 
     # パターン5: 「3月7日」テキスト形式
     if not candidates:
-        for m in re.finditer(r"(\d{1,2})月(\d{1,2})日[^\n]*?(\d{2}:\d{2})", soup.get_text()):
+        for m in re.finditer(r"(\d{1,2})月(\d{1,2})日[^\n]*?(\d{2}:\d{2})", soup.get_text("\n")):
             month, day = int(m.group(1)), int(m.group(2))
             d = datetime(current_year, month, day)
             if d >= start_date:
@@ -1765,7 +1766,7 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
 
     # パターン6: 「4/5(土) 出勤」形式（時刻なし・出勤/◯のみ）
     if not candidates:
-        text = soup.get_text()
+        text = soup.get_text("\n")
         for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
             line_rest = m.group(3).strip()
             if "休み" in line_rest or "未定" in line_rest:
@@ -1951,14 +1952,14 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                         break
             # テキスト正規表現
             if not candidates:
-                for m in re.finditer(r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)[^\n]{0,5}(\d{2}:\d{2})", soup.get_text()):
+                for m in re.finditer(r"(\d{1,2})/(\d{1,2})\([月火水木金土日]\)[^\n]{0,5}(\d{2}:\d{2})", soup.get_text("\n")):
                     month, day = int(m.group(1)), int(m.group(2))
                     d = datetime(current_year, month, day)
                     if d >= start_date:
                         candidates.append((d, f"{month}/{day}"))
             # パターン6: 時刻なし・出勤/◯のみ
             if not candidates:
-                text = soup.get_text()
+                text = soup.get_text("\n")
                 for m in re.finditer(r"(\d{1,2})/(\d{1,2})\s*\([月火水木金土日]\)\s*([^\n]{0,30})", text):
                     line_rest = m.group(3).strip()
                     if "休み" in line_rest or "未定" in line_rest:
