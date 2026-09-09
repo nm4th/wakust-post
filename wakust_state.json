@@ -1509,6 +1509,11 @@
       "id": "14281184",
       "url": "https://livedoor.blogimg.jp/masao_menes/imgs/7/a/7a34737a.jpg",
       "thumbnail": "https://livedoor.blogimg.jp/masao_menes/imgs/7/a/7a34737a-s.jpg"
+    },
+    "https://wakust.com/wp-content/uploads/2026/04/843162.jpg": {
+      "id": "14285642",
+      "url": "https://livedoor.blogimg.jp/masao_menes/imgs/2/4/24019dfe.jpg",
+      "thumbnail": "https://livedoor.blogimg.jp/masao_menes/imgs/2/4/24019dfe-s.jpg"
     }
   },
   "1828751": {
@@ -2257,6 +2262,19 @@
         "2026-09-09",
         "2026-09-10",
         "2026-09-12"
+      ],
+      "cover_set": true
+    },
+    "1598368": {
+      "at": "2026-09-09 23:53:54",
+      "url": "https://menes-report-masao.blog.jp/archives/17104557.html",
+      "edit_url": "https://livedoor.blogcms.jp/atompub/masao_menes/article/17104557",
+      "image_id": "14285642",
+      "title": "【Iカップ】【秋葉原】焦らしの美学に完敗！プロの脚本で堕ちる「鏡越しの背徳ANR」と至福のPZ(パイズリ)フィニッシュ #秋葉原メンエス",
+      "rel_sig": "1662490,1823574,1597345,1623774,1639998,1754531|新宿",
+      "shifts": [
+        "2026-09-09",
+        "2026-09-10"
       ],
       "cover_set": true
     }
