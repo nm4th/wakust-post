@@ -722,11 +722,16 @@ def login_wakust():
                      f"{list(session.cookies.keys())}")
 
         try:
-            # トップページを先にGETしてCookie(PHPSESSID等)を確立
-            # Bot判定回避のため
+            # ウォームアップ: トップ → マイページ の順でGET
+            # - トップページ: Cookie(PHPSESSID等) 確立 + Bot判定回避
+            # - マイページ: login_mypage.php が呼び出し元として想定している
+            #   ログインフォームページのセッションを確立
+            #   （2026-10-11 頃にワクスト側のセッション検証が強化され、
+            #    /mypage/ を踏まずに login_mypage.php を叩くと HTTP 403
+            #    「ログイン画面を再読み込みして」になる）
             try:
                 warm = session.get(f"{BASE_URL}/", timeout=15)
-                log.info(f"    🔧 ウォームアップGET: HTTP {warm.status_code} "
+                log.info(f"    🔧 ウォームアップGET[/]: HTTP {warm.status_code} "
                          f"cookies={list(session.cookies.keys())}")
                 # チャレンジページが返ってきたらPlaywrightにフォールバック
                 if _is_challenge_page(warm.text) and not warmed_cookies:
@@ -737,7 +742,22 @@ def login_wakust():
                         session.close()
                         continue
             except requests.RequestException as e:
-                log.info(f"    🔧 ウォームアップGET失敗（続行）: {e}")
+                log.info(f"    🔧 ウォームアップGET[/]失敗（続行）: {e}")
+
+            # /mypage/ をGETしてログインフォーム側のセッションを確立
+            try:
+                warm2 = session.get(f"{BASE_URL}/mypage/", timeout=15,
+                                    headers={"Referer": f"{BASE_URL}/"})
+                log.info(f"    🔧 ウォームアップGET[/mypage/]: HTTP {warm2.status_code} "
+                         f"cookies={list(session.cookies.keys())}")
+                if _is_challenge_page(warm2.text) and not warmed_cookies:
+                    log.info("    🔧 /mypage/でチャレンジページ検出、Playwrightで通過を試みる")
+                    warmed_cookies = _warm_cookies_via_playwright()
+                    if warmed_cookies:
+                        session.close()
+                        continue
+            except requests.RequestException as e:
+                log.info(f"    🔧 ウォームアップGET[/mypage/]失敗（続行）: {e}")
 
             res = session.post(LOGIN_AJAX_URL, files={
                 "login_email":    (None, WAKUST_EMAIL),
