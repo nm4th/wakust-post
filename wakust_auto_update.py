@@ -189,8 +189,10 @@ CATEGORY_TO_SET_AREA = {
 }
 SET_TAG_PRIORITY   = ["NN", "NS", "HR", "PZ"]  # 先勝ちで1記事1タグ
 SET_MIN_POSTS      = 2      # 最低記事数
+SET_SPLIT_THRESHOLD = 8     # この件数以上になったら半分に分割する
 SET_MAX_OFF_PCT    = 45     # 割引上限(%)
 SET_POST_INTERVAL  = 0.5    # セット作成間隔(秒)
+SET_SPLIT_MARKS    = ["①", "②", "③", "④"]  # 分割セットの通し番号
 
 
 def _calc_set_price(total_pt, post_count):
@@ -3242,6 +3244,25 @@ def _organize_sets(post_infos, mode="today"):
         name = f"{base_name} {total}pt→{price}pt({diff}pt引)"
         return name, price, [pid for pid, _ in items]
 
+    def _split_if_large(items):
+        """SET_SPLIT_THRESHOLD件以上なら半分に分割する。
+        例: 8件→[4,4], 9件→[5,4], 10件→[5,5]"""
+        n = len(items)
+        if n < SET_SPLIT_THRESHOLD:
+            return [items]
+        mid = (n + 1) // 2
+        return [items[:mid], items[mid:]]
+
+    def _append_with_split(base_name, items):
+        """件数に応じてセットを分割して sets に追加する"""
+        parts = _split_if_large(items)
+        if len(parts) == 1:
+            sets.append(_build(base_name, parts[0]))
+        else:
+            for i, part in enumerate(parts):
+                mark = SET_SPLIT_MARKS[i] if i < len(SET_SPLIT_MARKS) else f"({i+1})"
+                sets.append(_build(f"{base_name}{mark}", part))
+
     sets = []
     dropped_small = []
     # A. 対象出勤×地域（先に作成）
@@ -3250,7 +3271,7 @@ def _organize_sets(post_infos, mode="today"):
         if len(items) < SET_MIN_POSTS:
             dropped_small.append((f"{set_prefix}{area}", [pid for pid, _ in items]))
             continue
-        sets.append(_build(f"{set_prefix}{date_label}{area}セット", items))
+        _append_with_split(f"{set_prefix}{date_label}{area}セット", items)
 
     # B. 地域×プレイタグ（todayモードのみ）
     if mode == "today":
@@ -3259,7 +3280,7 @@ def _organize_sets(post_infos, mode="today"):
             if len(items) < SET_MIN_POSTS:
                 dropped_small.append((f"{area}{tag}", [pid for pid, _ in items]))
                 continue
-            sets.append(_build(f"{area}{tag}セット", items))
+            _append_with_split(f"{area}{tag}セット", items)
 
     if dropped_small:
         log.info(f"\n📋 セット組成: 2件未満で見送ったグループ")
@@ -3359,8 +3380,17 @@ def _update_profile_with_sets(session, mode="today"):
     links = []
     for area in PROFILE_LINK_AREAS:
         prefix = f"{set_prefix}{date_label}{area}セット"
+        # 1) 単品セット（prefix + 半角スペース + 価格表示）を最優先
+        # 2) 無ければ分割セット①（prefix + ①）
+        # 3) それも無ければ単純な startswith フォールバック
         matched = next(((sid, title) for sid, title in set_list
-                        if title.startswith(prefix)), None)
+                        if title.startswith(prefix + " ")), None)
+        if not matched:
+            matched = next(((sid, title) for sid, title in set_list
+                            if title.startswith(prefix + SET_SPLIT_MARKS[0])), None)
+        if not matched:
+            matched = next(((sid, title) for sid, title in set_list
+                            if title.startswith(prefix)), None)
         if matched:
             sid, title = matched
             # "本日出勤7/20新宿セット 3900pt→2800pt(1100pt引)"
