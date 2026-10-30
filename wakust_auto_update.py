@@ -531,6 +531,19 @@ def _to_multipart(payload):
     return {k: (None, v) for k, v in payload.items()}
 
 
+def _post_edit_form(session, payload):
+    """記事編集フォームを送信する。ブラウザと同じく編集ページを Referer に付ける
+    （ワクスト側は Referer/Origin の無い POST を拒否することがある）"""
+    edit_id = payload.get("edit_id")
+    referer = f"{BASE_URL}/mypage/?post_edit={edit_id}" if edit_id else f"{BASE_URL}/mypage/"
+    res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload),
+                       headers={"Referer": referer, "Origin": BASE_URL}, timeout=60)
+    if res.status_code != 200:
+        snippet = re.sub(r"\s+", " ", res.text[:300])
+        log.warning(f"    🔧 編集POST応答: HTTP {res.status_code} URL={res.url} 本文先頭: {snippet}")
+    return res
+
+
 # ============================================================
 # ログイン
 # ============================================================
@@ -2921,7 +2934,20 @@ def compute_point_change(post, details):
 # ============================================================
 # 記事の更新
 # ============================================================
+# 記事更新の試行数/成功数（全件失敗をワークフローの失敗として検知するため）
+_UPDATE_STATS = {"tried": 0, "ok": 0}
+
+
+def _exit_if_all_updates_failed():
+    tried, ok = _UPDATE_STATS["tried"], _UPDATE_STATS["ok"]
+    log.info(f"📊 記事更新: {ok}/{tried}件 成功")
+    if tried > 0 and ok == 0:
+        log.error("❌ 記事更新が全件失敗しました（GitHub Actionsで失敗扱い）")
+        sys.exit(1)
+
+
 def update_post(session, post, details, new_title, do_repost=False, all_post_infos=None, image_url=None):
+    _UPDATE_STATS["tried"] += 1
     payload = dict(details["payload"])
 
     payload["edit_title"] = new_title
@@ -3014,10 +3040,11 @@ def update_post(session, post, details, new_title, do_repost=False, all_post_inf
 
     for attempt in range(3):
         try:
-            res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+            res = _post_edit_form(session, payload)
             if res.status_code == 200:
                 action_str = "再投稿＋タイトル更新" if do_repost else "タイトル更新（編集のみ）"
                 log.info(f"    ✅ {action_str}: {new_title}")
+                _UPDATE_STATS["ok"] += 1
                 return True
             log.error(f"    ❌ 更新失敗 (status: {res.status_code})")
             return False
@@ -4408,7 +4435,7 @@ def run_calendar_only():
 
         for _attempt in range(3):
             try:
-                res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+                res = _post_edit_form(session, payload)
                 if res.status_code == 200:
                     log.info(f"    ✅ {area_label} まとめ記事更新完了")
                 else:
@@ -4767,7 +4794,7 @@ def run_update():
             payload.pop(REPOST_FIELD, None)
             for _attempt in range(3):
                 try:
-                    res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+                    res = _post_edit_form(session, payload)
                     if res.status_code == 200:
                         log.info(f"    ✅ {area_label} まとめ記事更新完了")
                         state[post_id] = {
@@ -4851,6 +4878,7 @@ def run_update():
         log.info("⏸ 自社サイトは無効（site_config.json の site_enabled=false）")
 
     session.close()
+    _exit_if_all_updates_failed()
     log.info(f"\n✅ 全処理完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
 
@@ -5014,7 +5042,7 @@ def run_title_only():
             payload.pop(REPOST_FIELD, None)
             for _attempt in range(3):
                 try:
-                    res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload), timeout=60)
+                    res = _post_edit_form(session, payload)
                     if res.status_code == 200:
                         log.info(f"    ✅ {area_label} まとめ記事更新完了")
                         state[post_id] = {
@@ -5076,6 +5104,7 @@ def run_title_only():
         log.error(f"❌ セット再構築でエラー: {e}", exc_info=True)
 
     session.close()
+    _exit_if_all_updates_failed()
     log.info(f"\n✅ タイトル＋回遊リスト更新完了 ({jst_strftime('%Y-%m-%d %H:%M:%S')})")
 
 
