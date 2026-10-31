@@ -30,6 +30,7 @@ import glob
 import html as html_module
 import logging
 import math
+import types
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from urllib.parse import urlparse, parse_qs, unquote
@@ -531,13 +532,29 @@ def _to_multipart(payload):
     return {k: (None, v) for k, v in payload.items()}
 
 
+# 編集POSTの最低間隔（秒）。短時間に編集を続けるとワクスト側で一時ブロックされる
+EDIT_MIN_INTERVAL = 8
+_EDIT_STATE = {"last_post": 0.0, "blocked": False}
+
+
+def _edit_order_key(info, repost_ids, state):
+    """記事更新の優先順。ブロックで途中打ち切りになっても重要な更新が先に済むように
+    0: 再投稿対象 / 1: タイトル（出勤日）が変わる記事 / 2: それ以外（回遊リスト等のみ）"""
+    pid = info["post"]["id"]
+    if pid in repost_ids:
+        return 0
+    if info.get("new_title") != info["post"].get("title"):
+        return 1
+    return 2
+
+
 def _refresh_edit_tokens(session, payload, referer):
     """送信直前に編集ページを開き直し、フォームのワンタイムトークンを最新にする。
     ワクストは編集ページを開くたびに wkst_post_action_token を発行し直すため、
     事前にまとめて取得したトークンは送信時点で無効になっている"""
     token_names = [k for k in payload if "token" in k.lower()]
     if not token_names:
-        return
+        return True
     for wait in (0, 30, 90):
         if wait:
             log.info(f"    🔧 編集ページ再取得を{wait}秒後にリトライ")
@@ -553,8 +570,9 @@ def _refresh_edit_tokens(session, payload, referer):
                 el = soup.find("input", {"name": name})
                 if el is not None:
                     payload[name] = el.get("value") or ""
-            return
+            return True
         log.warning(f"    ⚠️ 編集ページ再取得失敗 (HTTP {res.status_code})")
+    return False
 
 
 def _post_edit_form(session, payload):
@@ -562,10 +580,19 @@ def _post_edit_form(session, payload):
     （ワクスト側は Referer/Origin の無い POST を拒否することがある）"""
     edit_id = payload.get("edit_id")
     referer = f"{BASE_URL}/mypage/?post_edit={edit_id}" if edit_id else f"{BASE_URL}/mypage/"
-    if edit_id:
-        _refresh_edit_tokens(session, payload, referer)
+    if _EDIT_STATE["blocked"]:
+        return types.SimpleNamespace(status_code=403, text="", url="(skipped: blocked)")
+    wait = EDIT_MIN_INTERVAL - (time.time() - _EDIT_STATE["last_post"])
+    if wait > 0:
+        time.sleep(wait)
+    if edit_id and not _refresh_edit_tokens(session, payload, referer):
+        _EDIT_STATE["blocked"] = True
+        log.error("    ⛔ 編集ページが403のまま解除されないため、この実行での記事更新を打ち切ります"
+                  "（残りは次回の実行で更新）")
+        return types.SimpleNamespace(status_code=403, text="", url="(skipped: blocked)")
     res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload),
                        headers={"Referer": referer, "Origin": BASE_URL}, timeout=60)
+    _EDIT_STATE["last_post"] = time.time()
     if res.status_code != 200:
         snippet = re.sub(r"\s+", " ", res.text[:300])
         log.warning(f"    🔧 編集POST応答: HTTP {res.status_code} URL={res.url} 本文先頭: {snippet}")
@@ -4763,7 +4790,7 @@ def run_update():
 
     all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
 
-    for info in post_infos:
+    for info in sorted(post_infos, key=lambda i: _edit_order_key(i, repost_ids, state)):
         post_id       = info["post"]["id"]
         new_title     = info["new_title"]
         do_repost     = post_id in repost_ids
@@ -5019,7 +5046,7 @@ def run_title_only():
 
     all_ids_str = ",".join(sorted(i["post"]["id"] for i in post_infos))
 
-    for info in post_infos:
+    for info in sorted(post_infos, key=lambda i: _edit_order_key(i, repost_ids, state)):
         post_id       = info["post"]["id"]
         new_title     = info["new_title"]
         do_repost     = post_id in repost_ids
