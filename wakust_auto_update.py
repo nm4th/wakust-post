@@ -531,11 +531,39 @@ def _to_multipart(payload):
     return {k: (None, v) for k, v in payload.items()}
 
 
+def _refresh_edit_tokens(session, payload, referer):
+    """送信直前に編集ページを開き直し、フォームのワンタイムトークンを最新にする。
+    ワクストは編集ページを開くたびに wkst_post_action_token を発行し直すため、
+    事前にまとめて取得したトークンは送信時点で無効になっている"""
+    token_names = [k for k in payload if "token" in k.lower()]
+    if not token_names:
+        return
+    for wait in (0, 30, 90):
+        if wait:
+            log.info(f"    🔧 編集ページ再取得を{wait}秒後にリトライ")
+            time.sleep(wait)
+        try:
+            res = session.get(referer, timeout=30)
+        except requests.RequestException as e:
+            log.warning(f"    ⚠️ 編集ページ再取得エラー: {e}")
+            continue
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for name in token_names:
+                el = soup.find("input", {"name": name})
+                if el is not None:
+                    payload[name] = el.get("value") or ""
+            return
+        log.warning(f"    ⚠️ 編集ページ再取得失敗 (HTTP {res.status_code})")
+
+
 def _post_edit_form(session, payload):
     """記事編集フォームを送信する。ブラウザと同じく編集ページを Referer に付ける
     （ワクスト側は Referer/Origin の無い POST を拒否することがある）"""
     edit_id = payload.get("edit_id")
     referer = f"{BASE_URL}/mypage/?post_edit={edit_id}" if edit_id else f"{BASE_URL}/mypage/"
+    if edit_id:
+        _refresh_edit_tokens(session, payload, referer)
     res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload),
                        headers={"Referer": referer, "Origin": BASE_URL}, timeout=60)
     if res.status_code != 200:
@@ -4458,7 +4486,7 @@ def run_calendar_only():
 # メイン処理
 # ============================================================
 # 情報収集ループの並列化ワーカー数（HTTP/Playwrightが並列で走る）
-POST_INFO_WORKERS = 6
+POST_INFO_WORKERS = 3
 
 
 def _collect_single_post_info(session, post, state, start_from_tomorrow=False):
