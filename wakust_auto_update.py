@@ -192,7 +192,7 @@ SET_TAG_PRIORITY   = ["NN", "NS", "HR", "PZ"]  # 先勝ちで1記事1タグ
 SET_MIN_POSTS      = 2      # 最低記事数
 SET_SPLIT_THRESHOLD = 8     # この件数以上になったら半分に分割する
 SET_MAX_OFF_PCT    = 45     # 割引上限(%)
-SET_POST_INTERVAL  = 0.5    # セット作成間隔(秒)
+SET_POST_INTERVAL  = 2      # セット作成・削除の間隔(秒)
 SET_SPLIT_MARKS    = ["①", "②", "③", "④"]  # 分割セットの通し番号
 
 
@@ -3169,6 +3169,26 @@ def fetch_set_list_ids(session):
     return [sid for sid, _ in fetch_set_list_full(session)]
 
 
+def _get_set_token(session, page_url):
+    """セット画面からワンタイムトークン wkst_set_token を取得する。
+    ワクストはセット画面を開くたびにトークンを発行し直すため、送信ごとに取り直す"""
+    try:
+        res = session.get(page_url, timeout=30)
+    except requests.RequestException as e:
+        log.warning(f"    ⚠️ セットトークン取得エラー: {e}")
+        return None
+    if res.status_code != 200:
+        log.warning(f"    ⚠️ セットトークン取得失敗 (HTTP {res.status_code}) URL={page_url}")
+        return None
+    m = re.search(r"wkst_set_token[\"'\s]*(?:value=|[:=,])\s*[\"']([0-9a-fA-F]{32,})", res.text)
+    return m.group(1) if m else None
+
+
+def _log_set_failure(label, res):
+    snippet = re.sub(r"\s+", " ", res.text[:200])
+    log.warning(f"    🔧 {label}応答: HTTP {res.status_code} 本文先頭: {snippet}")
+
+
 def delete_one_set(session, set_id):
     """指定IDのセットを削除する（3回リトライ）"""
     headers = {
@@ -3176,10 +3196,16 @@ def delete_one_set(session, set_id):
         "Referer": SETPRICE_LIST_URL,
         "Origin": BASE_URL,
     }
+    data = {"delete_set_id": str(set_id)}
+    token = (_get_set_token(session, SETPRICE_LIST_URL)
+             or _get_set_token(session, f"{SETPRICE_LIST_URL}&newitem"))
+    if token:
+        data["wkst_set_token"] = token
     for attempt in range(3):
         try:
-            res = session.post(EDIT_SET_URL, data={"delete_set_id": str(set_id)},
-                               headers=headers, timeout=30)
+            res = session.post(EDIT_SET_URL, data=data, headers=headers, timeout=30)
+            if res.status_code != 200:
+                _log_set_failure("セット削除", res)
             return res.status_code == 200
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             if attempt < 2:
@@ -3226,7 +3252,13 @@ def create_one_set(session, name, price, post_ids):
         "Referer": f"{SETPRICE_LIST_URL}&newitem",
         "Origin": BASE_URL,
     }
-    data = [("s_n_1", name), ("post_price", str(price))]
+    data = []
+    token = _get_set_token(session, f"{SETPRICE_LIST_URL}&newitem")
+    if token:
+        data.append(("wkst_set_token", token))
+    else:
+        log.warning(f"    ⚠️ セット作成トークンが取れませんでした [{name}]")
+    data += [("s_n_1", name), ("post_price", str(price))]
     for pid in post_ids:
         data.append(("inpost_ck[]", str(pid)))
     for pid in post_ids:
@@ -3237,6 +3269,8 @@ def create_one_set(session, name, price, post_ids):
         try:
             res = session.post(EDIT_SET_URL, data=data, headers=headers,
                                timeout=30, allow_redirects=False)
+            if res.status_code not in (200, 302):
+                _log_set_failure("セット作成", res)
             return res.status_code in (200, 302)
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             if attempt < 2:
