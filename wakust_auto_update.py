@@ -712,6 +712,18 @@ def _warm_cookies_via_playwright():
         return None
 
 
+def _find_hidden_tokens(html):
+    """HTML中の name に token を含む hidden 項目を {name: value} で返す"""
+    tokens = {}
+    for m in re.finditer(r"<input[^>]*>", html or ""):
+        tag = m.group(0)
+        name = re.search(r'name=["\']([^"\']*token[^"\']*)["\']', tag, re.I)
+        value = re.search(r'value=["\']([^"\']*)["\']', tag)
+        if name and value:
+            tokens[name.group(1)] = value.group(1)
+    return tokens
+
+
 def login_wakust():
     max_retries = 5
     # 30秒 → 60秒 → 120秒 → 300秒 → 600秒 (最大約17分粘る)
@@ -829,11 +841,30 @@ def login_wakust():
             except requests.RequestException as e:
                 log.info(f"    🔧 ウォームアップGET[/mypage/]失敗（続行）: {e}")
 
-            res = session.post(LOGIN_AJAX_URL, files={
+            # ログイン画面のワンタイムトークン（記事編集・セットと同じ wkst_*token 形式）を拾う
+            login_fields = {
                 "login_email":    (None, WAKUST_EMAIL),
                 "login_password": (None, WAKUST_PASSWORD),
-            }, headers={"Referer": f"{BASE_URL}/mypage/", "Origin": BASE_URL},
-               timeout=30)
+            }
+            login_referer = f"{BASE_URL}/mypage/"
+            try:
+                login_page = session.get(f"{BASE_URL}/login/", timeout=15,
+                                         headers={"Referer": f"{BASE_URL}/"})
+                tokens = _find_hidden_tokens(login_page.text)
+                if tokens:
+                    login_referer = f"{BASE_URL}/login/"
+                else:
+                    tokens = _find_hidden_tokens(warm2.text) if "warm2" in locals() else {}
+                for name, value in tokens.items():
+                    login_fields[name] = (None, value)
+                log.info(f"    🔧 ログイン画面トークン: {list(tokens) or 'なし'} "
+                         f"(HTTP {login_page.status_code})")
+            except requests.RequestException as e:
+                log.info(f"    🔧 ログイン画面取得失敗（続行）: {e}")
+
+            res = session.post(LOGIN_AJAX_URL, files=login_fields,
+                               headers={"Referer": login_referer, "Origin": BASE_URL},
+                               timeout=30)
 
             if res.status_code == 200 and "loginok" in res.text:
                 log.info(f"✅ ログイン成功 cookies={list(session.cookies.keys())}")
