@@ -31,7 +31,8 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    # ubuntu-latest は Ubuntu 26 に移行済みで、Playwright の依存パッケージ取得が不安定なため固定
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -46,7 +47,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          playwright install chromium --with-deps
+          # 依存パッケージ(apt)の取得はミラーの一時的な名前解決失敗で落ちることがあるので再試行する
+          for i in 1 2 3; do
+            playwright install chromium --with-deps && break
+            echo "playwright install 失敗 (試行$i/3)。30秒後に再試行"
+            sleep 30
+          done
+          # 依存の取得が最後まで失敗しても、ブラウザ本体だけは入れて先へ進む
+          playwright install chromium
 
       - name: Publish to own site
         env:
