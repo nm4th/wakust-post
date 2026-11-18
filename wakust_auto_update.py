@@ -533,8 +533,18 @@ def _to_multipart(payload):
 
 
 # 編集POSTの最低間隔（秒）。短時間に編集を続けるとワクスト側で一時ブロックされる
-EDIT_MIN_INTERVAL = 8
-_EDIT_STATE = {"last_post": 0.0, "blocked": False}
+# 編集POSTの間隔（秒）。短く始めて、403が出たら倍に広げる（上限 EDIT_MAX_INTERVAL）
+EDIT_START_INTERVAL = 3
+EDIT_MAX_INTERVAL = 12
+_EDIT_STATE = {"last_post": 0.0, "blocked": False, "interval": EDIT_START_INTERVAL}
+
+
+def _slow_down_edits():
+    """403を受けたら編集の間隔を広げる"""
+    new = min(_EDIT_STATE["interval"] * 2, EDIT_MAX_INTERVAL)
+    if new != _EDIT_STATE["interval"]:
+        log.info(f"    🐢 編集間隔を {_EDIT_STATE['interval']}秒 → {new}秒 に広げます")
+        _EDIT_STATE["interval"] = new
 
 
 def _edit_order_key(info, repost_ids, state):
@@ -555,7 +565,7 @@ def _refresh_edit_tokens(session, payload, referer):
     token_names = [k for k in payload if "token" in k.lower()]
     if not token_names:
         return True
-    for wait in (0, 30, 90):
+    for wait in (0, 60, 180):
         if wait:
             log.info(f"    🔧 編集ページ再取得を{wait}秒後にリトライ")
             time.sleep(wait)
@@ -572,6 +582,8 @@ def _refresh_edit_tokens(session, payload, referer):
                     payload[name] = el.get("value") or ""
             return True
         log.warning(f"    ⚠️ 編集ページ再取得失敗 (HTTP {res.status_code})")
+        if res.status_code == 403:
+            _slow_down_edits()
     return False
 
 
@@ -582,7 +594,7 @@ def _post_edit_form(session, payload):
     referer = f"{BASE_URL}/mypage/?post_edit={edit_id}" if edit_id else f"{BASE_URL}/mypage/"
     if _EDIT_STATE["blocked"]:
         return types.SimpleNamespace(status_code=403, text="", url="(skipped: blocked)")
-    wait = EDIT_MIN_INTERVAL - (time.time() - _EDIT_STATE["last_post"])
+    wait = _EDIT_STATE["interval"] - (time.time() - _EDIT_STATE["last_post"])
     if wait > 0:
         time.sleep(wait)
     if edit_id and not _refresh_edit_tokens(session, payload, referer):
@@ -593,6 +605,8 @@ def _post_edit_form(session, payload):
     res = session.post(EDIT_FORM_ACTION, files=_to_multipart(payload),
                        headers={"Referer": referer, "Origin": BASE_URL}, timeout=60)
     _EDIT_STATE["last_post"] = time.time()
+    if res.status_code == 403:
+        _slow_down_edits()
     if res.status_code != 200:
         snippet = re.sub(r"\s+", " ", res.text[:300])
         log.warning(f"    🔧 編集POST応答: HTTP {res.status_code} URL={res.url} 本文先頭: {snippet}")
@@ -3026,7 +3040,7 @@ _UPDATE_STATS = {"tried": 0, "ok": 0}
 
 def _exit_if_all_updates_failed():
     tried, ok = _UPDATE_STATS["tried"], _UPDATE_STATS["ok"]
-    log.info(f"📊 記事更新: {ok}/{tried}件 成功")
+    log.info(f"📊 記事更新: {ok}/{tried}件 成功（最終の編集間隔 {_EDIT_STATE['interval']}秒）")
     if tried > 0 and ok == 0:
         log.error("❌ 記事更新が全件失敗しました（GitHub Actionsで失敗扱い）")
         sys.exit(1)
