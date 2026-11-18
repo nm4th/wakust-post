@@ -1902,9 +1902,10 @@
         "1823563",
         "1823574",
         "1828751",
-        "1850295"
+        "1850295",
+        "1883915"
       ],
-      "at": "2026-11-17 17:13:40"
+      "at": "2026-11-18 16:46:44"
     },
     "神奈川": {
       "url": "https://menes-report-masao.blog.jp/archives/16960459.html",
@@ -3747,7 +3748,8 @@
         "1780542",
         "1817022",
         "1822419",
-        "1850295"
+        "1850295",
+        "1883915"
       ],
       "nav": [
         "新宿",
@@ -3757,7 +3759,7 @@
         "中野",
         "武蔵小杉"
       ],
-      "at": "2026-11-15 15:53:19"
+      "at": "2026-11-18 16:46:41"
     },
     "横浜": {
       "url": "https://menes-report-masao.blog.jp/archives/17228092.html",
@@ -4327,6 +4329,12 @@
       "edit_url": "https://livedoor.blogcms.jp/atompub/masao_menes/article/18021593",
       "count": 31,
       "at": "2026-11-17 17:13:56"
+    },
+    "2026-11-18": {
+      "url": "https://menes-report-masao.blog.jp/archives/18031228.html",
+      "edit_url": "https://livedoor.blogcms.jp/atompub/masao_menes/article/18031228",
+      "count": 44,
+      "at": "2026-11-18 16:46:46"
     }
   },
   "1850295": {
