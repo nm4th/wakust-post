@@ -232,7 +232,8 @@ def calculate_sales_point(sales_count):
 PV_LOG_COLUMNS = [
     "記録日時", "曜日", "記事ID", "タイトル", "URL", "カテゴリー",
     "投稿日時", "最終編集日時", "最終再投稿日時", "直近出勤日",
-    "前日PV", "前週PV", "前月PV", "全期間PV", "販売回数", "売上pt",
+    # 「売上」はワクストの記事一覧の「売上: N」そのまま（ポイントではなく件数）
+    "前日PV", "前週PV", "前月PV", "全期間PV", "販売回数", "売上",
 ]
 WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
 
@@ -256,6 +257,16 @@ def log_pv(posts, post_infos=None, state=None):
     # stateから最終再投稿日時を引くためのマップ
     state = state or {}
 
+    # 記事詳細の取得に失敗するとカテゴリーが「未分類」になるので、過去に記録した
+    # カテゴリーで補う（エリア別の集計がずれないように）
+    last_category = {}
+    if os.path.exists(PV_LOG_FILE):
+        with open(PV_LOG_FILE, encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                c = row.get("カテゴリー")
+                if c and c != "未分類":
+                    last_category[row.get("記事ID")] = c
+
     write_header = not os.path.exists(PV_LOG_FILE)
     with open(PV_LOG_FILE, "a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
@@ -272,7 +283,8 @@ def log_pv(posts, post_infos=None, state=None):
                 post["id"],
                 post["title"],
                 post["url"],
-                post.get("category", "未分類"),
+                (post.get("category") if post.get("category") not in (None, "", "未分類")
+                 else last_category.get(post["id"], "未分類")),
                 post.get("posted_at", ""),
                 post.get("edited_at", ""),
                 reposted_at,
