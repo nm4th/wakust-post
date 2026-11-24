@@ -1537,14 +1537,20 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
             if headers and cells:
                 for header, cell in zip(headers, cells):
                     info = cell.get_text(strip=True)
-                    if not info or "お休み" in info or "未定" in info:
-                        continue
-                    if not _has_work_info(info):
-                        continue
                     # 「3月5日」または「3/5(木)」形式どちらも対応
                     m = re.search(r"(\d+)月\s*(\d+)日", header.get_text())
                     if not m:
                         m = re.search(r"(\d{1,2})/(\d{1,2})", header.get_text())
+                    if not m:
+                        continue
+                    # 日付の列で「-」「未定」「休み」や空欄 = その日は出勤なし
+                    # （luxuryaroma-rouge は「-」、lynx は「未定」）
+                    if (not info or info in ("-", "－", "―", "‐")
+                            or "休み" in info or "未定" in info):
+                        _saw_off[0] = True
+                        continue
+                    if not _has_work_info(info):
+                        continue
                     if m:
                         month, day = int(m.group(1)), int(m.group(2))
                         d = datetime(current_year, month, day)
@@ -1859,6 +1865,33 @@ def fetch_next_date_from_schedule(schedule_url, start_from_tomorrow=False):
                 candidates.append((d, f"{month}/{day}"))
         if candidates:
             log.info(f"    📅 形式L(li>p×2 日本語日付+時刻)でマッチ")
+
+    # 形式C: li内に p.days / p.schedule_days（日付）と p.time / p.schedule_time（時刻）
+    # 出勤なしの日は時刻の要素自体が無い（cerene.net 等）
+    if not candidates:
+        _day_cls = re.compile(r"^(schedule_)?days$")
+        _time_cls = re.compile(r"^(schedule_)?time$")
+        _matched = False
+        for li in soup.find_all("li"):
+            day_p = li.find("p", class_=_day_cls)
+            if not day_p:
+                continue
+            m = re.search(r"(\d{1,2})/(\d{1,2})", day_p.get_text())
+            if not m:
+                continue
+            _matched = True
+            time_p = li.find("p", class_=_time_cls)
+            info = time_p.get_text(" ", strip=True) if time_p else ""
+            if not info or "休み" in info or "未定" in info or not _has_work_info(info):
+                _saw_off[0] = True
+                continue
+            month, day = int(m.group(1)), int(m.group(2))
+            d = datetime(current_year, month, day)
+            if d >= start_date:
+                candidates.append((d, f"{month}/{day}"))
+        if _matched:
+            log.info(f"    📅 形式C(li>p.days/p.time)で処理: candidates={len(candidates)}件, "
+                     f"saw_off={_saw_off[0]}")
 
     # パターン3: div構造の日付+出勤情報（tennesu等）
     if not candidates:
