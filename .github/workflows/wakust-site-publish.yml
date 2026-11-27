@@ -31,8 +31,9 @@ concurrency:
 
 jobs:
   publish:
-    # ubuntu-latest は Ubuntu 26 に移行済みで、Playwright の依存パッケージ取得が不安定なため固定
-    runs-on: ubuntu-24.04
+    # ワクストがGitHubのサーバーからのアクセスを待機画面で止めるため、
+    # 自宅のMacに登録したセルフホストランナーで実行する
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 20
 
     steps:
@@ -47,13 +48,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          # 依存パッケージ(apt)の取得はミラーの一時的な名前解決失敗で落ちることがあるので再試行する
-          for i in 1 2 3; do
-            playwright install chromium --with-deps && break
-            echo "playwright install 失敗 (試行$i/3)。30秒後に再試行"
-            sleep 30
-          done
-          # 依存の取得が最後まで失敗しても、ブラウザ本体だけは入れて先へ進む
+          # Linux（GitHubのサーバー）では依存パッケージも入れる。apt取得は一時的に失敗することがあるので再試行
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            for i in 1 2 3; do
+              playwright install chromium --with-deps && break
+              echo "playwright install 失敗 (試行$i/3)。30秒後に再試行"
+              sleep 30
+            done
+          fi
           playwright install chromium
 
       - name: Publish to own site

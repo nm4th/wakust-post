@@ -802,8 +802,12 @@ def login_wakust():
                     and not _is_challenge_page(body)):
                 log.info(f"✅ Cookie注入でログイン成功 (URL={check.url})")
                 return session
-            log.warning(f"⚠️ Cookieは無効の可能性 (HTTP {check.status_code}, "
-                        f"URL={check.url}) → 通常ログインにフォールバック")
+            if _is_challenge_page(body):
+                log.warning("⚠️ Cookie確認でワクストの待機画面（少々お待ちください）が返りました。"
+                            "Cookieの期限切れではなく、この実行環境からのアクセスが止められています")
+            else:
+                log.warning(f"⚠️ Cookieは無効の可能性 (HTTP {check.status_code}, "
+                            f"URL={check.url}) → 通常ログインにフォールバック")
         except requests.RequestException as e:
             log.warning(f"⚠️ Cookie検証時の通信エラー: {e} → 通常ログインにフォールバック")
         session.close()
@@ -849,6 +853,14 @@ def login_wakust():
                         # 次のループでリトライする
                         session.close()
                         continue
+                    # 本物のブラウザでも待機画面から進めずCookieが1つも取れない
+                    # = この実行環境（IP）からのアクセス自体が止められている。
+                    # 再試行しても通らないので、時間をかけずに止める
+                    log.error("❌ ワクストの待機画面（少々お待ちください）から進めません。"
+                              "この実行環境からのアクセスがブロックされています"
+                              "（GitHubのサーバーで実行している場合はセルフホストランナー＝Macで実行してください）")
+                    session.close()
+                    return None
             except requests.RequestException as e:
                 log.info(f"    🔧 ウォームアップGET[/]失敗（続行）: {e}")
 
