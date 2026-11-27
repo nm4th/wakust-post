@@ -33,6 +33,9 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v5
+        env:
+          # Macのセルフホストランナーでは既定の /Users/runner に書けないので、ランナーのツール置き場を使う
+          AGENT_TOOLSDIRECTORY: ${{ runner.tool_cache }}
         with:
           python-version: '3.11'
 
