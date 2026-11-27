@@ -10,7 +10,9 @@ on:
 
 jobs:
   delete:
-    runs-on: ubuntu-latest
+    # ワクストがGitHubのサーバーからのアクセスを待機画面で止めるため、
+    # 自宅のMacに登録したセルフホストランナーで実行する
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 10
 
     steps:
